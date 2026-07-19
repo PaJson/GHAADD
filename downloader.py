@@ -19,7 +19,7 @@ if not BASE_DOWNLOAD_DIR:
     BASE_DOWNLOAD_DIR = os.path.join(os.path.expanduser('~'), 'Downloads')
 
 STATE_DB_NAME = "state.db"
-STATE_PERSISTENCE_ENV_VAR = "GHAADD_DISABLE_STATE_PERSISTENCE"
+STATE_PERSISTENCE_ENV_VAR = "DISABLE_STATE_PERSISTENCE"
 
 def sanitize_folder_name(text):
     """Replicates the JS Windows-safe sanitization."""
@@ -73,7 +73,7 @@ def get_state_db_path():
 def is_state_persistence_enabled():
     """Returns whether persistent duplicate-detection state is enabled."""
     raw_value = os.getenv(STATE_PERSISTENCE_ENV_VAR, "")
-    return raw_value.strip().lower() not in {"1", "true", "yes", "on"}
+    return raw_value.strip().lower() != "true"
 
 def purge_state_database():
     """Deletes the local state database if it exists."""

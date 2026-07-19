@@ -1,5 +1,8 @@
 import os
+import random
 import sys
+import time
+from datetime import datetime
 from dotenv import load_dotenv
 
 sys.dont_write_bytecode = True
@@ -11,6 +14,11 @@ load_dotenv()
 # Import custom modules
 from listener import get_pending_notifications, mark_as_read_and_delete
 from downloader import download_release, purge_state_database, STATE_PERSISTENCE_ENV_VAR
+
+DEFAULT_POLL_INTERVAL_SECONDS = 300
+DEFAULT_POLL_JITTER_MIN_SECONDS = 5
+DEFAULT_POLL_JITTER_MAX_SECONDS = 30
+DEFAULT_ENABLE_POLLING = False
 
 def run_internal_smoke_tests():
     """Executes Phase 1 baseline verification tests natively."""
@@ -51,16 +59,12 @@ def handle_cli_args(args):
 
     return False
 
-def main():
-    """
-    Main orchestrator script that coordinates email listening and GitHub downloads.
-    """
-    if handle_cli_args(sys.argv[1:]):
-        return
+def process_notifications_once():
+    """Processes pending notifications exactly once."""
 
     # Get configuration from environment
     max_emails_to_process = int(os.getenv("MAX_EMAILS_TO_PROCESS", "0"))  # 0 = all, >0 = limit
-    state_disabled = os.getenv(STATE_PERSISTENCE_ENV_VAR, "").strip().lower() in {"1", "true", "yes", "on"}
+    state_disabled = _as_bool(os.getenv(STATE_PERSISTENCE_ENV_VAR, "false"))
     
     try:
         if state_disabled:
@@ -134,10 +138,61 @@ def main():
             print("✓ Emails marked as read and moved to Trash.")
 
         print("All notifications processed.")
-        
+
     except Exception as e:
         print(f"Fatal error: {str(e)}", file=sys.stderr)
-        sys.exit(1)
+
+def _as_bool(value):
+    return str(value).strip().lower() == "true"
+
+def run_polling_loop(interval_seconds, jitter_min_seconds, jitter_max_seconds):
+    """Runs processing continuously with randomized jitter between cycles."""
+    if jitter_min_seconds > jitter_max_seconds:
+        jitter_min_seconds, jitter_max_seconds = jitter_max_seconds, jitter_min_seconds
+
+    print(
+        f"Polling enabled. Base interval: {interval_seconds}s, jitter: {jitter_min_seconds}-{jitter_max_seconds}s."
+    )
+    print("Press Ctrl+C to stop.\n")
+
+    cycle = 1
+    while True:
+        started = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        print(f"=== Poll cycle {cycle} @ {started} ===")
+        process_notifications_once()
+
+        jitter = random.randint(jitter_min_seconds, jitter_max_seconds)
+        sleep_seconds = interval_seconds + jitter
+        print(f"Next poll in {sleep_seconds}s ({interval_seconds}s + {jitter}s jitter).\n")
+        time.sleep(sleep_seconds)
+        cycle += 1
+
+def main():
+    """
+    Main orchestrator script that coordinates email listening and GitHub downloads.
+    """
+    args = sys.argv[1:]
+    if handle_cli_args(args):
+        return
+
+    # --once explicitly forces single-run mode, even if ENABLE_POLLING=true in .env.
+    once_mode = "--once" in args
+    poll_enabled = not once_mode and (
+        "--poll" in args
+        or _as_bool(os.getenv("ENABLE_POLLING", str(DEFAULT_ENABLE_POLLING).lower()))
+    )
+    if once_mode or not poll_enabled:
+        process_notifications_once()
+        return
+
+    interval_seconds = int(os.getenv("POLL_INTERVAL_SECONDS", str(DEFAULT_POLL_INTERVAL_SECONDS)))
+    jitter_min_seconds = int(os.getenv("POLL_JITTER_MIN_SECONDS", str(DEFAULT_POLL_JITTER_MIN_SECONDS)))
+    jitter_max_seconds = int(os.getenv("POLL_JITTER_MAX_SECONDS", str(DEFAULT_POLL_JITTER_MAX_SECONDS)))
+
+    try:
+        run_polling_loop(interval_seconds, jitter_min_seconds, jitter_max_seconds)
+    except KeyboardInterrupt:
+        print("\nPolling stopped by user.")
 
 if __name__ == "__main__":
     main()
