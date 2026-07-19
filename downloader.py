@@ -6,6 +6,7 @@ import time
 from dotenv import load_dotenv
 from email.utils import parsedate_tz, mktime_tz
 from urllib.parse import urljoin
+from requests.exceptions import ChunkedEncodingError, ConnectionError, Timeout
 
 # Load environment variables (.env)
 load_dotenv()
@@ -215,6 +216,8 @@ def download_all_assets(repo, tag, download_dir):
 
     # Calculate the total count once before the loop
     total_files = len(download_queue)
+    per_file_retries = 3
+    per_file_retry_delay = 2
 
     # 3. DOWNLOAD THE FILES
     # NEW: Create a session to reuse the underlying TCP connection
@@ -227,42 +230,82 @@ def download_all_assets(repo, tag, download_dir):
             download_url = item["url"]
             
             print(f"   📥 Downloading ({i}/{total_files}): {file_name or 'attestation'}")
-            
-            # Use session.get instead of requests.get
-            with session.get(download_url, stream=True) as r:
-                r.raise_for_status()
-                
-                # If filename is None (attestation), extract from Content-Disposition header
-                if file_name is None:
-                    content_disposition = r.headers.get('Content-Disposition', '')
-                    if 'filename=' in content_disposition:
-                        file_name = re.findall(r'filename="?([^"]+)"?', content_disposition)
-                        if file_name:
-                            file_name = file_name[0]
+
+            file_saved = False
+            for download_attempt in range(1, per_file_retries + 1):
+                temp_file_path = None
+                try:
+                    # Keep connect/read timeouts bounded so retries can trigger on bad links.
+                    with session.get(download_url, stream=True, timeout=(10, 60)) as r:
+                        r.raise_for_status()
+
+                        # If filename is None (attestation), extract from Content-Disposition header
+                        if file_name is None:
+                            content_disposition = r.headers.get('Content-Disposition', '')
+                            if 'filename=' in content_disposition:
+                                extracted_name = re.findall(r'filename="?([^"]+)"?', content_disposition)
+                                if extracted_name:
+                                    file_name = extracted_name[0]
+                                else:
+                                    file_name = f"attestation-{i}.json"
+                            else:
+                                file_name = f"attestation-{i}.json"
+
+                        file_path = os.path.join(final_download_dir, file_name)
+                        temp_file_path = f"{file_path}.part"
+
+                        with open(temp_file_path, 'wb') as f:
+                            for chunk in r.iter_content(chunk_size=8192):
+                                if chunk:
+                                    f.write(chunk)
+
+                        os.replace(temp_file_path, file_path)
+
+                        # Attempt to use the server's Last-Modified header
+                        if 'Last-Modified' in r.headers:
+                            last_modified_str = r.headers['Last-Modified']
+                            parsed_date = parsedate_tz(last_modified_str)
+                            if parsed_date:
+                                timestamp = mktime_tz(parsed_date)
+                                os.utime(file_path, (timestamp, timestamp))
+                            else:
+                                os.utime(file_path, (fallback_timestamp, fallback_timestamp))
                         else:
-                            file_name = f"attestation-{i}.json"
+                            os.utime(file_path, (fallback_timestamp, fallback_timestamp))
+
+                        print(f"   ✅ Saved & timestamp preserved.")
+                        file_saved = True
+                        break
+                except (ChunkedEncodingError, ConnectionError, Timeout) as e:
+                    if temp_file_path and os.path.exists(temp_file_path):
+                        os.remove(temp_file_path)
+
+                    if download_attempt < per_file_retries:
+                        sleep_seconds = per_file_retry_delay * download_attempt
+                        print(
+                            f"   ⚠️ Network error while downloading {file_name or 'attestation'} "
+                            f"(attempt {download_attempt}/{per_file_retries}): {e}. "
+                            f"Retrying in {sleep_seconds}s..."
+                        )
+                        time.sleep(sleep_seconds)
                     else:
-                        file_name = f"attestation-{i}.json"
-                
-                file_path = os.path.join(final_download_dir, file_name)
-                
-                with open(file_path, 'wb') as f:
-                    for chunk in r.iter_content(chunk_size=8192):
-                        f.write(chunk)
-                
-                # Attempt to use the server's Last-Modified header
-                if 'Last-Modified' in r.headers:
-                    last_modified_str = r.headers['Last-Modified']
-                    parsed_date = parsedate_tz(last_modified_str)
-                    if parsed_date:
-                        timestamp = mktime_tz(parsed_date)
-                        os.utime(file_path, (timestamp, timestamp))
-                    else:
-                        os.utime(file_path, (fallback_timestamp, fallback_timestamp))
-                else:
-                    os.utime(file_path, (fallback_timestamp, fallback_timestamp))
-                    
-                print(f"   ✅ Saved & timestamp preserved.")
+                        print(
+                            f"   ❌ Failed to download {file_name or 'attestation'} after "
+                            f"{per_file_retries} attempts: {e}"
+                        )
+                except requests.RequestException as e:
+                    if temp_file_path and os.path.exists(temp_file_path):
+                        os.remove(temp_file_path)
+                    print(f"   ❌ Request error while downloading {file_name or 'attestation'}: {e}")
+                    break
+                except OSError as e:
+                    if temp_file_path and os.path.exists(temp_file_path):
+                        os.remove(temp_file_path)
+                    print(f"   ❌ File write error for {file_name or 'attestation'}: {e}")
+                    break
+
+            if not file_saved:
+                return False
 
     return True
 
