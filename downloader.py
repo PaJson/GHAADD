@@ -219,6 +219,32 @@ def download_all_assets(repo, tag, download_dir):
     per_file_retries = 3
     per_file_retry_delay = 2
 
+    def should_skip_existing_file(file_path, remote_size, remote_last_modified):
+        """
+        Returns True when the local file can be considered up-to-date.
+        Prefers exact size match; falls back to Last-Modified timestamp.
+        """
+        if not os.path.exists(file_path):
+            return False
+
+        if remote_size is not None:
+            try:
+                local_size = os.path.getsize(file_path)
+                if local_size == remote_size:
+                    return True
+            except OSError:
+                return False
+
+        if remote_last_modified is not None:
+            try:
+                local_mtime = os.path.getmtime(file_path)
+                if local_mtime >= remote_last_modified:
+                    return True
+            except OSError:
+                return False
+
+        return False
+
     # 3. DOWNLOAD THE FILES
     # NEW: Create a session to reuse the underlying TCP connection
     with requests.Session() as session:
@@ -228,6 +254,32 @@ def download_all_assets(repo, tag, download_dir):
         for i, item in enumerate(download_queue, 1):
             file_name = item["name"]
             download_url = item["url"]
+
+            # For known asset names, use HEAD to skip files we already have.
+            if file_name is not None:
+                file_path = os.path.join(final_download_dir, file_name)
+                try:
+                    head_response = session.head(download_url, allow_redirects=True, timeout=(10, 30))
+                    head_response.raise_for_status()
+
+                    remote_size = None
+                    content_length = head_response.headers.get('Content-Length')
+                    if content_length and content_length.isdigit():
+                        remote_size = int(content_length)
+
+                    remote_last_modified = None
+                    head_last_modified = head_response.headers.get('Last-Modified')
+                    if head_last_modified:
+                        parsed_date = parsedate_tz(head_last_modified)
+                        if parsed_date:
+                            remote_last_modified = mktime_tz(parsed_date)
+
+                    if should_skip_existing_file(file_path, remote_size, remote_last_modified):
+                        print(f"   ⏭️ Skipping ({i}/{total_files}): {file_name} already exists and matches remote metadata.")
+                        continue
+                except requests.RequestException:
+                    # If HEAD is not supported or fails, continue with normal GET download.
+                    pass
             
             print(f"   📥 Downloading ({i}/{total_files}): {file_name or 'attestation'}")
 
@@ -253,6 +305,25 @@ def download_all_assets(repo, tag, download_dir):
 
                         file_path = os.path.join(final_download_dir, file_name)
                         temp_file_path = f"{file_path}.part"
+
+                        remote_size = None
+                        content_length = r.headers.get('Content-Length')
+                        if content_length and content_length.isdigit():
+                            remote_size = int(content_length)
+
+                        remote_last_modified = None
+                        stream_last_modified = r.headers.get('Last-Modified')
+                        if stream_last_modified:
+                            parsed_date = parsedate_tz(stream_last_modified)
+                            if parsed_date:
+                                remote_last_modified = mktime_tz(parsed_date)
+
+                        if should_skip_existing_file(file_path, remote_size, remote_last_modified):
+                            print(
+                                f"   ⏭️ Skipping ({i}/{total_files}): {file_name} already exists and matches remote metadata."
+                            )
+                            file_saved = True
+                            break
 
                         with open(temp_file_path, 'wb') as f:
                             for chunk in r.iter_content(chunk_size=8192):
