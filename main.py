@@ -3,7 +3,7 @@ import sys
 from dotenv import load_dotenv
 
 sys.dont_write_bytecode = True
-__version__ = "0.2.0-beta"
+__version__ = "0.3.0-beta"
 
 # Load environment variables
 load_dotenv()
@@ -12,18 +12,44 @@ load_dotenv()
 from listener import get_pending_notifications, mark_as_read_and_delete
 from downloader import download_release, purge_state_database, STATE_PERSISTENCE_ENV_VAR
 
+def run_internal_smoke_tests():
+    """Executes Phase 1 baseline verification tests natively."""
+    print("🚀 Starting Internal Smoke Tests...")
+    
+    # Test 1: Graceful Failure Handling (Non-existent repo)
+    print("\n--- Test 1: Verifying Failure Baseline (Invalid Repo) ---")
+    fail_result = download_release("github/this-repo-does-not-exist", "v99.9.9")
+    print(f"Result (Expected 'SKIP' or False): {fail_result}")
+    
+    # Test 2: Successful Download & DB Generation
+    print("\n--- Test 2: Verifying Success Baseline (Official GitHub Repo) ---")
+    # Using GitHub's official CLI tool guarantees the repo and tag won't unexpectedly vanish.
+    # v2.30.0 provides a good mix of assets, source code, and predictable headers.
+    success_result = download_release("cli/cli", "v2.30.0") 
+    print(f"Result (Expected True): {success_result}")
+    
+    # Test 3: Duplicate Guard Verification
+    print("\n--- Test 3: Verifying Duplicate Guard (Re-running Success Path) ---")
+    repeat_result = download_release("cli/cli", "v2.30.0")
+    print(f"Result (Expected True with 'Skipping' console logs): {repeat_result}")
+    
+    print("\n🎉 Smoke tests complete.")
 
 def handle_cli_args(args):
     """Handles one-shot command-line operations."""
-    if "--purge-state" not in args:
-        return False
+    if "--purge-state" in args:
+        deleted = purge_state_database()
+        if deleted:
+            print("Deleted local state database: state.db")
+        else:
+            print("No local state database found to delete.")
+        return True
+        
+    if "--smoke-test" in args:
+        run_internal_smoke_tests()
+        return True
 
-    deleted = purge_state_database()
-    if deleted:
-        print("Deleted local state database: state.db")
-    else:
-        print("No local state database found to delete.")
-    return True
+    return False
 
 def main():
     """

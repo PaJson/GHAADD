@@ -125,6 +125,5 @@ def check_releases():
     notifications = get_pending_notifications()
     print(f"\nFound {len(notifications)} release notification(s).")
 
-
 if __name__ == "__main__":
     check_releases()
