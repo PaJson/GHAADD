@@ -16,6 +16,19 @@ A highly efficient, automated Python background utility designed to parse incomi
 - Runtime behavior is configured through `config.json` (polling, max emails, default download directory, state persistence toggle).
 - To disable duplicate-detection state, set `state.disable_state_persistence` to `true` in `config.json`.
 
+### Download Path Routing
+
+Destination directory selection supports repo and release-type overrides in `config.json`:
+
+- `paths.repo_release_type_paths[repo][release-type]`
+- `paths.repo_paths[repo]`
+- `paths.release_type_paths[release-type]`
+- `paths.default_download_dir`
+
+Resolution uses the order above (most specific to least specific).
+
+Release-type keys should be lowercase and hyphenated, for example `release` and `pre-release`.
+
 ## 🛠️ Prerequisites
 
 - Python 3.8 or higher

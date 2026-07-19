@@ -12,6 +12,9 @@
         "jitter_max_seconds": 30
     },
     "paths": {
-		"default_download_dir": "D:\\Users\\PaJson\\Downloads"
+    "default_download_dir": "D:\\Users\\PaJson\\Downloads",
+    "repo_paths": {},
+    "release_type_paths": {},
+    "repo_release_type_paths": {}
     }
 }

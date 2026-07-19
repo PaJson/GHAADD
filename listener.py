@@ -11,6 +11,7 @@ PASSWORD = os.getenv("GMAIL_APP_PASSWORD")
 if not EMAIL or not PASSWORD:
     raise ValueError("GMAIL_USER and GMAIL_APP_PASSWORD environment variables must be set")
 
+
 def parse_github_subject(subject):
     # This pattern captures everything after 'Release ' or 'Pre-release '
     # until the final ' - ' separator
@@ -33,6 +34,7 @@ def parse_github_subject(subject):
         return repo, tag, release_type
         
     return None, None, None
+
 
 def get_pending_notifications(limit=None):
     """
@@ -93,6 +95,7 @@ def get_pending_notifications(limit=None):
     
     return notifications
 
+
 def mark_as_read_and_delete(email_ids):
     """
     Marks a list of emails as read and moves them to Trash.
@@ -119,10 +122,12 @@ def mark_as_read_and_delete(email_ids):
     except Exception as e:
         print(f"Error marking emails as read/deleted: {e}")
 
+
 def check_releases():
     """Legacy function - now uses get_pending_notifications"""
     notifications = get_pending_notifications()
     print(f"\nFound {len(notifications)} release notification(s).")
+
 
 # For manual testing: run this file directly to check IMAP connectivity
 if __name__ == "__main__":

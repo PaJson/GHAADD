@@ -5,7 +5,7 @@ import requests
 import sqlite3
 import time
 from dotenv import load_dotenv
-from config_manager import get_default_download_dir, is_state_persistence_disabled
+from config_manager import get_download_dir_for_release, is_state_persistence_disabled
 from email.utils import parsedate_tz, mktime_tz
 from requests.exceptions import ChunkedEncodingError, ConnectionError, Timeout
 from urllib.parse import urljoin
@@ -14,11 +14,9 @@ from urllib.parse import urljoin
 load_dotenv()
 GITHUB_TOKEN = os.getenv("GITHUB_PAT")
 
-# Get the custom download directory from config.json
-BASE_DOWNLOAD_DIR = get_default_download_dir()
-
 STATE_DB_NAME = "state.db"
 STATE_PERSISTENCE_ENV_VAR = "DISABLE_STATE_PERSISTENCE"
+
 
 def sanitize_folder_name(text):
     """Replicates the JS Windows-safe sanitization."""
@@ -28,6 +26,7 @@ def sanitize_folder_name(text):
     text = re.sub(r'[\\/<>\"|?*]', '_', text)
     return text.strip()
 
+
 def get_short_commit_hash(repo, tag, headers):
     """Fetches the 7-character commit hash for a specific tag."""
     url = f"https://api.github.com/repos/{repo}/commits/{tag}"
@@ -35,6 +34,7 @@ def get_short_commit_hash(repo, tag, headers):
     if response.status_code == 200:
         return response.json().get("sha", "unknown")[:7]
     return "unknown-commit"
+
 
 def build_folder_name(repo, release_data, headers, raw_name):
     """Builds a release folder name from a specific display name."""
@@ -55,23 +55,23 @@ def build_folder_name(repo, release_data, headers, raw_name):
 
     return f"{formatted_date}, {safe_name}, {safe_tag}, {safe_commit}"
 
-def generate_folder_name(repo, release_data, headers):
-    """Generates a stable folder name for a release."""
-    return build_folder_name(repo, release_data, headers, repo.replace("/", "-"))
 
-def generate_legacy_folder_name(repo, release_data, headers):
-    """Generates the pre-migration folder name based on the release title."""
-    legacy_name = release_data.get("name") or release_data.get("tag_name", "unknown-name")
-    return build_folder_name(repo, release_data, headers, legacy_name)
+def generate_folder_name(repo, release_data, headers):
+    """Generates the default folder name based on the release title."""
+    release_name = release_data.get("name") or release_data.get("tag_name", "unknown-name")
+    return build_folder_name(repo, release_data, headers, release_name)
+
 
 def get_state_db_path():
     """Returns the SQLite state database path beside the app files."""
     app_dir = os.path.dirname(os.path.abspath(__file__))
     return os.path.join(app_dir, STATE_DB_NAME)
 
+
 def is_state_persistence_enabled():
     """Returns whether persistent duplicate-detection state is enabled."""
     return not is_state_persistence_disabled()
+
 
 def purge_state_database():
     """Deletes the local state database if it exists."""
@@ -81,6 +81,7 @@ def purge_state_database():
 
     os.remove(state_db_path)
     return True
+
 
 def open_state_database():
     """Opens the central SQLite state database and ensures the schema exists."""
@@ -105,6 +106,7 @@ def open_state_database():
     )
     connection.commit()
     return connection
+
 
 def load_release_state(connection, release_key):
     """Loads persisted per-release download metadata from the state database."""
@@ -131,6 +133,7 @@ def load_release_state(connection, release_key):
             "local_mtime": row["local_mtime"],
         }
     return state
+
 
 def save_state_entry(connection, release_key, item_key, file_name, file_path, expected_signature, remote_size, remote_last_modified, remote_etag):
     """Upserts metadata for a downloaded or verified asset."""
@@ -176,6 +179,7 @@ def save_state_entry(connection, release_key, item_key, file_name, file_path, ex
     )
     connection.commit()
 
+
 def prune_release_state(connection, release_key, valid_item_keys):
     """Removes stale database rows for missing files or no-longer-expected assets."""
     rows = connection.execute(
@@ -198,6 +202,7 @@ def prune_release_state(connection, release_key, valid_item_keys):
     )
     connection.commit()
 
+
 def build_expected_signature(item):
     """Builds a stable signature for queue items with trusted upstream metadata."""
     signature_parts = [item.get("key")]
@@ -210,6 +215,7 @@ def build_expected_signature(item):
         return None
 
     return "|".join(signature_parts)
+
 
 def get_release_data(repo, tag):
     """
@@ -237,6 +243,7 @@ def get_release_data(repo, tag):
     print(f"   ❌ API Error ({response.status_code}): {response.text}")
     return None
 
+
 def get_release_attestation_url(release_data, headers):
     """
     Extracts the release attestation download URL from the expanded assets page.
@@ -258,12 +265,15 @@ def get_release_attestation_url(release_data, headers):
 
     return None
 
-def download_release(repo, tag):
+
+def download_release(repo, tag, release_type=None):
     """
     Downloads a GitHub release and all its assets.
-    Wrapper around download_all_assets() using the configured BASE_DOWNLOAD_DIR.
+    Wrapper around download_all_assets() using config-driven destination routing.
     """
-    return download_all_assets(repo, tag, BASE_DOWNLOAD_DIR)
+    download_dir = get_download_dir_for_release(repo, release_type)
+    return download_all_assets(repo, tag, download_dir)
+
 
 def download_all_assets(repo, tag, download_dir):
     """
@@ -341,11 +351,6 @@ def download_all_assets(repo, tag, download_dir):
 
     custom_folder = generate_folder_name(repo, release_data, headers_api)
     final_download_dir = os.path.join(download_dir, custom_folder)
-    legacy_folder = generate_legacy_folder_name(repo, release_data, headers_api)
-    legacy_download_dir = os.path.join(download_dir, legacy_folder)
-    if not os.path.exists(final_download_dir) and os.path.exists(legacy_download_dir):
-        custom_folder = legacy_folder
-        final_download_dir = legacy_download_dir
     os.makedirs(final_download_dir, exist_ok=True)
 
     release_key = f"{repo}|{tag}"
@@ -600,5 +605,6 @@ def download_all_assets(repo, tag, download_dir):
 if __name__ == "__main__":
     test_repo = "cli/cli"
     test_tag = "v2.30.0"
-    print(f"Base download directory set to: {BASE_DOWNLOAD_DIR}")
-    download_all_assets(test_repo, test_tag, BASE_DOWNLOAD_DIR)
+    test_download_dir = get_download_dir_for_release(test_repo, "release")
+    print(f"Base download directory set to: {test_download_dir}")
+    download_all_assets(test_repo, test_tag, test_download_dir)

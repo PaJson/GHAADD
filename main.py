@@ -1,12 +1,12 @@
-import os
-import random
 import sys
+sys.dont_write_bytecode = True
+
+import random
 import time
 from config_manager import get_max_emails_to_process, get_polling_settings, is_state_persistence_disabled
 from datetime import datetime
 from dotenv import load_dotenv
 
-sys.dont_write_bytecode = True
 __version__ = "0.3.0-beta"
 
 # Load environment variables
@@ -15,6 +15,7 @@ load_dotenv()
 # Import custom modules
 from listener import get_pending_notifications, mark_as_read_and_delete
 from downloader import download_release, purge_state_database
+
 
 def run_internal_smoke_tests():
     """Executes Phase 1 baseline verification tests natively."""
@@ -39,6 +40,7 @@ def run_internal_smoke_tests():
     
     print("\n🎉 Smoke tests complete.")
 
+
 def handle_cli_args(args):
     """Handles one-shot command-line operations."""
     if "--purge-state" in args:
@@ -54,6 +56,7 @@ def handle_cli_args(args):
         return True
 
     return False
+
 
 def process_notifications_once():
     """Processes pending notifications exactly once."""
@@ -80,8 +83,9 @@ def process_notifications_once():
         for notification in notifications:
             repo = notification.get("repo")
             tag = notification.get("tag")
+            release_type = notification.get("release_type")
             email_id = notification.get("email_id")
-            release_key = (repo, tag)
+            release_key = (repo, tag, release_type)
 
             if release_key in notifications_by_release:
                 duplicate_count += 1
@@ -105,13 +109,14 @@ def process_notifications_once():
         for idx, notification in enumerate(unique_notifications, 1):
             repo = notification.get("repo")
             tag = notification.get("tag")
+            release_type = notification.get("release_type")
             email_ids = notification.get("email_ids", [])
             
             print(f"[{idx}/{len(unique_notifications)}] Processing: {repo} ({tag})")
             
             try:
                 # Download the release
-                result = download_release(repo, tag)
+                result = download_release(repo, tag, release_type)
                 
                 # Handle different return states: True (success), "SKIP" (gracefully skipped), False (error)
                 if result is True:
@@ -138,8 +143,10 @@ def process_notifications_once():
     except Exception as e:
         print(f"Fatal error: {str(e)}", file=sys.stderr)
 
+
 def _as_bool(value):
     return str(value).strip().lower() == "true"
+
 
 def run_polling_loop(interval_seconds, jitter_min_seconds, jitter_max_seconds):
     """Runs processing continuously with randomized jitter between cycles."""
@@ -162,6 +169,7 @@ def run_polling_loop(interval_seconds, jitter_min_seconds, jitter_max_seconds):
         print(f"Next poll in {sleep_seconds}s ({interval_seconds}s + {jitter}s jitter).\n")
         time.sleep(sleep_seconds)
         cycle += 1
+
 
 def main():
     """

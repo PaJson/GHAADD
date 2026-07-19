@@ -8,12 +8,14 @@ DEFAULT_POLL_JITTER_MAX_SECONDS = 30
 DEFAULT_MAX_EMAILS_TO_PROCESS = 0
 DEFAULT_DISABLE_STATE_PERSISTENCE = False
 
+
 def _as_bool(value, default=False):
     if isinstance(value, bool):
         return value
     if value is None:
         return default
     return str(value).strip().lower() == "true"
+
 
 def _as_int(value, default):
     if value is None:
@@ -23,6 +25,7 @@ def _as_int(value, default):
     except (TypeError, ValueError):
         return default
 
+
 def _get_nested(config, *keys):
     current = config
     for key in keys:
@@ -30,6 +33,15 @@ def _get_nested(config, *keys):
             return None
         current = current[key]
     return current
+
+
+def _normalize_release_type(release_type):
+    if release_type is None:
+        return ""
+    normalized = str(release_type).strip().lower()
+    normalized = normalized.replace("_", "-")
+    return normalized
+
 
 def load_config():
     config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
@@ -42,15 +54,18 @@ def load_config():
         pass
     return {}
 
+
 def get_max_emails_to_process(config=None):
     config = config if config is not None else load_config()
     value = _get_nested(config, "processing", "max_emails_to_process")
     return max(0, _as_int(value, DEFAULT_MAX_EMAILS_TO_PROCESS))
 
+
 def is_state_persistence_disabled(config=None):
     config = config if config is not None else load_config()
     value = _get_nested(config, "state", "disable_state_persistence")
     return _as_bool(value, DEFAULT_DISABLE_STATE_PERSISTENCE)
+
 
 def get_default_download_dir(config=None):
     config = config if config is not None else load_config()
@@ -59,6 +74,42 @@ def get_default_download_dir(config=None):
         return configured_dir
 
     return os.path.join(os.path.expanduser("~"), "Downloads")
+
+
+def get_download_dir_for_release(repo, release_type=None, config=None):
+    """Resolves destination directory using repo/release-type overrides.
+
+    Resolution order:
+    1) paths.repo_release_type_paths[repo][release_type]
+    2) paths.repo_paths[repo]
+    3) paths.release_type_paths[release_type]
+    4) paths.default_download_dir
+    """
+    config = config if config is not None else load_config()
+    normalized_release_type = _normalize_release_type(release_type)
+
+    repo_release_type_paths = _get_nested(config, "paths", "repo_release_type_paths")
+    if isinstance(repo_release_type_paths, dict):
+        repo_map = repo_release_type_paths.get(repo)
+        if isinstance(repo_map, dict) and normalized_release_type:
+            value = repo_map.get(normalized_release_type)
+            if isinstance(value, str) and value.strip():
+                return value
+
+    repo_paths = _get_nested(config, "paths", "repo_paths")
+    if isinstance(repo_paths, dict):
+        value = repo_paths.get(repo)
+        if isinstance(value, str) and value.strip():
+            return value
+
+    release_type_paths = _get_nested(config, "paths", "release_type_paths")
+    if isinstance(release_type_paths, dict) and normalized_release_type:
+        value = release_type_paths.get(normalized_release_type)
+        if isinstance(value, str) and value.strip():
+            return value
+
+    return get_default_download_dir(config)
+
 
 def get_polling_settings(config=None):
     config = config if config is not None else load_config()
