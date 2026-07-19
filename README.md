@@ -8,7 +8,7 @@ A highly efficient, automated Python background utility designed to parse incomi
 - **Two-Pass Subject Parsing**: Leverages an intelligent regular expression system to dynamically separate repository owners, names, and version identifiers from complex email subject text variations.
 - **High-Performance Downloader**: Implements persistent HTTP session connection pooling via `requests.Session` to maximize throughput across standard binary assets, source distributions, and remote attestation lookups.
 - **Self-Healing Execution Flow**: Automatically detects and skips deleted, corrupted, or overwritten remote releases, and bypasses hanging loops on tags that solely contain auto-generated source archives.
-- **Deterministic Pathing & Metadata Preservation**: Sanitizes local storage targets into an organized folder layout (`YYYY-MM-DD_HH-MM, Name, Tag, Short-SHA`) and updates local file system attributes using remote `Last-Modified` timestamps.
+- **Deterministic Pathing & Metadata Preservation**: Stores releases in a stable folder layout (`YYYY-MM-DD_HH-MM, owner-repo, Tag, Short-SHA`), persists per-asset metadata, and updates local file system attributes using remote `Last-Modified` timestamps.
 
 ## 🛠️ Prerequisites
 

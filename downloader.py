@@ -1,4 +1,5 @@
 import datetime
+import json
 import os
 import re
 import requests
@@ -16,6 +17,8 @@ GITHUB_TOKEN = os.getenv("GITHUB_PAT")
 BASE_DOWNLOAD_DIR = os.getenv("DEFAULT_DOWNLOAD_DIR")
 if not BASE_DOWNLOAD_DIR:
     BASE_DOWNLOAD_DIR = os.path.join(os.path.expanduser('~'), 'Downloads')
+
+STATE_FILE_NAME = ".ghaadd-state.json"
 
 def sanitize_folder_name(text):
     """Replicates the JS Windows-safe sanitization."""
@@ -36,8 +39,8 @@ def get_short_commit_hash(repo, tag, headers):
         return response.json().get("sha", "unknown")[:7]
     return "unknown-commit"
 
-def generate_folder_name(repo, release_data, headers):
-    """Generates the folder name matching the Tampermonkey script output."""
+def build_folder_name(repo, release_data, headers, raw_name):
+    """Builds a release folder name from a specific display name."""
     # 1. Date (YYYY-MM-DD_HH-MM in UTC)
     pub_time_str = release_data.get("published_at", "")
     if pub_time_str:
@@ -48,9 +51,6 @@ def generate_folder_name(repo, release_data, headers):
     else:
         formatted_date = "unknown-date"
 
-    # 2. Name
-    raw_name = release_data.get("name") or release_data.get("tag_name", "unknown-name")
-    
     # 3. Tag
     raw_tag = release_data.get("tag_name", "unknown-tag")
     
@@ -63,6 +63,83 @@ def generate_folder_name(repo, release_data, headers):
     safe_commit = sanitize_folder_name(raw_commit)
 
     return f"{formatted_date}, {safe_name}, {safe_tag}, {safe_commit}"
+
+
+def generate_folder_name(repo, release_data, headers):
+    """Generates a stable folder name for a release."""
+    return build_folder_name(repo, release_data, headers, repo.replace("/", "-"))
+
+
+def generate_legacy_folder_name(repo, release_data, headers):
+    """Generates the pre-migration folder name based on the release title."""
+    legacy_name = release_data.get("name") or release_data.get("tag_name", "unknown-name")
+    return build_folder_name(repo, release_data, headers, legacy_name)
+
+
+def load_download_state(download_dir):
+    """Loads persisted per-release download metadata."""
+    state_path = os.path.join(download_dir, STATE_FILE_NAME)
+    if not os.path.exists(state_path):
+        return state_path, {"release": {}, "assets": {}}
+
+    try:
+        with open(state_path, 'r', encoding='utf-8') as state_file:
+            data = json.load(state_file)
+    except (OSError, json.JSONDecodeError):
+        return state_path, {"release": {}, "assets": {}}
+
+    if not isinstance(data, dict):
+        return state_path, {"release": {}, "assets": {}}
+
+    data.setdefault("release", {})
+    data.setdefault("assets", {})
+    return state_path, data
+
+
+def save_download_state(state_path, state):
+    """Atomically saves per-release download metadata."""
+    temp_state_path = f"{state_path}.tmp"
+    with open(temp_state_path, 'w', encoding='utf-8') as state_file:
+        json.dump(state, state_file, indent=2, sort_keys=True)
+    os.replace(temp_state_path, state_path)
+
+
+def build_expected_signature(item):
+    """Builds a stable signature for queue items with trusted upstream metadata."""
+    signature_parts = [item.get("key")]
+    for field in ("name", "expected_size", "expected_updated_at"):
+        value = item.get(field)
+        if value is not None:
+            signature_parts.append(str(value))
+
+    if len(signature_parts) == 1:
+        return None
+
+    return "|".join(signature_parts)
+
+
+def update_state_entry(state, item_key, file_name, file_path, expected_signature, remote_size, remote_last_modified, remote_etag):
+    """Updates the persisted metadata for a downloaded or verified asset."""
+    entry = {
+        "file_name": file_name,
+        "file_path": file_path,
+        "size": remote_size,
+        "last_modified": remote_last_modified,
+        "etag": remote_etag,
+        "expected_signature": expected_signature,
+    }
+
+    try:
+        entry["local_size"] = os.path.getsize(file_path)
+    except OSError:
+        entry["local_size"] = None
+
+    try:
+        entry["local_mtime"] = os.path.getmtime(file_path)
+    except OSError:
+        entry["local_mtime"] = None
+
+    state["assets"][item_key] = entry
 
 def get_release_data(repo, tag):
     """
@@ -169,20 +246,29 @@ def download_all_assets(repo, tag, download_dir):
     download_queue = []
     for asset in release_data.get("assets", []):
         download_queue.append({
+            "key": f"asset:{asset['id']}",
             "name": asset["name"],
-            "url": asset["browser_download_url"]
+            "url": asset["browser_download_url"],
+            "expected_size": asset.get("size"),
+            "expected_updated_at": asset.get("updated_at"),
         })
         
     # 2. Add the auto-generated Source Code (zip and tar.gz)
     if "zipball_url" in release_data:
         download_queue.append({
+            "key": "source:zipball",
             "name": f"{repo_name}-{tag}-Source_code.zip",
-            "url": release_data["zipball_url"]
+            "url": release_data["zipball_url"],
+            "expected_size": None,
+            "expected_updated_at": release_data.get("target_commitish"),
         })
     if "tarball_url" in release_data:
         download_queue.append({
+            "key": "source:tarball",
             "name": f"{repo_name}-{tag}-Source_code.tar.gz",
-            "url": release_data["tarball_url"]
+            "url": release_data["tarball_url"],
+            "expected_size": None,
+            "expected_updated_at": release_data.get("target_commitish"),
         })
 
     # 3. Add Release Attestations (if present)
@@ -190,9 +276,12 @@ def download_all_assets(repo, tag, download_dir):
     if attestation_url:
         # Add to queue with a placeholder name - actual name will be extracted from Content-Disposition header
         download_queue.append({
+            "key": f"attestation:{attestation_url}",
             "name": None,  # Will be extracted from response header
             "url": attestation_url,
-            "is_attestation": True
+            "is_attestation": True,
+            "expected_size": None,
+            "expected_updated_at": release_data.get("published_at"),
         })
 
     print(f"📦 Found {len(download_queue)} total items to download (including source code and attestations).")
@@ -201,7 +290,20 @@ def download_all_assets(repo, tag, download_dir):
     # Generate the custom folder name and create it
     custom_folder = generate_folder_name(repo, release_data, headers_api)
     final_download_dir = os.path.join(download_dir, custom_folder)
+    legacy_folder = generate_legacy_folder_name(repo, release_data, headers_api)
+    legacy_download_dir = os.path.join(download_dir, legacy_folder)
+    if not os.path.exists(final_download_dir) and os.path.exists(legacy_download_dir):
+        custom_folder = legacy_folder
+        final_download_dir = legacy_download_dir
     os.makedirs(final_download_dir, exist_ok=True)
+    state_path, download_state = load_download_state(final_download_dir)
+    download_state["release"] = {
+        "repo": repo,
+        "tag": tag,
+        "release_id": release_data.get("id"),
+        "published_at": release_data.get("published_at"),
+        "target_commitish": release_data.get("target_commitish"),
+    }
     
     print(f"📁 Target Folder: {custom_folder}")
 
@@ -219,26 +321,35 @@ def download_all_assets(repo, tag, download_dir):
     per_file_retries = 3
     per_file_retry_delay = 2
 
-    def should_skip_existing_file(file_path, remote_size, remote_last_modified):
+    def should_skip_existing_file(file_path, item_key, expected_signature, remote_size, remote_last_modified, remote_etag):
         """
         Returns True when the local file can be considered up-to-date.
-        Prefers exact size match; falls back to Last-Modified timestamp.
+        Prefers a persisted signature match; otherwise requires corroborating remote metadata.
         """
         if not os.path.exists(file_path):
             return False
 
-        if remote_size is not None:
-            try:
-                local_size = os.path.getsize(file_path)
-                if local_size == remote_size:
-                    return True
-            except OSError:
-                return False
+        state_entry = download_state["assets"].get(item_key, {})
 
-        if remote_last_modified is not None:
+        try:
+            local_size = os.path.getsize(file_path)
+        except OSError:
+            return False
+
+        if expected_signature and state_entry.get("expected_signature") == expected_signature:
+            recorded_size = state_entry.get("local_size")
+            if recorded_size is None or recorded_size == local_size:
+                return True
+
+        if remote_etag and state_entry.get("etag") == remote_etag:
+            recorded_size = state_entry.get("size")
+            if remote_size is None or recorded_size == remote_size == local_size:
+                return True
+
+        if remote_size is not None and remote_last_modified is not None:
             try:
                 local_mtime = os.path.getmtime(file_path)
-                if local_mtime >= remote_last_modified:
+                if local_size == remote_size and local_mtime >= remote_last_modified:
                     return True
             except OSError:
                 return False
@@ -252,6 +363,8 @@ def download_all_assets(repo, tag, download_dir):
         session.headers.update(headers_api)
         
         for i, item in enumerate(download_queue, 1):
+            item_key = item["key"]
+            expected_signature = build_expected_signature(item)
             file_name = item["name"]
             download_url = item["url"]
 
@@ -274,7 +387,26 @@ def download_all_assets(repo, tag, download_dir):
                         if parsed_date:
                             remote_last_modified = mktime_tz(parsed_date)
 
-                    if should_skip_existing_file(file_path, remote_size, remote_last_modified):
+                    remote_etag = head_response.headers.get('ETag')
+
+                    if should_skip_existing_file(
+                        file_path,
+                        item_key,
+                        expected_signature,
+                        remote_size,
+                        remote_last_modified,
+                        remote_etag,
+                    ):
+                        update_state_entry(
+                            download_state,
+                            item_key,
+                            file_name,
+                            file_path,
+                            expected_signature,
+                            remote_size,
+                            remote_last_modified,
+                            remote_etag,
+                        )
                         print(f"   ⏭️ Skipping ({i}/{total_files}): {file_name} already exists and matches remote metadata.")
                         continue
                 except requests.RequestException:
@@ -318,7 +450,26 @@ def download_all_assets(repo, tag, download_dir):
                             if parsed_date:
                                 remote_last_modified = mktime_tz(parsed_date)
 
-                        if should_skip_existing_file(file_path, remote_size, remote_last_modified):
+                        remote_etag = r.headers.get('ETag')
+
+                        if should_skip_existing_file(
+                            file_path,
+                            item_key,
+                            expected_signature,
+                            remote_size,
+                            remote_last_modified,
+                            remote_etag,
+                        ):
+                            update_state_entry(
+                                download_state,
+                                item_key,
+                                file_name,
+                                file_path,
+                                expected_signature,
+                                remote_size,
+                                remote_last_modified,
+                                remote_etag,
+                            )
                             print(
                                 f"   ⏭️ Skipping ({i}/{total_files}): {file_name} already exists and matches remote metadata."
                             )
@@ -343,6 +494,17 @@ def download_all_assets(repo, tag, download_dir):
                                 os.utime(file_path, (fallback_timestamp, fallback_timestamp))
                         else:
                             os.utime(file_path, (fallback_timestamp, fallback_timestamp))
+
+                        update_state_entry(
+                            download_state,
+                            item_key,
+                            file_name,
+                            file_path,
+                            expected_signature,
+                            remote_size,
+                            remote_last_modified,
+                            remote_etag,
+                        )
 
                         print(f"   ✅ Saved & timestamp preserved.")
                         file_saved = True
@@ -377,6 +539,8 @@ def download_all_assets(repo, tag, download_dir):
 
             if not file_saved:
                 return False
+
+    save_download_state(state_path, download_state)
 
     return True
 

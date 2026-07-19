@@ -27,18 +27,41 @@ def main():
         if not notifications:
             print("No pending notifications found.")
             return
+
+        unique_notifications = []
+        notifications_by_release = {}
+        duplicate_count = 0
+        for notification in notifications:
+            repo = notification.get("repo")
+            tag = notification.get("tag")
+            email_id = notification.get("email_id")
+            release_key = (repo, tag)
+
+            if release_key in notifications_by_release:
+                duplicate_count += 1
+                if email_id is not None:
+                    notifications_by_release[release_key]["email_ids"].append(email_id)
+                continue
+
+            deduped_notification = dict(notification)
+            deduped_notification["email_ids"] = [email_id] if email_id is not None else []
+            notifications_by_release[release_key] = deduped_notification
+            unique_notifications.append(deduped_notification)
         
-        print(f"Found {len(notifications)} notification(s) to process.\n")
+        print(f"Found {len(unique_notifications)} unique notification(s) to process.")
+        if duplicate_count:
+            print(f"⏭️ Collapsed {duplicate_count} duplicate notification(s) for already-seen repo/tag pairs.")
+        print()
 
         emails_to_delete = [] # NEW: List to track processed emails
 
         # Step 2: Process each notification
-        for idx, notification in enumerate(notifications, 1):
+        for idx, notification in enumerate(unique_notifications, 1):
             repo = notification.get("repo")
             tag = notification.get("tag")
-            email_id = notification.get("email_id")
+            email_ids = notification.get("email_ids", [])
             
-            print(f"[{idx}/{len(notifications)}] Processing: {repo} ({tag})")
+            print(f"[{idx}/{len(unique_notifications)}] Processing: {repo} ({tag})")
             
             try:
                 # Download the release
@@ -47,10 +70,10 @@ def main():
                 # Handle different return states: True (success), "SKIP" (gracefully skipped), False (error)
                 if result is True:
                     print(f"✓ Download successful for {repo} {tag}")
-                    emails_to_delete.append(email_id) # Queue for deletion                    
+                    emails_to_delete.extend(email_ids) # Queue for deletion                    
                 elif result == "SKIP":
                     print(f"⏭️ Skipped {repo} {tag} (release not found)")
-                    emails_to_delete.append(email_id) # Queue for deletion                    
+                    emails_to_delete.extend(email_ids) # Queue for deletion                    
                 else:
                     print(f"✗ Download failed for {repo} {tag}\n")
                     
