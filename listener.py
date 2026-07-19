@@ -93,7 +93,6 @@ def get_pending_notifications(limit=None):
     
     return notifications
 
-
 def mark_as_read_and_delete(email_ids):
     """
     Marks a list of emails as read and moves them to Trash.
@@ -125,5 +124,6 @@ def check_releases():
     notifications = get_pending_notifications()
     print(f"\nFound {len(notifications)} release notification(s).")
 
+# For manual testing: run this file directly to check IMAP connectivity
 if __name__ == "__main__":
     check_releases()
