@@ -19,6 +19,7 @@ if not BASE_DOWNLOAD_DIR:
     BASE_DOWNLOAD_DIR = os.path.join(os.path.expanduser('~'), 'Downloads')
 
 STATE_DB_NAME = "state.db"
+STATE_PERSISTENCE_ENV_VAR = "GHAADD_DISABLE_STATE_PERSISTENCE"
 
 
 def sanitize_folder_name(text):
@@ -74,6 +75,22 @@ def get_state_db_path():
     """Returns the SQLite state database path beside the app files."""
     app_dir = os.path.dirname(os.path.abspath(__file__))
     return os.path.join(app_dir, STATE_DB_NAME)
+
+
+def is_state_persistence_enabled():
+    """Returns whether persistent duplicate-detection state is enabled."""
+    raw_value = os.getenv(STATE_PERSISTENCE_ENV_VAR, "")
+    return raw_value.strip().lower() not in {"1", "true", "yes", "on"}
+
+
+def purge_state_database():
+    """Deletes the local state database if it exists."""
+    state_db_path = get_state_db_path()
+    if not os.path.exists(state_db_path):
+        return False
+
+    os.remove(state_db_path)
+    return True
 
 
 def open_state_database():
@@ -351,9 +368,13 @@ def download_all_assets(repo, tag, download_dir):
     os.makedirs(final_download_dir, exist_ok=True)
 
     release_key = f"{repo}|{tag}"
-    state_db = open_state_database()
-    prune_release_state(state_db, release_key, {item["key"] for item in download_queue})
-    release_state = load_release_state(state_db, release_key)
+    state_enabled = is_state_persistence_enabled()
+    state_db = open_state_database() if state_enabled else None
+    if state_db is not None:
+        prune_release_state(state_db, release_key, {item["key"] for item in download_queue})
+        release_state = load_release_state(state_db, release_key)
+    else:
+        release_state = {}
 
     print(f"📁 Target Folder: {custom_folder}")
 
@@ -370,7 +391,8 @@ def download_all_assets(repo, tag, download_dir):
 
     def refresh_release_state():
         nonlocal release_state
-        release_state = load_release_state(state_db, release_key)
+        if state_db is not None:
+            release_state = load_release_state(state_db, release_key)
 
     def should_skip_existing_file(file_path, item_key, expected_signature, remote_size, remote_last_modified, remote_etag):
         """Returns True when the local file can be considered up-to-date."""
@@ -442,18 +464,19 @@ def download_all_assets(repo, tag, download_dir):
                             remote_last_modified,
                             remote_etag,
                         ):
-                            save_state_entry(
-                                state_db,
-                                release_key,
-                                item_key,
-                                file_name,
-                                file_path,
-                                expected_signature,
-                                remote_size,
-                                remote_last_modified,
-                                remote_etag,
-                            )
-                            refresh_release_state()
+                            if state_db is not None:
+                                save_state_entry(
+                                    state_db,
+                                    release_key,
+                                    item_key,
+                                    file_name,
+                                    file_path,
+                                    expected_signature,
+                                    remote_size,
+                                    remote_last_modified,
+                                    remote_etag,
+                                )
+                                refresh_release_state()
                             print(f"   ⏭️ Skipping ({i}/{total_files}): {file_name} already exists and matches remote metadata.")
                             continue
                     except requests.RequestException:
@@ -504,18 +527,19 @@ def download_all_assets(repo, tag, download_dir):
                                 remote_last_modified,
                                 remote_etag,
                             ):
-                                save_state_entry(
-                                    state_db,
-                                    release_key,
-                                    item_key,
-                                    file_name,
-                                    file_path,
-                                    expected_signature,
-                                    remote_size,
-                                    remote_last_modified,
-                                    remote_etag,
-                                )
-                                refresh_release_state()
+                                if state_db is not None:
+                                    save_state_entry(
+                                        state_db,
+                                        release_key,
+                                        item_key,
+                                        file_name,
+                                        file_path,
+                                        expected_signature,
+                                        remote_size,
+                                        remote_last_modified,
+                                        remote_etag,
+                                    )
+                                    refresh_release_state()
                                 print(f"   ⏭️ Skipping ({i}/{total_files}): {file_name} already exists and matches remote metadata.")
                                 file_saved = True
                                 break
@@ -538,18 +562,19 @@ def download_all_assets(repo, tag, download_dir):
                             else:
                                 os.utime(file_path, (fallback_timestamp, fallback_timestamp))
 
-                            save_state_entry(
-                                state_db,
-                                release_key,
-                                item_key,
-                                file_name,
-                                file_path,
-                                expected_signature,
-                                remote_size,
-                                remote_last_modified,
-                                remote_etag,
-                            )
-                            refresh_release_state()
+                            if state_db is not None:
+                                save_state_entry(
+                                    state_db,
+                                    release_key,
+                                    item_key,
+                                    file_name,
+                                    file_path,
+                                    expected_signature,
+                                    remote_size,
+                                    remote_last_modified,
+                                    remote_etag,
+                                )
+                                refresh_release_state()
 
                             print("   ✅ Saved & timestamp preserved.")
                             file_saved = True
@@ -585,7 +610,8 @@ def download_all_assets(repo, tag, download_dir):
                 if not file_saved:
                     return False
     finally:
-        state_db.close()
+        if state_db is not None:
+            state_db.close()
 
     return True
 

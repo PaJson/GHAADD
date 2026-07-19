@@ -3,23 +3,43 @@ import sys
 from dotenv import load_dotenv
 
 sys.dont_write_bytecode = True
-__version__ = "0.1.0-beta"
+__version__ = "0.2.0-beta"
 
 # Load environment variables
 load_dotenv()
 
 # Import custom modules
 from listener import get_pending_notifications, mark_as_read_and_delete
-from downloader import download_release
+from downloader import download_release, purge_state_database, STATE_PERSISTENCE_ENV_VAR
+
+
+def handle_cli_args(args):
+    """Handles one-shot command-line operations."""
+    if "--purge-state" not in args:
+        return False
+
+    deleted = purge_state_database()
+    if deleted:
+        print("Deleted local state database: state.db")
+    else:
+        print("No local state database found to delete.")
+    return True
 
 def main():
     """
     Main orchestrator script that coordinates email listening and GitHub downloads.
     """
+    if handle_cli_args(sys.argv[1:]):
+        return
+
     # Get configuration from environment
     max_emails_to_process = int(os.getenv("MAX_EMAILS_TO_PROCESS", "0"))  # 0 = all, >0 = limit
+    state_disabled = os.getenv(STATE_PERSISTENCE_ENV_VAR, "").strip().lower() in {"1", "true", "yes", "on"}
     
     try:
+        if state_disabled:
+            print(f"State persistence disabled via {STATE_PERSISTENCE_ENV_VAR}; duplicate detection will be in-memory only for this run.")
+
         # Step 1: Get pending GitHub notifications from email
         print(f"Fetching pending GitHub notifications (limit: {'all' if max_emails_to_process == 0 else max_emails_to_process})...")
         notifications = get_pending_notifications(limit=max_emails_to_process if max_emails_to_process > 0 else None)
