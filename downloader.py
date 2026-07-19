@@ -5,6 +5,7 @@ import requests
 import sqlite3
 import time
 from dotenv import load_dotenv
+from config_manager import get_default_download_dir, is_state_persistence_disabled
 from email.utils import parsedate_tz, mktime_tz
 from requests.exceptions import ChunkedEncodingError, ConnectionError, Timeout
 from urllib.parse import urljoin
@@ -13,10 +14,8 @@ from urllib.parse import urljoin
 load_dotenv()
 GITHUB_TOKEN = os.getenv("GITHUB_PAT")
 
-# Get the custom download directory, or fallback to the system's default user Downloads folder
-BASE_DOWNLOAD_DIR = os.getenv("DEFAULT_DOWNLOAD_DIR")
-if not BASE_DOWNLOAD_DIR:
-    BASE_DOWNLOAD_DIR = os.path.join(os.path.expanduser('~'), 'Downloads')
+# Get the custom download directory from config.json
+BASE_DOWNLOAD_DIR = get_default_download_dir()
 
 STATE_DB_NAME = "state.db"
 STATE_PERSISTENCE_ENV_VAR = "DISABLE_STATE_PERSISTENCE"
@@ -72,8 +71,7 @@ def get_state_db_path():
 
 def is_state_persistence_enabled():
     """Returns whether persistent duplicate-detection state is enabled."""
-    raw_value = os.getenv(STATE_PERSISTENCE_ENV_VAR, "")
-    return raw_value.strip().lower() != "true"
+    return not is_state_persistence_disabled()
 
 def purge_state_database():
     """Deletes the local state database if it exists."""

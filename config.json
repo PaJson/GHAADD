@@ -1,0 +1,17 @@
+{
+  "processing": {
+    "max_emails_to_process": 0
+  },
+  "state": {
+    "disable_state_persistence": false
+  },
+    "polling": {
+        "enabled": true,
+        "interval_seconds": 300,
+        "jitter_min_seconds": 5,
+        "jitter_max_seconds": 30
+    },
+    "paths": {
+		"default_download_dir": "D:\\Users\\PaJson\\Downloads"
+    }
+}

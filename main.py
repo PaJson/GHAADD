@@ -2,6 +2,7 @@ import os
 import random
 import sys
 import time
+from config_manager import get_max_emails_to_process, get_polling_settings, is_state_persistence_disabled
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -13,12 +14,7 @@ load_dotenv()
 
 # Import custom modules
 from listener import get_pending_notifications, mark_as_read_and_delete
-from downloader import download_release, purge_state_database, STATE_PERSISTENCE_ENV_VAR
-
-DEFAULT_POLL_INTERVAL_SECONDS = 300
-DEFAULT_POLL_JITTER_MIN_SECONDS = 5
-DEFAULT_POLL_JITTER_MAX_SECONDS = 30
-DEFAULT_ENABLE_POLLING = False
+from downloader import download_release, purge_state_database
 
 def run_internal_smoke_tests():
     """Executes Phase 1 baseline verification tests natively."""
@@ -62,13 +58,13 @@ def handle_cli_args(args):
 def process_notifications_once():
     """Processes pending notifications exactly once."""
 
-    # Get configuration from environment
-    max_emails_to_process = int(os.getenv("MAX_EMAILS_TO_PROCESS", "0"))  # 0 = all, >0 = limit
-    state_disabled = _as_bool(os.getenv(STATE_PERSISTENCE_ENV_VAR, "false"))
+    # 0 = all, >0 = limit
+    max_emails_to_process = get_max_emails_to_process()
+    state_disabled = is_state_persistence_disabled()
     
     try:
         if state_disabled:
-            print(f"State persistence disabled via {STATE_PERSISTENCE_ENV_VAR}; duplicate detection will be in-memory only for this run.")
+            print("State persistence is disabled; duplicate detection will be in-memory only for this run.")
 
         # Step 1: Get pending GitHub notifications from email
         print(f"Fetching pending GitHub notifications (limit: {'all' if max_emails_to_process == 0 else max_emails_to_process})...")
@@ -175,19 +171,21 @@ def main():
     if handle_cli_args(args):
         return
 
+    polling_settings = get_polling_settings()
+
     # --once explicitly forces single-run mode, even if ENABLE_POLLING=true in .env.
     once_mode = "--once" in args
     poll_enabled = not once_mode and (
         "--poll" in args
-        or _as_bool(os.getenv("ENABLE_POLLING", str(DEFAULT_ENABLE_POLLING).lower()))
+        or polling_settings["enabled"]
     )
     if once_mode or not poll_enabled:
         process_notifications_once()
         return
 
-    interval_seconds = int(os.getenv("POLL_INTERVAL_SECONDS", str(DEFAULT_POLL_INTERVAL_SECONDS)))
-    jitter_min_seconds = int(os.getenv("POLL_JITTER_MIN_SECONDS", str(DEFAULT_POLL_JITTER_MIN_SECONDS)))
-    jitter_max_seconds = int(os.getenv("POLL_JITTER_MAX_SECONDS", str(DEFAULT_POLL_JITTER_MAX_SECONDS)))
+    interval_seconds = polling_settings["interval_seconds"]
+    jitter_min_seconds = polling_settings["jitter_min_seconds"]
+    jitter_max_seconds = polling_settings["jitter_max_seconds"]
 
     try:
         run_polling_loop(interval_seconds, jitter_min_seconds, jitter_max_seconds)

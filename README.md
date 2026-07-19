@@ -13,9 +13,8 @@ A highly efficient, automated Python background utility designed to parse incomi
 ## Runtime Options
 
 - Run `python main.py --purge-state` to delete the local `state.db` file without downloading anything.
-- Set `DISABLE_STATE_PERSISTENCE=true` in `.env` if you want duplicate-detection state disabled until you change it back.
-- For a one-off PowerShell run, use `$env:DISABLE_STATE_PERSISTENCE='true'; python main.py`.
-- Re-enable persistence by setting `DISABLE_STATE_PERSISTENCE=false`.
+- Runtime behavior is configured through `config.json` (polling, max emails, default download directory, state persistence toggle).
+- To disable duplicate-detection state, set `state.disable_state_persistence` to `true` in `config.json`.
 
 ## 🛠️ Prerequisites
 
