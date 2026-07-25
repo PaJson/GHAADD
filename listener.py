@@ -1,6 +1,7 @@
 import os
 import re
 from dotenv import load_dotenv
+from email.header import decode_header
 from imapclient import IMAPClient
 
 # Load credentials
@@ -10,6 +11,26 @@ PASSWORD = os.getenv("GMAIL_APP_PASSWORD")
 
 if not EMAIL or not PASSWORD:
     raise ValueError("GMAIL_USER and GMAIL_APP_PASSWORD environment variables must be set")
+
+
+def decode_email_subject(subject_raw):
+    """Decodes MIME-encoded email subjects (handles emojis and special characters)."""
+    if not subject_raw:
+        return ""
+        
+    decoded_fragments = decode_header(subject_raw)
+    subject = ""
+    
+    for fragment, charset in decoded_fragments:
+        if isinstance(fragment, bytes):
+            # Decode the bytes using the provided charset, defaulting to utf-8
+            charset = charset or 'utf-8'
+            subject += fragment.decode(charset, errors='replace')
+        else:
+            # If it's already a string, just append it
+            subject += fragment
+            
+    return subject
 
 
 def parse_github_subject(subject):
@@ -75,7 +96,10 @@ def get_pending_notifications(limit=None):
                     
                     if isinstance(subject, bytes):
                         subject = subject.decode('utf-8', errors='ignore')
-                    
+
+                    # Decode the MIME-encoded string into readable text (fixing emojis)
+                    subject = decode_email_subject(subject)
+
                     repo, tag, release_type = parse_github_subject(subject)
 
                     if repo and tag:

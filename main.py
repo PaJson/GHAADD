@@ -7,7 +7,7 @@ from config_manager import get_max_emails_to_process, get_polling_settings, is_s
 from datetime import datetime
 from dotenv import load_dotenv
 
-__version__ = "0.3.0-beta"
+__version__ = "0.3.1-beta"
 
 # Load environment variables
 load_dotenv()
