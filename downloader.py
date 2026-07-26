@@ -2,8 +2,8 @@ import datetime
 import os
 import re
 import requests
-import sqlite3
 import time
+from db_manager import open_database, load_release_state, save_state_entry, prune_release_state
 from dotenv import load_dotenv
 from config_manager import get_download_dir_for_release, is_state_persistence_disabled
 from email.utils import parsedate_tz, mktime_tz
@@ -62,145 +62,9 @@ def generate_folder_name(repo, release_data, headers):
     return build_folder_name(repo, release_data, headers, release_name)
 
 
-def get_state_db_path():
-    """Returns the SQLite state database path beside the app files."""
-    app_dir = os.path.dirname(os.path.abspath(__file__))
-    return os.path.join(app_dir, STATE_DB_NAME)
-
-
 def is_state_persistence_enabled():
     """Returns whether persistent duplicate-detection state is enabled."""
     return not is_state_persistence_disabled()
-
-
-def purge_state_database():
-    """Deletes the local state database if it exists."""
-    state_db_path = get_state_db_path()
-    if not os.path.exists(state_db_path):
-        return False
-
-    os.remove(state_db_path)
-    return True
-
-
-def open_state_database():
-    """Opens the central SQLite state database and ensures the schema exists."""
-    connection = sqlite3.connect(get_state_db_path())
-    connection.row_factory = sqlite3.Row
-    connection.execute(
-        """
-        CREATE TABLE IF NOT EXISTS asset_state (
-            release_key TEXT NOT NULL,
-            item_key TEXT NOT NULL,
-            file_name TEXT,
-            file_path TEXT NOT NULL,
-            size INTEGER,
-            last_modified REAL,
-            etag TEXT,
-            expected_signature TEXT,
-            local_size INTEGER,
-            local_mtime REAL,
-            PRIMARY KEY (release_key, item_key)
-        )
-        """
-    )
-    connection.commit()
-    return connection
-
-
-def load_release_state(connection, release_key):
-    """Loads persisted per-release download metadata from the state database."""
-    rows = connection.execute(
-        """
-        SELECT item_key, file_name, file_path, size, last_modified, etag,
-               expected_signature, local_size, local_mtime
-        FROM asset_state
-        WHERE release_key = ?
-        """,
-        (release_key,),
-    ).fetchall()
-
-    state = {}
-    for row in rows:
-        state[row["item_key"]] = {
-            "file_name": row["file_name"],
-            "file_path": row["file_path"],
-            "size": row["size"],
-            "last_modified": row["last_modified"],
-            "etag": row["etag"],
-            "expected_signature": row["expected_signature"],
-            "local_size": row["local_size"],
-            "local_mtime": row["local_mtime"],
-        }
-    return state
-
-
-def save_state_entry(connection, release_key, item_key, file_name, file_path, expected_signature, remote_size, remote_last_modified, remote_etag):
-    """Upserts metadata for a downloaded or verified asset."""
-    try:
-        local_size = os.path.getsize(file_path)
-    except OSError:
-        local_size = None
-
-    try:
-        local_mtime = os.path.getmtime(file_path)
-    except OSError:
-        local_mtime = None
-
-    connection.execute(
-        """
-        INSERT INTO asset_state (
-            release_key, item_key, file_name, file_path, size, last_modified,
-            etag, expected_signature, local_size, local_mtime
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(release_key, item_key) DO UPDATE SET
-            file_name = excluded.file_name,
-            file_path = excluded.file_path,
-            size = excluded.size,
-            last_modified = excluded.last_modified,
-            etag = excluded.etag,
-            expected_signature = excluded.expected_signature,
-            local_size = excluded.local_size,
-            local_mtime = excluded.local_mtime
-        """,
-        (
-            release_key,
-            item_key,
-            file_name,
-            file_path,
-            remote_size,
-            remote_last_modified,
-            remote_etag,
-            expected_signature,
-            local_size,
-            local_mtime,
-        ),
-    )
-    connection.commit()
-
-
-def prune_release_state(connection, release_key, valid_item_keys):
-    """Removes stale database rows for missing files or no-longer-expected assets."""
-    rows = connection.execute(
-        "SELECT item_key, file_path FROM asset_state WHERE release_key = ?",
-        (release_key,),
-    ).fetchall()
-
-    stale_keys = []
-    for row in rows:
-        file_path = row["file_path"]
-        if row["item_key"] not in valid_item_keys or not file_path or not os.path.exists(file_path):
-            stale_keys.append(row["item_key"])
-
-    if not stale_keys:
-        return
-
-    connection.executemany(
-        "DELETE FROM asset_state WHERE release_key = ? AND item_key = ?",
-        [(release_key, item_key) for item_key in stale_keys],
-    )
-    connection.commit()
 
 
 def build_expected_signature(item):
@@ -355,7 +219,7 @@ def download_all_assets(repo, tag, download_dir):
 
     release_key = f"{repo}|{tag}"
     state_enabled = is_state_persistence_enabled()
-    state_db = open_state_database() if state_enabled else None
+    state_db = open_database() if state_enabled else None
     if state_db is not None:
         prune_release_state(state_db, release_key, {item["key"] for item in download_queue})
         release_state = load_release_state(state_db, release_key)

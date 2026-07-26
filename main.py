@@ -7,14 +7,15 @@ from config_manager import get_max_emails_to_process, get_polling_settings, is_s
 from datetime import datetime
 from dotenv import load_dotenv
 
-__version__ = "0.3.1-beta"
+__version__ = "0.4.0-beta"
 
 # Load environment variables
 load_dotenv()
 
 # Import custom modules
 from listener import get_pending_notifications, mark_as_read_and_delete
-from downloader import download_release, purge_state_database
+from db_manager import purge_state_database
+from downloader import download_release
 
 
 def run_internal_smoke_tests():
