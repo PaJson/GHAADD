@@ -1,40 +1,160 @@
 # GHAADD (GitHub Automatic Asset Downloader Daemon)
 
-A highly efficient, automated Python background utility designed to parse incoming Gmail update notifications for GitHub releases, extract crucial repository metadata, and systematically download all associated release assets, source code archives, and cryptographically signed release attestations while keeping original file timestamps intact.
+Automated Python utility that reads GitHub release notification emails from Gmail, extracts release metadata, and downloads release assets, source archives, and release attestations.
 
-## 🚀 Features
+## Features
 
-- **Batch Mail Processing**: Authenticates securely via IMAP to fetch and parse unread GitHub release notifications in a single operational cycle, preventing aggressive connection overhead.
-- **Two-Pass Subject Parsing**: Leverages an intelligent regular expression system to dynamically separate repository owners, names, and version identifiers from complex email subject text variations.
-- **High-Performance Downloader**: Implements persistent HTTP session connection pooling via `requests.Session` to maximize throughput across standard binary assets, source distributions, and remote attestation lookups.
-- **Self-Healing Execution Flow**: Automatically detects and skips deleted, corrupted, or overwritten remote releases, and bypasses hanging loops on tags that solely contain auto-generated source archives.
-- **Deterministic Pathing & Metadata Preservation**: Stores releases in a stable folder layout (`YYYY-MM-DD_HH-MM, owner-repo, Tag, Short-SHA`), keeps duplicate-detection state in `state.db` beside the app files, and updates local file system attributes using remote `Last-Modified` timestamps.
+- Fetches unread GitHub release notifications from a dedicated Gmail folder.
+- Parses both Release and Pre-release subject formats.
+- Downloads all release assets plus zip/tar source archives.
+- Attempts to discover and download GitHub release attestations.
+- Preserves file timestamps using upstream metadata when available.
+- Uses local SQLite state to skip files that are already up to date.
+- Supports configurable polling mode with jitter.
+- Supports config-based download path routing by repo and release type.
 
-## Runtime Options
+## Requirements
 
-- Run `python main.py --purge-state` to delete the local `state.db` file without downloading anything.
-- Runtime behavior is configured through `config.json` (polling, max emails, default download directory, state persistence toggle).
-- To disable duplicate-detection state, set `state.disable_state_persistence` to `true` in `config.json`.
+- Python 3.8+
+- Gmail App Password for IMAP access
+- GitHub PAT (recommended to avoid rate limits)
 
-### Download Path Routing
+## Environment Variables
 
-Destination directory selection supports repo and release-type overrides in `config.json`:
+Create a .env file in the project root with:
 
-- `paths.repo_release_type_paths[repo][release-type]`
-- `paths.repo_paths[repo]`
-- `paths.release_type_paths[release-type]`
-- `paths.default_download_dir`
+```env
+GMAIL_USER=your-email@gmail.com
+GMAIL_APP_PASSWORD=your-app-password
+GITHUB_PAT=your-github-token
+```
 
-Resolution uses the order above (most specific to least specific).
+Notes:
 
-Release-type keys should be lowercase and hyphenated, for example `release` and `pre-release`.
+- GMAIL_USER and GMAIL_APP_PASSWORD are required.
+- GITHUB_PAT is optional but strongly recommended.
 
-## 🛠️ Prerequisites
+## Gmail Folder
 
-- Python 3.8 or higher
-- A Gmail account with an authorized **App Password** configured
-- A GitHub **Personal Access Token (PAT)** for API authentication
+The folder is configured in config.json under mailbox.folder.
 
-## 📦 Setup & Installation
+Default value:
 
-1. ...
+- GitHubNotifications
+
+## Installation
+
+1. Create and activate a virtual environment.
+2. Install dependencies:
+
+```bash
+pip install requests python-dotenv imapclient
+```
+
+## Running
+
+Default run:
+
+```bash
+python main.py
+```
+
+CLI options:
+
+- --purge-state: Delete local state.db and exit.
+- --smoke-test: Run internal smoke tests and exit.
+- --once: Force single-run mode even when polling is enabled.
+- --poll: Force polling mode for this run.
+
+Polling behavior:
+
+- Polling runs when either:
+	- --poll is provided, or
+	- polling.enabled is true in config.json.
+- --once always overrides polling and runs a single cycle.
+
+## Configuration (config.json)
+
+Example:
+
+```json
+{
+	"processing": {
+		"max_emails_to_process": 0
+	},
+	"mailbox": {
+		"folder": "GitHubNotifications"
+	},
+	"state": {
+		"disable_state_persistence": false
+	},
+	"polling": {
+		"enabled": true,
+		"interval_seconds": 300,
+		"jitter_min_seconds": 5,
+		"jitter_max_seconds": 30
+	},
+	"paths": {
+		"default_download_dir": "D:\\Users\\YourUser\\Downloads",
+		"repo_paths": {},
+		"release_type_paths": {},
+		"repo_release_type_paths": {}
+	}
+}
+```
+
+Key behavior:
+
+- processing.max_emails_to_process
+	- 0 means process all unread notifications.
+	- > 0 limits processing to that many emails per cycle.
+- mailbox.folder
+	- Gmail folder used for reading and post-processing notification emails.
+	- Defaults to GitHubNotifications when missing or empty.
+- state.disable_state_persistence
+	- false keeps and uses state.db for duplicate detection.
+	- true disables persistent duplicate state for the run.
+- polling.interval_seconds, polling.jitter_min_seconds, polling.jitter_max_seconds
+	- Next run delay is interval_seconds + random jitter.
+
+## Download Path Routing
+
+Destination directory resolution order (most specific first):
+
+1. paths.repo_release_type_paths[repo][release-type]
+2. paths.repo_paths[repo]
+3. paths.release_type_paths[release-type]
+4. paths.default_download_dir
+
+Release-type keys are normalized to lowercase with hyphens (for example: release, pre-release).
+
+## State Database
+
+The app stores state in state.db beside the Python files.
+
+Use:
+
+```bash
+python main.py --purge-state
+```
+
+to remove the database.
+
+## Troubleshooting
+
+- Missing Gmail credentials:
+	- Ensure GMAIL_USER and GMAIL_APP_PASSWORD are set in .env.
+- No notifications found:
+	- Confirm messages are unread and in mailbox.folder.
+- API rate limits or release lookup errors:
+	- Set GITHUB_PAT.
+- Unexpected duplicates:
+	- Keep state.disable_state_persistence set to false.
+
+## Notes About JSON Comments
+
+config.json is parsed as strict JSON.
+
+- Standard JSON comments are not allowed.
+- Lines such as // comment or /* comment */ will break parsing.
+- If you need inline notes, use extra keys (for example "_comment") that your code ignores.

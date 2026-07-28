@@ -7,6 +7,7 @@ DEFAULT_POLL_JITTER_MIN_SECONDS = 5
 DEFAULT_POLL_JITTER_MAX_SECONDS = 30
 DEFAULT_MAX_EMAILS_TO_PROCESS = 0
 DEFAULT_DISABLE_STATE_PERSISTENCE = False
+DEFAULT_GMAIL_FOLDER = "GitHubNotifications"
 
 
 def _as_bool(value, default=False):
@@ -82,6 +83,15 @@ def get_default_download_dir(config=None):
         return configured_dir
 
     return os.path.join(os.path.expanduser("~"), "Downloads")
+
+
+def get_gmail_folder(config=None):
+    """Return the Gmail folder used for GitHub notification processing."""
+    config = config if config is not None else load_config()
+    value = _get_nested(config, "mailbox", "folder")
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return DEFAULT_GMAIL_FOLDER
 
 
 def get_download_dir_for_release(repo, release_type=None, config=None):

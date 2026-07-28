@@ -1,5 +1,6 @@
 import os
 import re
+from config_manager import get_gmail_folder
 from dotenv import load_dotenv
 from email.header import decode_header
 from imapclient import IMAPClient
@@ -68,6 +69,8 @@ def get_pending_notifications(limit=None):
     # Validate required email credentials.
     if not EMAIL or not PASSWORD:
         raise ValueError("EMAIL and PASSWORD environment variables must be set")
+
+    mailbox_folder = get_gmail_folder()
     
     print("Connecting to Gmail...")
     notifications = []
@@ -75,7 +78,7 @@ def get_pending_notifications(limit=None):
     try:
         with IMAPClient('imap.gmail.com', use_uid=True) as server:
             server.login(EMAIL, PASSWORD)
-            server.select_folder('GitHubNotifications', readonly=True)
+            server.select_folder(mailbox_folder, readonly=True)
             
             messages = server.search('UNSEEN')
             print(f"📥 Found {len(messages)} unread release notifications.\n")
@@ -128,10 +131,12 @@ def mark_as_read_and_delete(email_ids):
     if not EMAIL or not PASSWORD:
         raise ValueError("EMAIL and PASSWORD environment variables must be set")
 
+    mailbox_folder = get_gmail_folder()
+
     try:
         with IMAPClient('imap.gmail.com', use_uid=True) as server:
             server.login(EMAIL, PASSWORD)
-            server.select_folder('GitHubNotifications')
+            server.select_folder(mailbox_folder)
             
             # Normalize to a list in case a single ID is passed.
             if not isinstance(email_ids, list):

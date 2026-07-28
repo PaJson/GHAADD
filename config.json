@@ -2,6 +2,9 @@
   "processing": {
     "max_emails_to_process": 0
   },
+  "mailbox": {
+    "folder": "GitHubNotifications"
+  },
   "state": {
     "disable_state_persistence": false
   },
