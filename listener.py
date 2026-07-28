@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 from email.header import decode_header
 from imapclient import IMAPClient
 
-# Load credentials
+# Load credentials from environment variables.
 load_dotenv()
 EMAIL = os.getenv("GMAIL_USER")
 PASSWORD = os.getenv("GMAIL_APP_PASSWORD")
@@ -14,7 +14,7 @@ if not EMAIL or not PASSWORD:
 
 
 def decode_email_subject(subject_raw):
-    """Decodes MIME-encoded email subjects (handles emojis and special characters)."""
+    """Decode MIME-encoded email subjects, including emojis and special characters."""
     if not subject_raw:
         return ""
         
@@ -23,19 +23,19 @@ def decode_email_subject(subject_raw):
     
     for fragment, charset in decoded_fragments:
         if isinstance(fragment, bytes):
-            # Decode the bytes using the provided charset, defaulting to utf-8
+            # Decode bytes with the provided charset, defaulting to UTF-8.
             charset = charset or 'utf-8'
             subject += fragment.decode(charset, errors='replace')
         else:
-            # If it's already a string, just append it
+            # Append fragments that are already decoded strings.
             subject += fragment
             
     return subject
 
 
 def parse_github_subject(subject):
-    # This pattern captures everything after 'Release ' or 'Pre-release '
-    # until the final ' - ' separator
+    """Parse a GitHub release subject into repo, tag, and release type."""
+    # Capture content after "Release" or "Pre-release" until the final separator.
     pattern = r"^\[([^\]]+)\]\s+(?:Pre-)?Release\s+(.+)(?:\s+-\s+.*)$"
     match = re.search(pattern, subject, re.IGNORECASE)
     
@@ -45,7 +45,7 @@ def parse_github_subject(subject):
         release_type = "Pre-release" if "Pre-release" in subject else "Release"
         return repo, tag, release_type
     
-    # Fallback for subjects that might not have the " - " separator
+    # Fallback for subjects that do not include the trailing separator.
     pattern_simple = r"^\[([^\]]+)\]\s+(?:Pre-)?Release\s+(.+)$"
     match_simple = re.search(pattern_simple, subject, re.IGNORECASE)
     if match_simple:
@@ -58,14 +58,14 @@ def parse_github_subject(subject):
 
 
 def get_pending_notifications(limit=None):
-    """
-    Fetches unread GitHub release notifications from Gmail.
-    Returns a list of dicts with keys: 'repo', 'tag', 'release_type', 'email_id'
+    """Fetch unread GitHub release notifications from Gmail.
+
+    Return a list of dicts with keys: repo, tag, release_type, email_id.
     
     Args:
-        limit: Maximum number of emails to process. None = all
+        limit: Maximum number of emails to process. None means all.
     """
-    # Validate environment variables
+    # Validate required email credentials.
     if not EMAIL or not PASSWORD:
         raise ValueError("EMAIL and PASSWORD environment variables must be set")
     
@@ -81,13 +81,13 @@ def get_pending_notifications(limit=None):
             print(f"📥 Found {len(messages)} unread release notifications.\n")
             
             if messages:
-                # Apply limit if specified
+                # Apply the processing limit when provided.
                 message_list = messages[:limit] if limit else messages
                 print("Parsing notifications:")
                 
                 for msg_id, data in server.fetch(message_list, ['ENVELOPE']).items():
                     envelope = data[b'ENVELOPE']
-                    # Type: ignore because IMAPClient.fetch() has loose typing
+                    # Use type: ignore because IMAPClient.fetch() has loose typing.
                     subject = envelope.subject if hasattr(envelope, 'subject') else None  # type: ignore
                     
                     if subject is None:
@@ -97,7 +97,7 @@ def get_pending_notifications(limit=None):
                     if isinstance(subject, bytes):
                         subject = subject.decode('utf-8', errors='ignore')
 
-                    # Decode the MIME-encoded string into readable text (fixing emojis)
+                    # Decode MIME-encoded subjects into readable text.
                     subject = decode_email_subject(subject)
 
                     repo, tag, release_type = parse_github_subject(subject)
@@ -121,9 +121,7 @@ def get_pending_notifications(limit=None):
 
 
 def mark_as_read_and_delete(email_ids):
-    """
-    Marks a list of emails as read and moves them to Trash.
-    """
+    """Mark a list of emails as read and move them to Trash."""
     if not email_ids:
         return
         
@@ -135,11 +133,11 @@ def mark_as_read_and_delete(email_ids):
             server.login(EMAIL, PASSWORD)
             server.select_folder('GitHubNotifications')
             
-            # Ensure it's a list even if a single ID is passed by mistake
+            # Normalize to a list in case a single ID is passed.
             if not isinstance(email_ids, list):
                 email_ids = [email_ids]
                 
-            # Perform bulk operations
+            # Perform bulk read and move operations.
             server.set_flags(email_ids, [b'\\Seen'])
             server.move(email_ids, '[Gmail]/Trash')
             
@@ -148,11 +146,11 @@ def mark_as_read_and_delete(email_ids):
 
 
 def check_releases():
-    """Legacy function - now uses get_pending_notifications"""
+    """Run the legacy release check flow via get_pending_notifications."""
     notifications = get_pending_notifications()
     print(f"\nFound {len(notifications)} release notification(s).")
 
 
-# For manual testing: run this file directly to check IMAP connectivity
+# Run this file directly for manual IMAP connectivity testing.
 if __name__ == "__main__":
     check_releases()

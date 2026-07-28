@@ -3,13 +3,15 @@ import sqlite3
 
 STATE_DB_NAME = "state.db"
 
+
 def get_state_db_path():
-    """Returns the SQLite state database path beside the app files."""
+    """Return the SQLite state database path beside the app files."""
     app_dir = os.path.dirname(os.path.abspath(__file__))
     return os.path.join(app_dir, STATE_DB_NAME)
 
+
 def purge_state_database():
-    """Deletes the local state database if it exists."""
+    """Delete the local state database if it exists."""
     state_db_path = get_state_db_path()
     if not os.path.exists(state_db_path):
         return False
@@ -17,18 +19,16 @@ def purge_state_database():
     os.remove(state_db_path)
     return True
 
+
 def open_database():
-    """
-    Opens the central SQLite database, enables WAL mode for GUI concurrency,
-    and ensures the schema exists.
-    """
+    """Open the SQLite database, enable WAL mode, and ensure the schema exists."""
     connection = sqlite3.connect(get_state_db_path())
     connection.row_factory = sqlite3.Row
     
-    # Enable Write-Ahead Logging (Crucial for Daemon + Qt GUI concurrency)
+    # Enable Write-Ahead Logging for daemon and GUI concurrency.
     connection.execute("PRAGMA journal_mode=WAL;")
     
-    # 1. Existing Table: Long-term storage for duplicate file prevention
+    # Store persistent metadata used for duplicate file prevention.
     connection.execute(
         """
         CREATE TABLE IF NOT EXISTS asset_state (
@@ -47,7 +47,7 @@ def open_database():
         """
     )
     
-    # 2. NEW Table: The Job Queue for handling re-checks and retries
+    # Store queued jobs for re-checks and retries.
     connection.execute(
         """
         CREATE TABLE IF NOT EXISTS job_queue (
@@ -66,11 +66,11 @@ def open_database():
     connection.commit()
     return connection
 
-# ---------------------------------------------------------
-# Asset State Functions (Migrated from downloader.py)
-# ---------------------------------------------------------
+
+# Asset state helpers.
 
 def load_release_state(connection, release_key):
+    """Return stored asset state for a release key."""
     rows = connection.execute(
         """
         SELECT item_key, file_name, file_path, size, last_modified, etag,
@@ -95,7 +95,9 @@ def load_release_state(connection, release_key):
         }
     return state
 
+
 def save_state_entry(connection, release_key, item_key, file_name, file_path, expected_signature, remote_size, remote_last_modified, remote_etag):
+    """Insert or update one asset-state record for a release item."""
     try:
         local_size = os.path.getsize(file_path)
         local_mtime = os.path.getmtime(file_path)
@@ -124,7 +126,9 @@ def save_state_entry(connection, release_key, item_key, file_name, file_path, ex
     )
     connection.commit()
 
+
 def prune_release_state(connection, release_key, valid_item_keys):
+    """Delete stale asset-state rows that are missing or no longer valid."""
     rows = connection.execute("SELECT item_key, file_path FROM asset_state WHERE release_key = ?", (release_key,)).fetchall()
     stale_keys = [row["item_key"] for row in rows if row["item_key"] not in valid_item_keys or not row["file_path"] or not os.path.exists(row["file_path"])]
 

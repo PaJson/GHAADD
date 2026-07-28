@@ -10,7 +10,7 @@ from email.utils import parsedate_tz, mktime_tz
 from requests.exceptions import ChunkedEncodingError, ConnectionError, Timeout
 from urllib.parse import urljoin
 
-# Load environment variables (.env)
+# Load environment variables from .env.
 load_dotenv()
 GITHUB_TOKEN = os.getenv("GITHUB_PAT")
 
@@ -19,7 +19,7 @@ STATE_PERSISTENCE_ENV_VAR = "DISABLE_STATE_PERSISTENCE"
 
 
 def sanitize_folder_name(text):
-    """Replicates the JS Windows-safe sanitization."""
+    """Return a Windows-safe folder name using JS-compatible rules."""
     if not text:
         return "unknown"
     text = text.replace(':', '-')
@@ -28,7 +28,7 @@ def sanitize_folder_name(text):
 
 
 def get_short_commit_hash(repo, tag, headers):
-    """Fetches the 7-character commit hash for a specific tag."""
+    """Return the 7-character commit hash for a specific tag."""
     url = f"https://api.github.com/repos/{repo}/commits/{tag}"
     response = requests.get(url, headers=headers)
     if response.status_code == 200:
@@ -37,7 +37,7 @@ def get_short_commit_hash(repo, tag, headers):
 
 
 def build_folder_name(repo, release_data, headers, raw_name):
-    """Builds a release folder name from a specific display name."""
+    """Build a release folder name from a specific display name."""
     pub_time_str = release_data.get("published_at", "")
     if pub_time_str:
         pub_time_str = pub_time_str.replace("Z", "+00:00")
@@ -57,18 +57,18 @@ def build_folder_name(repo, release_data, headers, raw_name):
 
 
 def generate_folder_name(repo, release_data, headers):
-    """Generates the default folder name based on the release title."""
+    """Generate the default folder name based on the release title."""
     release_name = release_data.get("name") or release_data.get("tag_name", "unknown-name")
     return build_folder_name(repo, release_data, headers, release_name)
 
 
 def is_state_persistence_enabled():
-    """Returns whether persistent duplicate-detection state is enabled."""
+    """Return whether persistent duplicate-detection state is enabled."""
     return not is_state_persistence_disabled()
 
 
 def build_expected_signature(item):
-    """Builds a stable signature for queue items with trusted upstream metadata."""
+    """Build a stable signature for queue items with trusted upstream metadata."""
     signature_parts = [item.get("key")]
     for field in ("name", "expected_size", "expected_updated_at"):
         value = item.get(field)
@@ -82,10 +82,7 @@ def build_expected_signature(item):
 
 
 def get_release_data(repo, tag):
-    """
-    Queries the GitHub REST API for a specific repository release tag.
-    Returns the full release JSON if found, or None if it doesn't exist yet.
-    """
+    """Return release JSON for a repository tag, or None when unavailable."""
     url = f"https://api.github.com/repos/{repo}/releases/tags/{tag}"
 
     headers = {
@@ -109,11 +106,9 @@ def get_release_data(repo, tag):
 
 
 def get_release_attestation_url(release_data, headers):
-    """
-    Extracts the release attestation download URL from the expanded assets page.
+    """Return the release attestation download URL from the expanded assets page.
 
-    GitHub exposes the attestation link in the expanded assets HTML, but it is not
-    currently included in the REST release JSON payload.
+    GitHub exposes this link in expanded-assets HTML, not in release JSON.
     """
     release_page_url = release_data.get("html_url")
     if not release_page_url:
@@ -131,19 +126,13 @@ def get_release_attestation_url(release_data, headers):
 
 
 def download_release(repo, tag, release_type=None):
-    """
-    Downloads a GitHub release and all its assets.
-    Wrapper around download_all_assets() using config-driven destination routing.
-    """
+    """Download a GitHub release and all assets using config-driven routing."""
     download_dir = get_download_dir_for_release(repo, release_type)
     return download_all_assets(repo, tag, download_dir)
 
 
 def download_all_assets(repo, tag, download_dir):
-    """
-    Checks for assets (and source code), handles retry logic,
-    and downloads every file while preserving timestamps.
-    """
+    """Download all release items with retries and preserved timestamps."""
     max_retries = 1
     retry_delay = 10
     release_data = None
@@ -245,7 +234,7 @@ def download_all_assets(repo, tag, download_dir):
             release_state = load_release_state(state_db, release_key)
 
     def should_skip_existing_file(file_path, item_key, expected_signature, remote_size, remote_last_modified, remote_etag):
-        """Returns True when the local file can be considered up-to-date."""
+        """Return True when the local file can be treated as up to date."""
         if not os.path.exists(file_path):
             return False
 
@@ -465,7 +454,7 @@ def download_all_assets(repo, tag, download_dir):
 
     return True
 
-# For manual testing: run this file directly to download a specific release
+# Run this file directly for manual release-download testing.
 if __name__ == "__main__":
     test_repo = "cli/cli"
     test_tag = "v2.30.0"

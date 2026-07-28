@@ -9,32 +9,32 @@ from dotenv import load_dotenv
 
 __version__ = "0.4.0-beta"
 
-# Load environment variables
+# Load environment variables from .env.
 load_dotenv()
 
-# Import custom modules
+# Import application modules.
 from listener import get_pending_notifications, mark_as_read_and_delete
 from db_manager import purge_state_database
 from downloader import download_release
 
 
 def run_internal_smoke_tests():
-    """Executes Phase 1 baseline verification tests natively."""
+    """Run internal smoke tests for baseline release-download behavior."""
     print("🚀 Starting Internal Smoke Tests...")
     
-    # Test 1: Graceful Failure Handling (Non-existent repo)
+    # Test graceful failure handling with a non-existent repository.
     print("\n--- Test 1: Verifying Failure Baseline (Invalid Repo) ---")
     fail_result = download_release("github/this-repo-does-not-exist", "v99.9.9")
     print(f"Result (Expected 'SKIP' or False): {fail_result}")
     
-    # Test 2: Successful Download & DB Generation
+    # Test successful download and state database updates.
     print("\n--- Test 2: Verifying Success Baseline (Official GitHub Repo) ---")
-    # Using GitHub's official CLI tool guarantees the repo and tag won't unexpectedly vanish.
-    # v2.30.0 provides a good mix of assets, source code, and predictable headers.
+    # Use a stable official repository and tag for predictable test behavior.
+    # This release includes a representative mix of assets and source archives.
     success_result = download_release("cli/cli", "v2.30.0") 
     print(f"Result (Expected True): {success_result}")
     
-    # Test 3: Duplicate Guard Verification
+    # Test duplicate guarding by repeating a previously successful request.
     print("\n--- Test 3: Verifying Duplicate Guard (Re-running Success Path) ---")
     repeat_result = download_release("cli/cli", "v2.30.0")
     print(f"Result (Expected True with 'Skipping' console logs): {repeat_result}")
@@ -43,7 +43,7 @@ def run_internal_smoke_tests():
 
 
 def handle_cli_args(args):
-    """Handles one-shot command-line operations."""
+    """Handle one-shot command-line operations."""
     if "--purge-state" in args:
         deleted = purge_state_database()
         if deleted:
@@ -60,9 +60,9 @@ def handle_cli_args(args):
 
 
 def process_notifications_once():
-    """Processes pending notifications exactly once."""
+    """Process pending notifications exactly once."""
 
-    # 0 = all, >0 = limit
+    # Use 0 for all notifications; positive values apply a processing limit.
     max_emails_to_process = get_max_emails_to_process()
     state_disabled = is_state_persistence_disabled()
     
@@ -70,7 +70,7 @@ def process_notifications_once():
         if state_disabled:
             print("State persistence is disabled; duplicate detection will be in-memory only for this run.")
 
-        # Step 1: Get pending GitHub notifications from email
+        # Step 1: Fetch pending GitHub notifications from email.
         print(f"Fetching pending GitHub notifications (limit: {'all' if max_emails_to_process == 0 else max_emails_to_process})...")
         notifications = get_pending_notifications(limit=max_emails_to_process if max_emails_to_process > 0 else None)
         
@@ -80,7 +80,7 @@ def process_notifications_once():
 
         unique_notifications = []
         notifications_by_release = {}
-        collapsed_notifications = []  # NEW: List to track the actual duplicates
+        collapsed_notifications = []  # Track notifications collapsed during deduplication.
         
         for notification in notifications:
             repo = notification.get("repo")
@@ -90,7 +90,7 @@ def process_notifications_once():
             release_key = (repo, tag, release_type)
 
             if release_key in notifications_by_release:
-                # NEW: Save the duplicate to our list before continuing
+                # Keep duplicate details for summary output.
                 collapsed_notifications.append(notification)
                 if email_id is not None:
                     notifications_by_release[release_key]["email_ids"].append(email_id)
@@ -103,16 +103,16 @@ def process_notifications_once():
         
         print(f"Found {len(unique_notifications)} unique notification(s) to process.")
         
-        # NEW: Print out the details of the collapsed notifications
+        # Show details for notifications collapsed as duplicates.
         if collapsed_notifications:
             print(f"⏭️ Collapsed {len(collapsed_notifications)} duplicate notification(s) for already-seen repo/tag pairs:")
             for dup in collapsed_notifications:
                 print(f"   - Repo: {dup.get('repo')} | Tag: {dup.get('tag')} | Type: {dup.get('release_type')}")
         print()
 
-        emails_to_delete = [] # List to track processed emails
+        emails_to_delete = []  # Track emails queued for cleanup.
 
-        # Step 2: Process each notification
+        # Step 2: Process each unique notification.
         for idx, notification in enumerate(unique_notifications, 1):
             repo = notification.get("repo")
             tag = notification.get("tag")
@@ -122,16 +122,16 @@ def process_notifications_once():
             print(f"[{idx}/{len(unique_notifications)}] Processing: {repo} ({tag})")
             
             try:
-                # Download the release
+                # Download the release.
                 result = download_release(repo, tag, release_type)
                 
-                # Handle different return states: True (success), "SKIP" (gracefully skipped), False (error)
+                # Handle return states: True (success), "SKIP" (graceful skip), or False (error).
                 if result is True:
                     print(f"✓ Download successful for {repo} {tag}")
-                    emails_to_delete.extend(email_ids) # Queue for deletion                    
+                    emails_to_delete.extend(email_ids)  # Queue for cleanup.
                 elif result == "SKIP":
                     print(f"⏭️ Skipped {repo} {tag} (release not found)")
-                    emails_to_delete.extend(email_ids) # Queue for deletion                    
+                    emails_to_delete.extend(email_ids)  # Queue for cleanup.
                 else:
                     print(f"✗ Download failed for {repo} {tag}\n")
                     
@@ -139,7 +139,7 @@ def process_notifications_once():
                 print(f"✗ Error processing {repo} {tag}: {str(e)}\n")
                 continue
 
-        # NEW: Step 3 - Bulk cleanup after the loop completes
+        # Step 3: Run bulk cleanup after processing completes.
         if emails_to_delete:
             print(f"🧹 Cleaning up {len(emails_to_delete)} processed email(s)...")
             mark_as_read_and_delete(emails_to_delete)
@@ -156,7 +156,7 @@ def _as_bool(value):
 
 
 def run_polling_loop(interval_seconds, jitter_min_seconds, jitter_max_seconds):
-    """Runs processing continuously with randomized jitter between cycles."""
+    """Run processing continuously with randomized jitter between cycles."""
     if jitter_min_seconds > jitter_max_seconds:
         jitter_min_seconds, jitter_max_seconds = jitter_max_seconds, jitter_min_seconds
 
@@ -179,16 +179,14 @@ def run_polling_loop(interval_seconds, jitter_min_seconds, jitter_max_seconds):
 
 
 def main():
-    """
-    Main orchestrator script that coordinates email listening and GitHub downloads.
-    """
+    """Run the main orchestration flow for email processing and downloads."""
     args = sys.argv[1:]
     if handle_cli_args(args):
         return
 
     polling_settings = get_polling_settings()
 
-    # --once explicitly forces single-run mode, even if ENABLE_POLLING=true in .env.
+    # Force single-run mode with --once, even when polling is enabled in config.
     once_mode = "--once" in args
     poll_enabled = not once_mode and (
         "--poll" in args

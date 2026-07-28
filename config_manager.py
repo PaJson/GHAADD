@@ -10,6 +10,7 @@ DEFAULT_DISABLE_STATE_PERSISTENCE = False
 
 
 def _as_bool(value, default=False):
+    """Return a boolean parsed from value, or default when value is unset."""
     if isinstance(value, bool):
         return value
     if value is None:
@@ -18,6 +19,7 @@ def _as_bool(value, default=False):
 
 
 def _as_int(value, default):
+    """Return value parsed as int, or default when parsing fails."""
     if value is None:
         return default
     try:
@@ -27,6 +29,7 @@ def _as_int(value, default):
 
 
 def _get_nested(config, *keys):
+    """Return a nested dictionary value by key path, or None when missing."""
     current = config
     for key in keys:
         if not isinstance(current, dict) or key not in current:
@@ -36,6 +39,7 @@ def _get_nested(config, *keys):
 
 
 def _normalize_release_type(release_type):
+    """Normalize a release-type label for config key lookups."""
     if release_type is None:
         return ""
     normalized = str(release_type).strip().lower()
@@ -44,6 +48,7 @@ def _normalize_release_type(release_type):
 
 
 def load_config():
+    """Load and return config.json as a dictionary, or an empty dict on failure."""
     config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
     try:
         with open(config_path, "r", encoding="utf-8") as config_file:
@@ -56,18 +61,21 @@ def load_config():
 
 
 def get_max_emails_to_process(config=None):
+    """Return the configured maximum number of emails to process."""
     config = config if config is not None else load_config()
     value = _get_nested(config, "processing", "max_emails_to_process")
     return max(0, _as_int(value, DEFAULT_MAX_EMAILS_TO_PROCESS))
 
 
 def is_state_persistence_disabled(config=None):
+    """Return whether state persistence is disabled in configuration."""
     config = config if config is not None else load_config()
     value = _get_nested(config, "state", "disable_state_persistence")
     return _as_bool(value, DEFAULT_DISABLE_STATE_PERSISTENCE)
 
 
 def get_default_download_dir(config=None):
+    """Return the default download directory from config or user Downloads."""
     config = config if config is not None else load_config()
     configured_dir = _get_nested(config, "paths", "default_download_dir")
     if configured_dir:
@@ -77,7 +85,7 @@ def get_default_download_dir(config=None):
 
 
 def get_download_dir_for_release(repo, release_type=None, config=None):
-    """Resolves destination directory using repo/release-type overrides.
+    """Return the destination directory using repo and release-type overrides.
 
     Resolution order:
     1) paths.repo_release_type_paths[repo][release_type]
@@ -112,6 +120,7 @@ def get_download_dir_for_release(repo, release_type=None, config=None):
 
 
 def get_polling_settings(config=None):
+    """Return normalized polling settings with safe defaults."""
     config = config if config is not None else load_config()
 
     enabled = _get_nested(config, "polling", "enabled")
