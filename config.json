@@ -1,6 +1,7 @@
 {
   "processing": {
-    "max_emails_to_process": 0
+    "max_emails_to_process": 0,
+    "recheck_intervals_minutes": [5, 15, 60, 1440]
   },
   "mailbox": {
     "folder": "GitHubNotifications"

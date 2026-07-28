@@ -7,7 +7,7 @@ from config_manager import get_max_emails_to_process, get_polling_settings, is_s
 from datetime import datetime
 from dotenv import load_dotenv
 
-__version__ = "0.4.0-beta"
+__version__ = "0.4.5-beta"
 
 # Load environment variables from .env.
 load_dotenv()
@@ -149,10 +149,6 @@ def process_notifications_once():
 
     except Exception as e:
         print(f"Fatal error: {str(e)}", file=sys.stderr)
-
-
-def _as_bool(value):
-    return str(value).strip().lower() == "true"
 
 
 def run_polling_loop(interval_seconds, jitter_min_seconds, jitter_max_seconds):

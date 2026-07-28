@@ -14,9 +14,6 @@ from urllib.parse import urljoin
 load_dotenv()
 GITHUB_TOKEN = os.getenv("GITHUB_PAT")
 
-STATE_DB_NAME = "state.db"
-STATE_PERSISTENCE_ENV_VAR = "DISABLE_STATE_PERSISTENCE"
-
 
 def sanitize_folder_name(text):
     """Return a Windows-safe folder name using JS-compatible rules."""

@@ -6,6 +6,7 @@ DEFAULT_POLL_INTERVAL_SECONDS = 300
 DEFAULT_POLL_JITTER_MIN_SECONDS = 5
 DEFAULT_POLL_JITTER_MAX_SECONDS = 30
 DEFAULT_MAX_EMAILS_TO_PROCESS = 0
+DEFAULT_RECHECK_INTERVALS_MINUTES = [5, 15, 60, 1440]
 DEFAULT_DISABLE_STATE_PERSISTENCE = False
 DEFAULT_GMAIL_FOLDER = "GitHubNotifications"
 
@@ -66,6 +67,29 @@ def get_max_emails_to_process(config=None):
     config = config if config is not None else load_config()
     value = _get_nested(config, "processing", "max_emails_to_process")
     return max(0, _as_int(value, DEFAULT_MAX_EMAILS_TO_PROCESS))
+
+
+def get_recheck_intervals_minutes(config=None):
+    """Return queue re-check intervals in minutes, normalized and validated."""
+    config = config if config is not None else load_config()
+
+    value = _get_nested(config, "processing", "recheck_intervals_minutes")
+
+    if not isinstance(value, list):
+        return list(DEFAULT_RECHECK_INTERVALS_MINUTES)
+
+    normalized = []
+    for item in value:
+        minutes = _as_int(item, None)
+        if minutes is None or minutes <= 0:
+            continue
+        if minutes not in normalized:
+            normalized.append(minutes)
+
+    if not normalized:
+        return list(DEFAULT_RECHECK_INTERVALS_MINUTES)
+
+    return normalized
 
 
 def is_state_persistence_disabled(config=None):

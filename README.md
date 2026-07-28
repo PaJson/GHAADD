@@ -6,6 +6,7 @@ Automated Python utility that reads GitHub release notification emails from Gmai
 
 - Fetches unread GitHub release notifications from a dedicated Gmail folder.
 - Parses both Release and Pre-release subject formats.
+- Logs when a fallback subject parser pattern is used.
 - Downloads all release assets plus zip/tar source archives.
 - Attempts to discover and download GitHub release attestations.
 - Preserves file timestamps using upstream metadata when available.
@@ -80,7 +81,8 @@ Example:
 ```json
 {
 	"processing": {
-		"max_emails_to_process": 0
+		"max_emails_to_process": 0,
+		"recheck_intervals_minutes": [5, 15, 60, 1440]
 	},
 	"mailbox": {
 		"folder": "GitHubNotifications"
@@ -108,6 +110,10 @@ Key behavior:
 - processing.max_emails_to_process
 	- 0 means process all unread notifications.
 	- > 0 limits processing to that many emails per cycle.
+- processing.recheck_intervals_minutes
+	- Re-check cadence list used by the queue system.
+	- Values are interpreted as minutes.
+	- Invalid or non-positive values are ignored; defaults are used when the list is missing or fully invalid.
 - mailbox.folder
 	- Gmail folder used for reading and post-processing notification emails.
 	- Defaults to GitHubNotifications when missing or empty.
@@ -150,6 +156,8 @@ to remove the database.
 	- Set GITHUB_PAT.
 - Unexpected duplicates:
 	- Keep state.disable_state_persistence set to false.
+- Fallback subject parser warnings:
+	- If you see "Subject matched fallback parser pattern", save that subject line for parser-rule review.
 
 ## Notes About JSON Comments
 

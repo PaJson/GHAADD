@@ -35,7 +35,11 @@ def decode_email_subject(subject_raw):
 
 
 def parse_github_subject(subject):
-    """Parse a GitHub release subject into repo, tag, and release type."""
+    """Parse a GitHub release subject.
+
+    Returns:
+        tuple: (repo, tag, release_type, used_simple_pattern)
+    """
     # Capture content after "Release" or "Pre-release" until the final separator.
     pattern = r"^\[([^\]]+)\]\s+(?:Pre-)?Release\s+(.+)(?:\s+-\s+.*)$"
     match = re.search(pattern, subject, re.IGNORECASE)
@@ -44,7 +48,7 @@ def parse_github_subject(subject):
         repo = match.group(1)
         tag = match.group(2)
         release_type = "Pre-release" if "Pre-release" in subject else "Release"
-        return repo, tag, release_type
+        return repo, tag, release_type, False
     
     # Fallback for subjects that do not include the trailing separator.
     pattern_simple = r"^\[([^\]]+)\]\s+(?:Pre-)?Release\s+(.+)$"
@@ -53,9 +57,9 @@ def parse_github_subject(subject):
         repo = match_simple.group(1)
         tag = match_simple.group(2)
         release_type = "Pre-release" if "Pre-release" in subject else "Release"
-        return repo, tag, release_type
+        return repo, tag, release_type, True
         
-    return None, None, None
+    return None, None, None, False
 
 
 def get_pending_notifications(limit=None):
@@ -103,7 +107,10 @@ def get_pending_notifications(limit=None):
                     # Decode MIME-encoded subjects into readable text.
                     subject = decode_email_subject(subject)
 
-                    repo, tag, release_type = parse_github_subject(subject)
+                    repo, tag, release_type, used_simple_pattern = parse_github_subject(subject)
+
+                    if used_simple_pattern:
+                        print(f" ⚠️ Subject matched fallback parser pattern: {subject}")
 
                     if repo and tag:
                         print(f" 🚀 Found Update! Repo: {repo} | Tag: {tag} | Type: {release_type}")
@@ -151,7 +158,7 @@ def mark_as_read_and_delete(email_ids):
 
 
 def check_releases():
-    """Run the legacy release check flow via get_pending_notifications."""
+    """Run the release check flow via get_pending_notifications."""
     notifications = get_pending_notifications()
     print(f"\nFound {len(notifications)} release notification(s).")
 
