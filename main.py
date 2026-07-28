@@ -80,7 +80,8 @@ def process_notifications_once():
 
         unique_notifications = []
         notifications_by_release = {}
-        duplicate_count = 0
+        collapsed_notifications = []  # NEW: List to track the actual duplicates
+        
         for notification in notifications:
             repo = notification.get("repo")
             tag = notification.get("tag")
@@ -89,7 +90,8 @@ def process_notifications_once():
             release_key = (repo, tag, release_type)
 
             if release_key in notifications_by_release:
-                duplicate_count += 1
+                # NEW: Save the duplicate to our list before continuing
+                collapsed_notifications.append(notification)
                 if email_id is not None:
                     notifications_by_release[release_key]["email_ids"].append(email_id)
                 continue
@@ -100,11 +102,15 @@ def process_notifications_once():
             unique_notifications.append(deduped_notification)
         
         print(f"Found {len(unique_notifications)} unique notification(s) to process.")
-        if duplicate_count:
-            print(f"⏭️ Collapsed {duplicate_count} duplicate notification(s) for already-seen repo/tag pairs.")
+        
+        # NEW: Print out the details of the collapsed notifications
+        if collapsed_notifications:
+            print(f"⏭️ Collapsed {len(collapsed_notifications)} duplicate notification(s) for already-seen repo/tag pairs:")
+            for dup in collapsed_notifications:
+                print(f"   - Repo: {dup.get('repo')} | Tag: {dup.get('tag')} | Type: {dup.get('release_type')}")
         print()
 
-        emails_to_delete = [] # NEW: List to track processed emails
+        emails_to_delete = [] # List to track processed emails
 
         # Step 2: Process each notification
         for idx, notification in enumerate(unique_notifications, 1):
