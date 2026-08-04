@@ -10,7 +10,7 @@ from config_manager import get_max_emails_to_process, get_polling_settings, get_
 from datetime import datetime
 from dotenv import load_dotenv
 
-__version__ = "0.4.5-beta"
+__version__ = "0.5.0-beta"
 
 # Load environment variables from .env.
 load_dotenv()
