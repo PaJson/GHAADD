@@ -58,10 +58,36 @@ def open_database():
             status TEXT NOT NULL DEFAULT 'PENDING',  -- PENDING, COMPLETED, FAILED, SUPERSEDED
             attempt_count INTEGER NOT NULL DEFAULT 0,
             next_check_time REAL NOT NULL,          -- Unix timestamp
-            expected_commit TEXT                    -- 7-char hash to detect overwrites
+            expected_commit TEXT,                   -- 7-char hash to detect overwrites
+            downloaded_count INTEGER NOT NULL DEFAULT 0,
+            skipped_count INTEGER NOT NULL DEFAULT 0,
+            total_items INTEGER NOT NULL DEFAULT 0,
+            last_result TEXT
         )
         """
     )
+
+    # Apply backward-compatible schema migrations for existing databases.
+    existing_columns = {
+        row["name"]
+        for row in connection.execute("PRAGMA table_info(job_queue)").fetchall()
+    }
+    if "downloaded_count" not in existing_columns:
+        connection.execute(
+            "ALTER TABLE job_queue ADD COLUMN downloaded_count INTEGER NOT NULL DEFAULT 0"
+        )
+    if "skipped_count" not in existing_columns:
+        connection.execute(
+            "ALTER TABLE job_queue ADD COLUMN skipped_count INTEGER NOT NULL DEFAULT 0"
+        )
+    if "total_items" not in existing_columns:
+        connection.execute(
+            "ALTER TABLE job_queue ADD COLUMN total_items INTEGER NOT NULL DEFAULT 0"
+        )
+    if "last_result" not in existing_columns:
+        connection.execute(
+            "ALTER TABLE job_queue ADD COLUMN last_result TEXT"
+        )
     
     connection.commit()
     return connection
@@ -138,3 +164,196 @@ def prune_release_state(connection, release_key, valid_item_keys):
             [(release_key, item_key) for item_key in stale_keys],
         )
         connection.commit()
+
+
+# Queue state helpers.
+
+def enqueue_job(connection, repo, tag, release_type=None, next_check_time=None, expected_commit=None):
+    """Insert a new queued job row and return its row id."""
+    if next_check_time is None:
+        next_check_time = 0.0
+
+    cursor = connection.execute(
+        """
+        INSERT INTO job_queue (
+            repo,
+            tag,
+            release_type,
+            status,
+            attempt_count,
+            next_check_time,
+            expected_commit,
+            downloaded_count,
+            skipped_count,
+            total_items,
+            last_result
+        )
+        VALUES (?, ?, ?, 'PENDING', 0, ?, ?, 0, 0, 0, NULL)
+        """,
+        (repo, tag, release_type, float(next_check_time), expected_commit),
+    )
+    connection.commit()
+    return cursor.lastrowid
+
+
+def get_due_jobs(connection, now_timestamp, limit=None):
+    """Return jobs that are ready to run, sorted by schedule time then id."""
+    if limit is not None:
+        return connection.execute(
+            """
+            SELECT
+                id,
+                repo,
+                tag,
+                release_type,
+                status,
+                attempt_count,
+                next_check_time,
+                expected_commit,
+                downloaded_count,
+                skipped_count,
+                total_items,
+                last_result
+            FROM job_queue
+            WHERE status = 'PENDING' AND next_check_time <= ?
+            ORDER BY next_check_time ASC, id ASC
+            LIMIT ?
+            """,
+            (float(now_timestamp), int(limit)),
+        ).fetchall()
+
+    return connection.execute(
+        """
+        SELECT
+            id,
+            repo,
+            tag,
+            release_type,
+            status,
+            attempt_count,
+            next_check_time,
+            expected_commit,
+            downloaded_count,
+            skipped_count,
+            total_items,
+            last_result
+        FROM job_queue
+        WHERE status = 'PENDING' AND next_check_time <= ?
+        ORDER BY next_check_time ASC, id ASC
+        """,
+        (float(now_timestamp),),
+    ).fetchall()
+
+
+def mark_job_completed(connection, job_id, downloaded_count=0, skipped_count=0, total_items=0, last_result="SUCCESS"):
+    """Mark a queued job as completed."""
+    connection.execute(
+        """
+        UPDATE job_queue
+        SET status = 'COMPLETED',
+            downloaded_count = ?,
+            skipped_count = ?,
+            total_items = ?,
+            last_result = ?
+        WHERE id = ?
+        """,
+        (int(downloaded_count), int(skipped_count), int(total_items), last_result, job_id),
+    )
+    connection.commit()
+
+
+def mark_job_failed(
+    connection,
+    job_id,
+    attempt_count=None,
+    expected_commit=None,
+    downloaded_count=0,
+    skipped_count=0,
+    total_items=0,
+    last_result="FAILED",
+):
+    """Mark a queued job as failed (no remaining retry intervals)."""
+    if attempt_count is None:
+        connection.execute(
+            """
+            UPDATE job_queue
+            SET status = 'FAILED',
+                expected_commit = ?,
+                downloaded_count = ?,
+                skipped_count = ?,
+                total_items = ?,
+                last_result = ?
+            WHERE id = ?
+            """,
+            (
+                expected_commit,
+                int(downloaded_count),
+                int(skipped_count),
+                int(total_items),
+                last_result,
+                job_id,
+            ),
+        )
+    else:
+        connection.execute(
+            """
+            UPDATE job_queue
+            SET status = 'FAILED',
+                attempt_count = ?,
+                expected_commit = ?,
+                downloaded_count = ?,
+                skipped_count = ?,
+                total_items = ?,
+                last_result = ?
+            WHERE id = ?
+            """,
+            (
+                int(attempt_count),
+                expected_commit,
+                int(downloaded_count),
+                int(skipped_count),
+                int(total_items),
+                last_result,
+                job_id,
+            ),
+        )
+    connection.commit()
+
+
+def reschedule_job(
+    connection,
+    job_id,
+    next_check_time,
+    attempt_count,
+    expected_commit=None,
+    downloaded_count=0,
+    skipped_count=0,
+    total_items=0,
+    last_result="RETRY",
+):
+    """Update a queued job with a new schedule and attempt counter."""
+    connection.execute(
+        """
+        UPDATE job_queue
+        SET status = 'PENDING',
+            next_check_time = ?,
+            attempt_count = ?,
+            expected_commit = ?,
+            downloaded_count = ?,
+            skipped_count = ?,
+            total_items = ?,
+            last_result = ?
+        WHERE id = ?
+        """,
+        (
+            float(next_check_time),
+            int(attempt_count),
+            expected_commit,
+            int(downloaded_count),
+            int(skipped_count),
+            int(total_items),
+            last_result,
+            job_id,
+        ),
+    )
+    connection.commit()

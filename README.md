@@ -64,6 +64,9 @@ CLI options:
 
 - --purge-state: Delete local state.db and exit.
 - --smoke-test: Run internal smoke tests and exit.
+- --queue-status: Print queue counts, due-now count, next pending job, and recent jobs.
+	- Add --json to output machine-readable JSON (example: python main.py --queue-status --json).
+	- Includes per-job file counters: downloaded, skipped, and total items.
 - --once: Force single-run mode even when polling is enabled.
 - --poll: Force polling mode for this run.
 

@@ -122,17 +122,36 @@ def get_release_attestation_url(release_data, headers):
     return None
 
 
-def download_release(repo, tag, release_type=None):
+def _build_download_result(status, downloaded_count, skipped_count, total_items, include_stats):
+    """Return either legacy status values or a detailed result payload."""
+    if include_stats:
+        return {
+            "status": status,
+            "downloaded_count": int(downloaded_count),
+            "skipped_count": int(skipped_count),
+            "total_items": int(total_items),
+        }
+
+    if status == "SUCCESS":
+        return True
+    if status == "SKIP":
+        return "SKIP"
+    return False
+
+
+def download_release(repo, tag, release_type=None, include_stats=False):
     """Download a GitHub release and all assets using config-driven routing."""
     download_dir = get_download_dir_for_release(repo, release_type)
-    return download_all_assets(repo, tag, download_dir)
+    return download_all_assets(repo, tag, download_dir, include_stats=include_stats)
 
 
-def download_all_assets(repo, tag, download_dir):
+def download_all_assets(repo, tag, download_dir, include_stats=False):
     """Download all release items with retries and preserved timestamps."""
     max_retries = 1
     retry_delay = 10
     release_data = None
+    downloaded_count = 0
+    skipped_count = 0
 
     for attempt in range(max_retries):
         print(f"🔍 Checking GitHub API for {repo} ({tag})...")
@@ -149,10 +168,10 @@ def download_all_assets(repo, tag, download_dir):
             break
 
         print(f"   ⏭️ Skipping {repo} ({tag}): Release no longer exists.")
-        return "SKIP"
+        return _build_download_result("SKIP", downloaded_count, skipped_count, 0, include_stats)
     else:
         print(f"   ❌ Timed out waiting for assets to populate for {repo}.")
-        return False
+        return _build_download_result("FAILED", downloaded_count, skipped_count, 0, include_stats)
 
     headers_api = {"Accept": "application/vnd.github+json"}
     if GITHUB_TOKEN:
@@ -314,6 +333,7 @@ def download_all_assets(repo, tag, download_dir):
                                 )
                                 refresh_release_state()
                             print(f"   ⏭️ Skipping ({i}/{total_files}): {file_name} already exists and matches remote metadata.")
+                            skipped_count += 1
                             continue
                     except requests.RequestException:
                         pass
@@ -377,6 +397,7 @@ def download_all_assets(repo, tag, download_dir):
                                     )
                                     refresh_release_state()
                                 print(f"   ⏭️ Skipping ({i}/{total_files}): {file_name} already exists and matches remote metadata.")
+                                skipped_count += 1
                                 file_saved = True
                                 break
 
@@ -413,6 +434,7 @@ def download_all_assets(repo, tag, download_dir):
                                 refresh_release_state()
 
                             print("   ✅ Saved & timestamp preserved.")
+                            downloaded_count += 1
                             file_saved = True
                             break
                     except (ChunkedEncodingError, ConnectionError, Timeout) as error:
@@ -444,12 +466,24 @@ def download_all_assets(repo, tag, download_dir):
                         break
 
                 if not file_saved:
-                    return False
+                    return _build_download_result(
+                        "FAILED",
+                        downloaded_count,
+                        skipped_count,
+                        total_files,
+                        include_stats,
+                    )
     finally:
         if state_db is not None:
             state_db.close()
 
-    return True
+    return _build_download_result(
+        "SUCCESS",
+        downloaded_count,
+        skipped_count,
+        total_files,
+        include_stats,
+    )
 
 # Run this file directly for manual release-download testing.
 if __name__ == "__main__":
