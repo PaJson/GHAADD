@@ -1,12 +1,12 @@
 import argparse
-from argparse import Namespace
+import sys
 from typing import Callable
 
 from db_manager import purge_state_database
 from queue_reporting import build_queue_status_options, print_queue_status
 
 
-def parse_cli_args(args: list[str], version: str) -> Namespace:
+def parse_cli_args(args: list[str], version: str) -> argparse.Namespace:
     """Parse command-line arguments for the main entrypoint."""
     parser = argparse.ArgumentParser(
         prog="python main.py",
@@ -49,20 +49,24 @@ def parse_cli_args(args: list[str], version: str) -> Namespace:
     return parser.parse_args(args)
 
 
-def handle_cli_command(parsed_args: Namespace, run_smoke_tests: Callable[[], None]) -> bool:
+def handle_cli_command(parsed_args: argparse.Namespace, run_smoke_tests: Callable[[], None]) -> bool:
     """Execute one-shot command-line operations after parsing."""
     if parsed_args.queue_status:
-        queue_options = build_queue_status_options(
-            as_json=parsed_args.json,
-            queue_all=parsed_args.queue_all,
-            queue_limit=parsed_args.queue_limit,
-            queue_hours=parsed_args.queue_hours,
-            queue_date=parsed_args.queue_date,
-            queue_status_filter=parsed_args.queue_status_filter,
-            queue_report=parsed_args.queue_report,
-            queue_report_only=parsed_args.queue_report_only,
-            queue_report_csv=parsed_args.queue_report_csv,
-        )
+        try:
+            queue_options = build_queue_status_options(
+                as_json=parsed_args.json,
+                queue_all=parsed_args.queue_all,
+                queue_limit=parsed_args.queue_limit,
+                queue_hours=parsed_args.queue_hours,
+                queue_date=parsed_args.queue_date,
+                queue_status_filter=parsed_args.queue_status_filter,
+                queue_report=parsed_args.queue_report,
+                queue_report_only=parsed_args.queue_report_only,
+                queue_report_csv=parsed_args.queue_report_csv,
+            )
+        except ValueError as exc:
+            print(f"Queue status option error: {exc}", file=sys.stderr)
+            return True
 
         print_queue_status(
             as_json=queue_options["as_json"],

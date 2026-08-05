@@ -1,7 +1,6 @@
+import requests
 import sys
 import time
-
-import requests
 
 from config_manager import get_max_emails_to_process, get_recheck_intervals_minutes
 from db_manager import (
@@ -14,7 +13,7 @@ from db_manager import (
 )
 from downloader import download_release
 from listener import get_pending_notifications, mark_as_read_and_delete
-from payload_types import DownloadResultPayload, NotificationPayload, QueuedNotificationPayload, SkippedItemPayload
+from payload_types import DownloadReleaseResult, NotificationPayload, QueuedNotificationPayload, SkippedItemPayload
 from typing import Literal, Optional, Tuple, Union, overload
 
 
@@ -108,8 +107,13 @@ def ingest_notifications_once(connection, github_token: Optional[str]) -> int:
                     notifications_by_release[release_key]["email_ids"].append(email_id)
                 continue
 
-            deduped_notification: QueuedNotificationPayload = dict(notification)
-            deduped_notification["email_ids"] = [email_id] if email_id is not None else []
+            deduped_notification: QueuedNotificationPayload = {
+                "repo": repo,
+                "tag": tag,
+                "release_type": release_type,
+                "email_id": email_id,
+                "email_ids": [email_id] if email_id is not None else [],
+            }
             notifications_by_release[release_key] = deduped_notification
             unique_notifications.append(deduped_notification)
 
@@ -138,6 +142,11 @@ def ingest_notifications_once(connection, github_token: Optional[str]) -> int:
             email_ids = notification.get("email_ids", [])
 
             print(f"[{idx}/{len(unique_notifications)}] Queueing: {repo} ({tag})")
+
+            if repo is None or tag is None:
+                print("✗ Skipping malformed notification: missing repo or tag.\n")
+                emails_to_delete.extend(email_ids)
+                continue
 
             try:
                 expected_commit, commit_reason = get_current_commit_hash(
@@ -223,11 +232,12 @@ def process_queue_once(connection, github_token: Optional[str]) -> None:
                 f"(reason={current_commit_reason or 'unavailable'})."
             )
 
+        result: DownloadReleaseResult
         try:
             result = download_release(repo, tag, release_type, include_stats=True)
         except Exception as exc:
             print(f"   ❌ Processor error while downloading: {exc}")
-            result: DownloadResultPayload = {
+            result = {
                 "status": "FAILED",
                 "downloaded_count": 0,
                 "skipped_count": 0,
