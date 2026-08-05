@@ -235,6 +235,22 @@ def print_queue_status(as_json=False):
 
 def handle_cli_args(args):
     """Handle one-shot command-line operations."""
+    if "--help" in args or "-h" in args:
+        print(
+            f"GHAADD v{__version__}\n"
+            "\nUsage: python main.py [OPTIONS]\n"
+            "\nOptions:\n"
+            "  --help, -h        Show this help message and exit.\n"
+            "  --once            Run a single ingest-and-process cycle, then exit.\n"
+            "  --poll            Force polling mode even if disabled in config.\n"
+            "  --queue-status    Print current queue counts and scheduling details.\n"
+            "    --json          Output --queue-status as JSON.\n"
+            "  --purge-state     Delete the local state database (state.db).\n"
+            "  --smoke-test      Run internal smoke tests for download behavior.\n"
+            "\nWith no options, behaviour is determined by config.json (poll or single run)."
+        )
+        return True
+
     if "--queue-status" in args:
         print_queue_status(as_json="--json" in args)
         return True
