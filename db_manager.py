@@ -62,7 +62,10 @@ def open_database():
             downloaded_count INTEGER NOT NULL DEFAULT 0,
             skipped_count INTEGER NOT NULL DEFAULT 0,
             total_items INTEGER NOT NULL DEFAULT 0,
-            last_result TEXT
+            last_result TEXT,
+            created_at REAL NOT NULL DEFAULT (CAST(strftime('%s', 'now') AS REAL)),
+            updated_at REAL NOT NULL DEFAULT (CAST(strftime('%s', 'now') AS REAL)),
+            completed_at REAL
         )
         """
     )
@@ -88,6 +91,34 @@ def open_database():
         connection.execute(
             "ALTER TABLE job_queue ADD COLUMN last_result TEXT"
         )
+    if "created_at" not in existing_columns:
+        connection.execute(
+            "ALTER TABLE job_queue ADD COLUMN created_at REAL"
+        )
+    if "updated_at" not in existing_columns:
+        connection.execute(
+            "ALTER TABLE job_queue ADD COLUMN updated_at REAL"
+        )
+    if "completed_at" not in existing_columns:
+        connection.execute(
+            "ALTER TABLE job_queue ADD COLUMN completed_at REAL"
+        )
+
+    # Backfill timestamps for rows created before timestamp columns existed.
+    connection.execute(
+        """
+        UPDATE job_queue
+        SET created_at = COALESCE(created_at, next_check_time, CAST(strftime('%s', 'now') AS REAL))
+        WHERE created_at IS NULL
+        """
+    )
+    connection.execute(
+        """
+        UPDATE job_queue
+        SET updated_at = COALESCE(updated_at, created_at, next_check_time, CAST(strftime('%s', 'now') AS REAL))
+        WHERE updated_at IS NULL
+        """
+    )
     
     connection.commit()
     return connection
@@ -186,9 +217,12 @@ def enqueue_job(connection, repo, tag, release_type=None, next_check_time=None, 
             downloaded_count,
             skipped_count,
             total_items,
-            last_result
+            last_result,
+            created_at,
+            updated_at,
+            completed_at
         )
-        VALUES (?, ?, ?, 'PENDING', 0, ?, ?, 0, 0, 0, NULL)
+        VALUES (?, ?, ?, 'PENDING', 0, ?, ?, 0, 0, 0, NULL, CAST(strftime('%s', 'now') AS REAL), CAST(strftime('%s', 'now') AS REAL), NULL)
         """,
         (repo, tag, release_type, float(next_check_time), expected_commit),
     )
@@ -254,7 +288,9 @@ def mark_job_completed(connection, job_id, downloaded_count=0, skipped_count=0, 
             downloaded_count = ?,
             skipped_count = ?,
             total_items = ?,
-            last_result = ?
+            last_result = ?,
+            updated_at = CAST(strftime('%s', 'now') AS REAL),
+            completed_at = CAST(strftime('%s', 'now') AS REAL)
         WHERE id = ?
         """,
         (int(downloaded_count), int(skipped_count), int(total_items), last_result, job_id),
@@ -282,7 +318,9 @@ def mark_job_failed(
                 downloaded_count = ?,
                 skipped_count = ?,
                 total_items = ?,
-                last_result = ?
+                last_result = ?,
+                updated_at = CAST(strftime('%s', 'now') AS REAL),
+                completed_at = CAST(strftime('%s', 'now') AS REAL)
             WHERE id = ?
             """,
             (
@@ -304,7 +342,9 @@ def mark_job_failed(
                 downloaded_count = ?,
                 skipped_count = ?,
                 total_items = ?,
-                last_result = ?
+                last_result = ?,
+                updated_at = CAST(strftime('%s', 'now') AS REAL),
+                completed_at = CAST(strftime('%s', 'now') AS REAL)
             WHERE id = ?
             """,
             (
@@ -342,7 +382,9 @@ def reschedule_job(
             downloaded_count = ?,
             skipped_count = ?,
             total_items = ?,
-            last_result = ?
+            last_result = ?,
+            updated_at = CAST(strftime('%s', 'now') AS REAL),
+            completed_at = NULL
         WHERE id = ?
         """,
         (

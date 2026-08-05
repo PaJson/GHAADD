@@ -66,6 +66,15 @@ CLI options:
 - --smoke-test: Run internal smoke tests and exit.
 - --queue-status: Print queue counts, due-now count, next pending job, and recent jobs.
 	- Add --json to output machine-readable JSON (example: python main.py --queue-status --json).
+	- Add --queue-all to show all matching jobs instead of the default capped history.
+	- Add --queue-limit N to control history size (example: --queue-limit 50, --queue-limit 0 for all).
+	- Add --queue-hours H to filter to jobs created in the last H hours (example: --queue-hours 24).
+	- Add --queue-date YYYY-MM-DD to filter to jobs created on a specific date.
+	- Add --queue-status-filter STATUS to filter by status (PENDING, COMPLETED, FAILED).
+	- Add --queue-report to print a compact summary report (rates, top failed repos, and top successful repos).
+	- Add --queue-report-only to print only the summary report section.
+	- Add --queue-report-csv [PATH] to export the report section to a CSV file.
+		- When PATH is omitted, a timestamped filename is auto-generated in the current working directory.
 	- Includes per-job file counters: downloaded, skipped, and total items.
 - --once: Force single-run mode even when polling is enabled.
 - --poll: Force polling mode for this run.
