@@ -1,21 +1,19 @@
-import sys
-sys.dont_write_bytecode = True
-
 import os
 import random
+import sys
 import time
 from config_manager import get_polling_settings
 from datetime import datetime
 from dotenv import load_dotenv
 
-__version__ = "0.6.5-beta"
+__version__ = "0.6.6-beta"
 
 # Load environment variables from .env.
 load_dotenv()
 GITHUB_TOKEN = os.getenv("GITHUB_PAT")
 
 # Import application modules.
-from cli_commands import handle_cli_args
+from cli_commands import handle_cli_command, parse_cli_args
 from db_manager import open_database
 from downloader import download_release
 from queue_processor import run_ingest_and_queue_cycle
@@ -71,16 +69,16 @@ def run_polling_loop(interval_seconds, jitter_min_seconds, jitter_max_seconds):
 
 def main():
     """Run the main orchestration flow for ingest and queue processing."""
-    args = sys.argv[1:]
-    if handle_cli_args(args, __version__, run_internal_smoke_tests):
+    parsed_args = parse_cli_args(sys.argv[1:], __version__)
+    if handle_cli_command(parsed_args, run_internal_smoke_tests):
         return
 
     polling_settings = get_polling_settings()
 
     # Force single-run mode with --once, even when polling is enabled in config.
-    once_mode = "--once" in args
+    once_mode = parsed_args.once
     poll_enabled = not once_mode and (
-        "--poll" in args
+        parsed_args.poll
         or polling_settings["enabled"]
     )
     if once_mode or not poll_enabled:

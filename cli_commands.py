@@ -1,23 +1,68 @@
-import sys
+import argparse
+from argparse import Namespace
 from typing import Callable
 
-from cli_help import build_main_help_text
 from db_manager import purge_state_database
-from queue_reporting import parse_queue_status_options, print_queue_status
+from queue_reporting import build_queue_status_options, print_queue_status
 
 
-def handle_cli_args(args: list[str], version: str, run_smoke_tests: Callable[[], None]) -> bool:
-    """Handle one-shot command-line operations."""
-    if "--help" in args or "-h" in args:
-        print(build_main_help_text(version))
-        return True
+def parse_cli_args(args: list[str], version: str) -> Namespace:
+    """Parse command-line arguments for the main entrypoint."""
+    parser = argparse.ArgumentParser(
+        prog="python main.py",
+        description=f"GHAADD v{version}",
+        epilog="With no options, behaviour is determined by config.json (poll or single run).",
+    )
 
-    if "--queue-status" in args:
-        try:
-            queue_options = parse_queue_status_options(args)
-        except ValueError as exc:
-            print(f"Queue status option error: {exc}", file=sys.stderr)
-            return True
+    parser.add_argument("--once", action="store_true", help="Run a single ingest-and-process cycle, then exit.")
+    parser.add_argument("--poll", action="store_true", help="Force polling mode even if disabled in config.")
+    parser.add_argument("--purge-state", action="store_true", help="Delete the local state database (state.db).")
+    parser.add_argument("--smoke-test", action="store_true", help="Run internal smoke tests for download behavior.")
+
+    queue_group = parser.add_argument_group("queue status/reporting options")
+    queue_group.add_argument("--queue-status", action="store_true", help="Print current queue counts and scheduling details.")
+    queue_group.add_argument("--json", action="store_true", help="Output --queue-status as JSON.")
+    queue_group.add_argument("--queue-all", action="store_true", help="Show all matching jobs instead of a limited list.")
+    queue_group.add_argument("--queue-limit", type=int, help="Show up to N jobs in history (0 means all).")
+    queue_group.add_argument("--queue-hours", type=float, help="Filter jobs created in the last H hours.")
+    queue_group.add_argument("--queue-date", help="Filter jobs created on YYYY-MM-DD.")
+    queue_group.add_argument(
+        "--queue-status-filter",
+        choices=("PENDING", "COMPLETED", "FAILED"),
+        help="Filter by status.",
+    )
+    queue_group.add_argument("--queue-report", action="store_true", help="Print a compact report.")
+    queue_group.add_argument(
+        "--queue-report-only",
+        action="store_true",
+        help="Print only the report section (no job list).",
+    )
+    queue_group.add_argument(
+        "--queue-report-csv",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="PATH",
+        help="Export the report section to CSV.",
+    )
+
+    return parser.parse_args(args)
+
+
+def handle_cli_command(parsed_args: Namespace, run_smoke_tests: Callable[[], None]) -> bool:
+    """Execute one-shot command-line operations after parsing."""
+    if parsed_args.queue_status:
+        queue_options = build_queue_status_options(
+            as_json=parsed_args.json,
+            queue_all=parsed_args.queue_all,
+            queue_limit=parsed_args.queue_limit,
+            queue_hours=parsed_args.queue_hours,
+            queue_date=parsed_args.queue_date,
+            queue_status_filter=parsed_args.queue_status_filter,
+            queue_report=parsed_args.queue_report,
+            queue_report_only=parsed_args.queue_report_only,
+            queue_report_csv=parsed_args.queue_report_csv,
+        )
 
         print_queue_status(
             as_json=queue_options["as_json"],
@@ -31,7 +76,7 @@ def handle_cli_args(args: list[str], version: str, run_smoke_tests: Callable[[],
         )
         return True
 
-    if "--purge-state" in args:
+    if parsed_args.purge_state:
         deleted = purge_state_database()
         if deleted:
             print("Deleted local state database: state.db")
@@ -39,7 +84,7 @@ def handle_cli_args(args: list[str], version: str, run_smoke_tests: Callable[[],
             print("No local state database found to delete.")
         return True
 
-    if "--smoke-test" in args:
+    if parsed_args.smoke_test:
         run_smoke_tests()
         return True
 

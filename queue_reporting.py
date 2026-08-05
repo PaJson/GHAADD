@@ -177,54 +177,49 @@ def _build_queue_report_payload(
     }
 
 
-def parse_queue_status_options(args: list[str]) -> QueueStatusOptions:
-    """Parse and validate --queue-status options."""
+def build_queue_status_options(
+    as_json: bool = False,
+    queue_all: bool = False,
+    queue_limit: Optional[int] = None,
+    queue_hours: Optional[float] = None,
+    queue_date: Optional[str] = None,
+    queue_status_filter: Optional[str] = None,
+    queue_report: bool = False,
+    queue_report_only: bool = False,
+    queue_report_csv: Optional[str] = None,
+) -> QueueStatusOptions:
+    """Build and validate queue-status options from parsed CLI values."""
     options: QueueStatusOptions = {
-        "as_json": "--json" in args,
+        "as_json": as_json,
         "limit": 10,
         "hours": None,
         "date": None,
         "status": None,
-        "report": "--queue-report" in args,
-        "report_only": "--queue-report-only" in args,
+        "report": queue_report,
+        "report_only": queue_report_only,
         "report_csv_path": None,
     }
 
     if options["report_only"]:
         options["report"] = True
 
-    if "--queue-all" in args:
+    if queue_all:
         options["limit"] = None
 
-    if "--queue-limit" in args:
-        index = args.index("--queue-limit")
-        if index + 1 >= len(args):
-            raise ValueError("Missing value for --queue-limit. Expected an integer >= 0.")
-        try:
-            limit_value = int(args[index + 1])
-        except ValueError as exc:
-            raise ValueError("Invalid --queue-limit value. Expected an integer >= 0.") from exc
+    if queue_limit is not None:
+        limit_value = int(queue_limit)
         if limit_value < 0:
             raise ValueError("Invalid --queue-limit value. Expected an integer >= 0.")
         options["limit"] = None if limit_value == 0 else limit_value
 
-    if "--queue-hours" in args:
-        index = args.index("--queue-hours")
-        if index + 1 >= len(args):
-            raise ValueError("Missing value for --queue-hours. Expected a number > 0.")
-        try:
-            hours_value = float(args[index + 1])
-        except ValueError as exc:
-            raise ValueError("Invalid --queue-hours value. Expected a number > 0.") from exc
+    if queue_hours is not None:
+        hours_value = float(queue_hours)
         if hours_value <= 0:
             raise ValueError("Invalid --queue-hours value. Expected a number > 0.")
         options["hours"] = hours_value
 
-    if "--queue-date" in args:
-        index = args.index("--queue-date")
-        if index + 1 >= len(args):
-            raise ValueError("Missing value for --queue-date. Expected YYYY-MM-DD.")
-        date_value = args[index + 1]
+    if queue_date is not None:
+        date_value = queue_date
         try:
             datetime.strptime(date_value, "%Y-%m-%d")
         except ValueError as exc:
@@ -234,28 +229,12 @@ def parse_queue_status_options(args: list[str]) -> QueueStatusOptions:
     if options["hours"] is not None and options["date"] is not None:
         raise ValueError("Use only one of --queue-hours or --queue-date.")
 
-    if "--queue-status-filter" in args:
-        index = args.index("--queue-status-filter")
-        if index + 1 >= len(args):
-            raise ValueError(
-                "Missing value for --queue-status-filter. Expected PENDING, COMPLETED, or FAILED."
-            )
-        status_value = args[index + 1].strip().upper()
-        allowed_statuses = {"PENDING", "COMPLETED", "FAILED"}
-        if status_value not in allowed_statuses:
-            raise ValueError(
-                "Invalid --queue-status-filter value. Expected PENDING, COMPLETED, or FAILED."
-            )
+    if queue_status_filter is not None:
+        status_value = queue_status_filter.strip().upper()
         options["status"] = status_value
 
-    if "--queue-report-csv" in args:
-        index = args.index("--queue-report-csv")
-        explicit_path = None
-        if index + 1 < len(args):
-            potential_path = args[index + 1].strip()
-            if potential_path and not potential_path.startswith("--"):
-                explicit_path = potential_path
-
+    if queue_report_csv is not None:
+        explicit_path = queue_report_csv.strip() or None
         options["report_csv_path"] = explicit_path or _build_default_queue_report_csv_path(options)
         options["report"] = True
 
