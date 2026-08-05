@@ -2,4 +2,6 @@ __pycache__/
 *.pyc
 .env
 state.db
+state.db-shm
+state.db-wal
 ToDo.txt
