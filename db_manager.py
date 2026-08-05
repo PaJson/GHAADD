@@ -24,6 +24,7 @@ def open_database():
     """Open the SQLite database, enable WAL mode, and ensure the schema exists."""
     connection = sqlite3.connect(get_state_db_path())
     connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA foreign_keys=ON;")
     
     # Enable Write-Ahead Logging for daemon and GUI concurrency.
     connection.execute("PRAGMA journal_mode=WAL;")
@@ -55,8 +56,8 @@ def open_database():
             repo TEXT NOT NULL,
             tag TEXT NOT NULL,
             release_type TEXT,
-            status TEXT NOT NULL DEFAULT 'PENDING',  -- PENDING, COMPLETED, FAILED, SUPERSEDED
-            attempt_count INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'COMPLETED', 'FAILED', 'SUPERSEDED')),
+            attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
             next_check_time REAL NOT NULL,          -- Unix timestamp
             expected_commit TEXT,                   -- 7-char hash to detect overwrites
             downloaded_count INTEGER NOT NULL DEFAULT 0,
@@ -67,6 +68,54 @@ def open_database():
             updated_at REAL NOT NULL DEFAULT (CAST(strftime('%s', 'now') AS REAL)),
             completed_at REAL
         )
+        """
+    )
+
+    # Store per-job skipped item details for queue observability/reporting.
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS job_skip_details (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id INTEGER NOT NULL,
+            attempt_count INTEGER NOT NULL CHECK (attempt_count >= 1),
+            item_key TEXT,
+            file_name TEXT,
+            reason TEXT NOT NULL,
+            recorded_at REAL NOT NULL DEFAULT (CAST(strftime('%s', 'now') AS REAL)),
+            FOREIGN KEY (job_id) REFERENCES job_queue(id) ON DELETE CASCADE
+        )
+        """
+    )
+
+    # Indexes for queue polling and reporting performance.
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_job_queue_status_next_check_time
+        ON job_queue(status, next_check_time)
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_job_queue_created_at
+        ON job_queue(created_at)
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_job_queue_status_created_at
+        ON job_queue(status, created_at)
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_job_skip_details_job_id
+        ON job_skip_details(job_id)
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_job_skip_details_reason
+        ON job_skip_details(reason)
         """
     )
 
@@ -397,5 +446,43 @@ def reschedule_job(
             last_result,
             job_id,
         ),
+    )
+    connection.commit()
+
+
+def save_job_skip_details(connection, job_id, attempt_count, skipped_items):
+    """Persist skipped item details for a queue job attempt."""
+    if not skipped_items:
+        return
+
+    rows = []
+    for item in skipped_items:
+        if not isinstance(item, dict):
+            continue
+        rows.append(
+            (
+                int(job_id),
+                int(attempt_count),
+                item.get("item_key"),
+                item.get("file_name"),
+                item.get("reason") or "unknown",
+            )
+        )
+
+    if not rows:
+        return
+
+    connection.executemany(
+        """
+        INSERT INTO job_skip_details (
+            job_id,
+            attempt_count,
+            item_key,
+            file_name,
+            reason
+        )
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        rows,
     )
     connection.commit()

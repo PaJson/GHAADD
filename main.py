@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from typing import Literal, Optional, Tuple, Union, overload
 
-__version__ = "0.5.5-beta"
+__version__ = "0.6.0-beta"
 
 # Load environment variables from .env.
 load_dotenv()
@@ -28,6 +28,7 @@ from db_manager import (
     mark_job_completed,
     mark_job_failed,
     reschedule_job,
+    save_job_skip_details,
 )
 from downloader import download_release
 
@@ -243,27 +244,47 @@ def _write_queue_report_csv(report_data, output_path):
                 }
             )
 
+        for item in report_data.get("top_skipped_items", []):
+            writer.writerow(
+                {
+                    "section": "top_skipped_items",
+                    "metric": "skip_count",
+                    "repo": item["item_label"],
+                    "value": item["skip_count"],
+                }
+            )
 
-def _build_queue_scope(hours=None, date_value=None, status_filter=None, now_timestamp=None):
+        for item in report_data.get("skip_reasons", []):
+            writer.writerow(
+                {
+                    "section": "skip_reasons",
+                    "metric": item["reason"],
+                    "value": item["count"],
+                }
+            )
+
+
+def _build_queue_scope(hours=None, date_value=None, status_filter=None, now_timestamp=None, table_alias=""):
     """Build WHERE clause and params for queue history filtering."""
     now_timestamp = now_timestamp if now_timestamp is not None else time.time()
     conditions = []
     params = []
+    prefix = f"{table_alias}." if table_alias else ""
 
     if hours is not None:
         cutoff = now_timestamp - (float(hours) * 3600.0)
-        conditions.append("created_at >= ?")
+        conditions.append(f"{prefix}created_at >= ?")
         params.append(float(cutoff))
 
     if date_value is not None:
         start_dt = datetime.strptime(date_value, "%Y-%m-%d")
         end_dt = start_dt + timedelta(days=1)
-        conditions.append("created_at >= ?")
-        conditions.append("created_at < ?")
+        conditions.append(f"{prefix}created_at >= ?")
+        conditions.append(f"{prefix}created_at < ?")
         params.extend([float(start_dt.timestamp()), float(end_dt.timestamp())])
 
     if status_filter is not None:
-        conditions.append("status = ?")
+        conditions.append(f"{prefix}status = ?")
         params.append(status_filter)
 
     if not conditions:
@@ -371,6 +392,58 @@ def _collect_queue_status_data(limit=10, hours=None, date_value=None, status_fil
             recent_params.append(int(limit))
         recent_jobs = connection.execute(recent_query, tuple(recent_params)).fetchall()
 
+        skip_detail_rows = []
+        skip_detail_count_rows = []
+        details_job_ids = set()
+        for job in recent_jobs:
+            details_job_ids.add(int(job["id"]))
+        if next_pending is not None:
+            details_job_ids.add(int(next_pending["id"]))
+
+        if details_job_ids:
+            placeholders = ", ".join(["?"] * len(details_job_ids))
+            details_params = tuple(sorted(details_job_ids))
+            skip_detail_rows = connection.execute(
+                f"""
+                SELECT job_id, attempt_count, item_key, file_name, reason, recorded_at
+                FROM job_skip_details
+                WHERE job_id IN ({placeholders})
+                ORDER BY id DESC
+                """,
+                details_params,
+            ).fetchall()
+
+            skip_detail_count_rows = connection.execute(
+                f"""
+                SELECT job_id, COUNT(*) AS detail_count
+                FROM job_skip_details
+                WHERE job_id IN ({placeholders})
+                GROUP BY job_id
+                """,
+                details_params,
+            ).fetchall()
+
+        skip_detail_count_map = {
+            int(row["job_id"]): int(row["detail_count"])
+            for row in skip_detail_count_rows
+        }
+        skip_detail_preview_map = {}
+        for row in skip_detail_rows:
+            job_id = int(row["job_id"])
+            preview = skip_detail_preview_map.setdefault(job_id, [])
+            if len(preview) >= 5:
+                continue
+            preview.append(
+                {
+                    "attempt_count": int(row["attempt_count"]),
+                    "item_key": row["item_key"],
+                    "file_name": row["file_name"],
+                    "reason": row["reason"],
+                    "recorded_at": float(row["recorded_at"]),
+                    "recorded_at_readable": _format_timestamp(row["recorded_at"]),
+                }
+            )
+
         report_payload = None
         if include_report:
             failed_repo_rows = connection.execute(
@@ -417,6 +490,42 @@ def _collect_queue_status_data(limit=10, hours=None, date_value=None, status_fil
                 """,
                 tuple(scope_params),
             ).fetchone()
+
+            scope_where_q, scope_params_q = _build_queue_scope(
+                hours=hours,
+                date_value=date_value,
+                status_filter=status_filter,
+                now_timestamp=now_timestamp,
+                table_alias="q",
+            )
+            top_skipped_items = connection.execute(
+                f"""
+                SELECT
+                    COALESCE(d.file_name, d.item_key, 'unknown') AS item_label,
+                    COUNT(*) AS skip_count
+                FROM job_skip_details d
+                INNER JOIN job_queue q ON q.id = d.job_id
+                {scope_where_q}
+                GROUP BY item_label
+                ORDER BY skip_count DESC, item_label ASC
+                LIMIT 5
+                """,
+                tuple(scope_params_q),
+            ).fetchall()
+            skip_reason_rows = connection.execute(
+                f"""
+                SELECT
+                    COALESCE(d.reason, 'unknown') AS reason,
+                    COUNT(*) AS count
+                FROM job_skip_details d
+                INNER JOIN job_queue q ON q.id = d.job_id
+                {scope_where_q}
+                GROUP BY COALESCE(d.reason, 'unknown')
+                ORDER BY count DESC, reason ASC
+                LIMIT 5
+                """,
+                tuple(scope_params_q),
+            ).fetchall()
 
             terminal_jobs = int(terminal_counts["terminal_jobs"] or 0)
             success_jobs = int(terminal_counts["success_jobs"] or 0)
@@ -471,6 +580,20 @@ def _collect_queue_status_data(limit=10, hours=None, date_value=None, status_fil
                     }
                     for row in successful_repo_rows
                 ],
+                "top_skipped_items": [
+                    {
+                        "item_label": row["item_label"],
+                        "skip_count": int(row["skip_count"]),
+                    }
+                    for row in top_skipped_items
+                ],
+                "skip_reasons": [
+                    {
+                        "reason": row["reason"],
+                        "count": int(row["count"]),
+                    }
+                    for row in skip_reason_rows
+                ],
             }
 
     status_counts = {row["status"]: int(row["count"]) for row in summary_rows}
@@ -497,6 +620,8 @@ def _collect_queue_status_data(limit=10, hours=None, date_value=None, status_fil
             "updated_at_readable": _format_timestamp(next_pending["updated_at"]),
             "completed_at": float(next_pending["completed_at"]) if next_pending["completed_at"] is not None else None,
             "completed_at_readable": _format_timestamp(next_pending["completed_at"]),
+            "skip_detail_count": skip_detail_count_map.get(int(next_pending["id"]), 0),
+            "skipped_items_preview": skip_detail_preview_map.get(int(next_pending["id"]), []),
         }
 
     recent_jobs_payload = []
@@ -522,6 +647,8 @@ def _collect_queue_status_data(limit=10, hours=None, date_value=None, status_fil
                 "updated_at_readable": _format_timestamp(job["updated_at"]),
                 "completed_at": float(job["completed_at"]) if job["completed_at"] is not None else None,
                 "completed_at_readable": _format_timestamp(job["completed_at"]),
+                "skip_detail_count": skip_detail_count_map.get(int(job["id"]), 0),
+                "skipped_items_preview": skip_detail_preview_map.get(int(job["id"]), []),
             }
         )
 
@@ -609,6 +736,15 @@ def print_queue_status(
             f"updated={next_pending['updated_at_readable']}, "
             f"completed={next_pending['completed_at_readable']})"
         )
+        if next_pending["skipped_items_preview"]:
+            preview_text = "; ".join(
+                f"{item['file_name'] or item['item_key'] or 'unknown'} [{item['reason']}]"
+                for item in next_pending["skipped_items_preview"]
+            )
+            print(
+                "  Skipped item details: "
+                f"{next_pending['skip_detail_count']} total, preview: {preview_text}"
+            )
 
     report_data = data.get("report")
     if report_data is not None:
@@ -650,6 +786,20 @@ def print_queue_status(
         else:
             print("Top successful repos: -")
 
+        if report_data["top_skipped_items"]:
+            print("Top skipped items:")
+            for item in report_data["top_skipped_items"]:
+                print(f"- {item['item_label']}: {item['skip_count']}")
+        else:
+            print("Top skipped items: -")
+
+        if report_data["skip_reasons"]:
+            print("Skip reasons:")
+            for item in report_data["skip_reasons"]:
+                print(f"- {item['reason']}: {item['count']}")
+        else:
+            print("Skip reasons: -")
+
         if report_csv_path:
             try:
                 _write_queue_report_csv(report_data, report_csv_path)
@@ -676,6 +826,15 @@ def print_queue_status(
                 f"updated={job['updated_at_readable']}, "
                 f"completed={job['completed_at_readable']})"
             )
+            if job["skipped_items_preview"]:
+                preview_text = "; ".join(
+                    f"{item['file_name'] or item['item_key'] or 'unknown'} [{item['reason']}]"
+                    for item in job["skipped_items_preview"]
+                )
+                print(
+                    "  Skipped item details: "
+                    f"{job['skip_detail_count']} total, preview: {preview_text}"
+                )
 
 
 def handle_cli_args(args):
@@ -695,7 +854,7 @@ def handle_cli_args(args):
             "    --queue-hours H Filter jobs created in the last H hours.\n"
             "    --queue-date D  Filter jobs created on YYYY-MM-DD.\n"
             "    --queue-status-filter S  Filter by status: PENDING, COMPLETED, FAILED.\n"
-            "    --queue-report  Print a compact report (rates and top failed repos).\n"
+            "    --queue-report  Print a compact report (rates, top repos, and skip details).\n"
             "    --queue-report-only  Print only the report section (no job list).\n"
             "    --queue-report-csv [PATH]  Export the report section to CSV.\n"
             "  --purge-state     Delete the local state database (state.db).\n"
@@ -930,11 +1089,15 @@ def process_queue_once(connection):
             downloaded_count = int(result.get("downloaded_count", 0) or 0)
             skipped_count = int(result.get("skipped_count", 0) or 0)
             total_items = int(result.get("total_items", 0) or 0)
+            skipped_items = result.get("skipped_items") or []
         else:
             result_status = "SUCCESS" if result is True else ("SKIP" if result == "SKIP" else "FAILED")
             downloaded_count = 0
             skipped_count = 0
             total_items = 0
+            skipped_items = []
+
+        current_attempt_count = attempt_count + 1
 
         if result_status in ("SUCCESS", "SKIP"):
             mark_job_completed(
@@ -945,6 +1108,7 @@ def process_queue_once(connection):
                 total_items=total_items,
                 last_result=result_status,
             )
+            save_job_skip_details(connection, job_id, current_attempt_count, skipped_items)
             if result_status == "SUCCESS":
                 print("   ✅ Job completed successfully.")
             else:
@@ -969,6 +1133,7 @@ def process_queue_once(connection):
                 total_items=total_items,
                 last_result="RETRY",
             )
+            save_job_skip_details(connection, job_id, current_attempt_count, skipped_items)
             print(
                 f"   🔄 Download failed; rescheduled in {delay_minutes} minute(s) "
                 f"(attempt={next_attempt_count})."
@@ -985,6 +1150,7 @@ def process_queue_once(connection):
                 total_items=total_items,
                 last_result="FAILED",
             )
+            save_job_skip_details(connection, job_id, current_attempt_count, skipped_items)
             print(
                 "   ❌ Download failed; no retry intervals remaining. "
                 f"Marked FAILED at attempt={next_attempt_count}."

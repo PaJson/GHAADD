@@ -122,14 +122,18 @@ def get_release_attestation_url(release_data, headers):
     return None
 
 
-def _build_download_result(status, downloaded_count, skipped_count, total_items, include_stats):
+def _build_download_result(status, downloaded_count, skipped_count, total_items, include_stats, skipped_items=None):
     """Return either legacy status values or a detailed result payload."""
+    if skipped_items is None:
+        skipped_items = []
+
     if include_stats:
         return {
             "status": status,
             "downloaded_count": int(downloaded_count),
             "skipped_count": int(skipped_count),
             "total_items": int(total_items),
+            "skipped_items": skipped_items,
         }
 
     if status == "SUCCESS":
@@ -152,6 +156,7 @@ def download_all_assets(repo, tag, download_dir, include_stats=False):
     release_data = None
     downloaded_count = 0
     skipped_count = 0
+    skipped_items = []
 
     for attempt in range(max_retries):
         print(f"🔍 Checking GitHub API for {repo} ({tag})...")
@@ -168,10 +173,10 @@ def download_all_assets(repo, tag, download_dir, include_stats=False):
             break
 
         print(f"   ⏭️ Skipping {repo} ({tag}): Release no longer exists.")
-        return _build_download_result("SKIP", downloaded_count, skipped_count, 0, include_stats)
+        return _build_download_result("SKIP", downloaded_count, skipped_count, 0, include_stats, skipped_items)
     else:
         print(f"   ❌ Timed out waiting for assets to populate for {repo}.")
-        return _build_download_result("FAILED", downloaded_count, skipped_count, 0, include_stats)
+        return _build_download_result("FAILED", downloaded_count, skipped_count, 0, include_stats, skipped_items)
 
     headers_api = {"Accept": "application/vnd.github+json"}
     if GITHUB_TOKEN:
@@ -334,6 +339,13 @@ def download_all_assets(repo, tag, download_dir, include_stats=False):
                                 refresh_release_state()
                             print(f"   ⏭️ Skipping ({i}/{total_files}): {file_name} already exists and matches remote metadata.")
                             skipped_count += 1
+                            skipped_items.append(
+                                {
+                                    "item_key": item_key,
+                                    "file_name": file_name,
+                                    "reason": "metadata_match",
+                                }
+                            )
                             continue
                     except requests.RequestException:
                         pass
@@ -398,6 +410,13 @@ def download_all_assets(repo, tag, download_dir, include_stats=False):
                                     refresh_release_state()
                                 print(f"   ⏭️ Skipping ({i}/{total_files}): {file_name} already exists and matches remote metadata.")
                                 skipped_count += 1
+                                skipped_items.append(
+                                    {
+                                        "item_key": item_key,
+                                        "file_name": file_name,
+                                        "reason": "metadata_match",
+                                    }
+                                )
                                 file_saved = True
                                 break
 
@@ -472,6 +491,7 @@ def download_all_assets(repo, tag, download_dir, include_stats=False):
                         skipped_count,
                         total_files,
                         include_stats,
+                        skipped_items,
                     )
     finally:
         if state_db is not None:
@@ -483,6 +503,7 @@ def download_all_assets(repo, tag, download_dir, include_stats=False):
         skipped_count,
         total_files,
         include_stats,
+        skipped_items,
     )
 
 # Run this file directly for manual release-download testing.

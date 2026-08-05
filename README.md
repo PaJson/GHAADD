@@ -71,11 +71,12 @@ CLI options:
 	- Add --queue-hours H to filter to jobs created in the last H hours (example: --queue-hours 24).
 	- Add --queue-date YYYY-MM-DD to filter to jobs created on a specific date.
 	- Add --queue-status-filter STATUS to filter by status (PENDING, COMPLETED, FAILED).
-	- Add --queue-report to print a compact summary report (rates, top failed repos, and top successful repos).
+	- Add --queue-report to print a compact summary report (rates, top repos, top skipped items, and skip reasons).
 	- Add --queue-report-only to print only the summary report section.
 	- Add --queue-report-csv [PATH] to export the report section to a CSV file.
 		- When PATH is omitted, a timestamped filename is auto-generated in the current working directory.
 	- Includes per-job file counters: downloaded, skipped, and total items.
+	- Queue status also includes skipped-item detail previews (when available) for listed jobs.
 - --once: Force single-run mode even when polling is enabled.
 - --poll: Force polling mode for this run.
 
