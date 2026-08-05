@@ -7,12 +7,27 @@ from db_manager import open_database, load_release_state, save_state_entry, prun
 from dotenv import load_dotenv
 from config_manager import get_download_dir_for_release, is_state_persistence_disabled
 from email.utils import parsedate_tz, mktime_tz
+from payload_types import DownloadReleaseResult, DownloadResultPayload, ReleaseAssetQueueItem, SkippedItemPayload
 from requests.exceptions import ChunkedEncodingError, ConnectionError, Timeout
+from typing import Literal, Optional, cast
 from urllib.parse import urljoin
 
 # Load environment variables from .env.
 load_dotenv()
 GITHUB_TOKEN = os.getenv("GITHUB_PAT")
+
+
+def _build_skipped_item_payload(
+    item_key: Optional[str],
+    file_name: Optional[str],
+    reason: str,
+) -> SkippedItemPayload:
+    """Build a typed skipped-item payload."""
+    return {
+        "item_key": item_key,
+        "file_name": file_name,
+        "reason": reason,
+    }
 
 
 def sanitize_folder_name(text):
@@ -64,7 +79,7 @@ def is_state_persistence_enabled():
     return not is_state_persistence_disabled()
 
 
-def build_expected_signature(item):
+def build_expected_signature(item: ReleaseAssetQueueItem) -> Optional[str]:
     """Build a stable signature for queue items with trusted upstream metadata."""
     signature_parts = [item.get("key")]
     for field in ("name", "expected_size", "expected_updated_at"):
@@ -122,7 +137,14 @@ def get_release_attestation_url(release_data, headers):
     return None
 
 
-def _build_download_result(status, downloaded_count, skipped_count, total_items, include_stats, skipped_items=None):
+def _build_download_result(
+    status: Literal["SUCCESS", "SKIP", "FAILED"],
+    downloaded_count: int,
+    skipped_count: int,
+    total_items: int,
+    include_stats: bool,
+    skipped_items: Optional[list[SkippedItemPayload]] = None,
+) -> DownloadReleaseResult:
     """Return either legacy status values or a detailed result payload."""
     if skipped_items is None:
         skipped_items = []
@@ -143,20 +165,30 @@ def _build_download_result(status, downloaded_count, skipped_count, total_items,
     return False
 
 
-def download_release(repo, tag, release_type=None, include_stats=False):
+def download_release(
+    repo: str,
+    tag: str,
+    release_type: Optional[str] = None,
+    include_stats: bool = False,
+) -> DownloadReleaseResult:
     """Download a GitHub release and all assets using config-driven routing."""
-    download_dir = get_download_dir_for_release(repo, release_type)
+    download_dir = cast(str, get_download_dir_for_release(repo, release_type))
     return download_all_assets(repo, tag, download_dir, include_stats=include_stats)
 
 
-def download_all_assets(repo, tag, download_dir, include_stats=False):
+def download_all_assets(
+    repo: str,
+    tag: str,
+    download_dir: str,
+    include_stats: bool = False,
+) -> DownloadReleaseResult:
     """Download all release items with retries and preserved timestamps."""
     max_retries = 1
     retry_delay = 10
     release_data = None
     downloaded_count = 0
     skipped_count = 0
-    skipped_items = []
+    skipped_items: list[SkippedItemPayload] = []
 
     for attempt in range(max_retries):
         print(f"🔍 Checking GitHub API for {repo} ({tag})...")
@@ -184,7 +216,7 @@ def download_all_assets(repo, tag, download_dir, include_stats=False):
 
     repo_name = repo.split('/')[-1]
 
-    download_queue = []
+    download_queue: list[ReleaseAssetQueueItem] = []
     for asset in release_data.get("assets", []):
         download_queue.append({
             "key": f"asset:{asset['id']}",
@@ -339,13 +371,7 @@ def download_all_assets(repo, tag, download_dir, include_stats=False):
                                 refresh_release_state()
                             print(f"   ⏭️ Skipping ({i}/{total_files}): {file_name} already exists and matches remote metadata.")
                             skipped_count += 1
-                            skipped_items.append(
-                                {
-                                    "item_key": item_key,
-                                    "file_name": file_name,
-                                    "reason": "metadata_match",
-                                }
-                            )
+                            skipped_items.append(_build_skipped_item_payload(item_key, file_name, "metadata_match"))
                             continue
                     except requests.RequestException:
                         pass
@@ -410,13 +436,7 @@ def download_all_assets(repo, tag, download_dir, include_stats=False):
                                     refresh_release_state()
                                 print(f"   ⏭️ Skipping ({i}/{total_files}): {file_name} already exists and matches remote metadata.")
                                 skipped_count += 1
-                                skipped_items.append(
-                                    {
-                                        "item_key": item_key,
-                                        "file_name": file_name,
-                                        "reason": "metadata_match",
-                                    }
-                                )
+                                skipped_items.append(_build_skipped_item_payload(item_key, file_name, "metadata_match"))
                                 file_saved = True
                                 break
 
@@ -510,6 +530,6 @@ def download_all_assets(repo, tag, download_dir, include_stats=False):
 if __name__ == "__main__":
     test_repo = "cli/cli"
     test_tag = "v2.30.0"
-    test_download_dir = get_download_dir_for_release(test_repo, "release")
+    test_download_dir = cast(str, get_download_dir_for_release(test_repo, "release"))
     print(f"Base download directory set to: {test_download_dir}")
     download_all_assets(test_repo, test_tag, test_download_dir)

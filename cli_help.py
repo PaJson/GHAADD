@@ -1,0 +1,23 @@
+def build_main_help_text(version: str) -> str:
+    """Return CLI help text for the main entrypoint."""
+    return (
+        f"GHAADD v{version}\n"
+        "\nUsage: python main.py [OPTIONS]\n"
+        "\nOptions:\n"
+        "  --help, -h        Show this help message and exit.\n"
+        "  --once            Run a single ingest-and-process cycle, then exit.\n"
+        "  --poll            Force polling mode even if disabled in config.\n"
+        "  --queue-status    Print current queue counts and scheduling details.\n"
+        "    --json          Output --queue-status as JSON.\n"
+        "    --queue-all     Show all matching jobs instead of a limited list.\n"
+        "    --queue-limit N Show up to N jobs in history (0 means all).\n"
+        "    --queue-hours H Filter jobs created in the last H hours.\n"
+        "    --queue-date D  Filter jobs created on YYYY-MM-DD.\n"
+        "    --queue-status-filter S  Filter by status: PENDING, COMPLETED, FAILED.\n"
+        "    --queue-report  Print a compact report (rates, top repos, and skip details).\n"
+        "    --queue-report-only  Print only the report section (no job list).\n"
+        "    --queue-report-csv [PATH]  Export the report section to CSV.\n"
+        "  --purge-state     Delete the local state database (state.db).\n"
+        "  --smoke-test      Run internal smoke tests for download behavior.\n"
+        "\nWith no options, behaviour is determined by config.json (poll or single run)."
+    )
