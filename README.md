@@ -67,6 +67,8 @@ CLI options:
 
 - --purge-state: Delete local state.db and exit.
 - --smoke-test: Run internal smoke tests and exit.
+- --mapping-validate: Validate mapping.json schema and print errors/warnings.
+	- Add --json to output the validation result as JSON.
 - --queue-status: Print queue counts, due-now count, next pending job, and recent jobs.
 	- --queue-remove-pending-ids ID [ID ...]: Mark specific pending jobs as SUPERSEDED (removes them from pending queue).
 		- Example: python main.py --queue-remove-pending-ids 23 27 31

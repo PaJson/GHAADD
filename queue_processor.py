@@ -19,6 +19,7 @@ from db_manager import (
 )
 from downloader import download_release, move_processing_folder_to_done
 from listener import get_pending_notifications, mark_as_read_and_delete
+from mapping_manager import upsert_repository_mapping
 from payload_types import DownloadReleaseResult, NotificationPayload, QueuedNotificationPayload, SkippedItemPayload
 from typing import Literal, Optional, Tuple, Union, cast, overload
 
@@ -208,6 +209,21 @@ def ingest_notifications_once(connection, github_token: Optional[str]) -> int:
                 print("✗ Skipping malformed notification: missing repo or tag.\n")
                 emails_to_delete.extend(email_ids)
                 continue
+
+            mapping_created, mapping_updated = upsert_repository_mapping(
+                repo,
+            )
+            release_type_label = release_type or "Release"
+            if mapping_created:
+                print(
+                    "   🗺️ Added mapping skeleton entry for repository "
+                    f"{repo} (notification tag={tag}, type={release_type_label})."
+                )
+            elif mapping_updated:
+                print(
+                    "   🗺️ Updated mapping active timestamp for repository "
+                    f"{repo} (notification tag={tag}, type={release_type_label})."
+                )
 
             try:
                 expected_commit, commit_reason = get_current_commit_hash(

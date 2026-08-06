@@ -1,4 +1,5 @@
 import argparse
+import json
 import sys
 from typing import Callable
 
@@ -8,6 +9,7 @@ from db_manager import (
     purge_state_database,
     supersede_pending_jobs_by_ids,
 )
+from mapping_manager import validate_mapping_schema
 from queue_reporting import build_queue_status_options, print_queue_status
 
 
@@ -23,6 +25,7 @@ def parse_cli_args(args: list[str], version: str) -> argparse.Namespace:
     parser.add_argument("--poll", action="store_true", help="Force polling mode even if disabled in config.")
     parser.add_argument("--purge-state", action="store_true", help="Delete the local state database (state.db).")
     parser.add_argument("--smoke-test", action="store_true", help="Run internal smoke tests for download behavior.")
+    parser.add_argument("--mapping-validate", action="store_true", help="Validate mapping.json schema and report issues.")
 
     queue_group = parser.add_argument_group("queue status/reporting options")
     queue_group.add_argument("--queue-status", action="store_true", help="Print current queue counts and scheduling details.")
@@ -69,6 +72,29 @@ def parse_cli_args(args: list[str], version: str) -> argparse.Namespace:
 
 def handle_cli_command(parsed_args: argparse.Namespace, run_smoke_tests: Callable[[], None]) -> bool:
     """Execute one-shot command-line operations after parsing."""
+    if parsed_args.mapping_validate:
+        validation_result = validate_mapping_schema()
+        if parsed_args.json:
+            print(json.dumps(validation_result, indent=2))
+            return True
+
+        if validation_result["ok"]:
+            print("Mapping validation passed.")
+        else:
+            print("Mapping validation failed.")
+
+        if validation_result["errors"]:
+            print("Errors:")
+            for error_text in validation_result["errors"]:
+                print(f"- {error_text}")
+
+        if validation_result["warnings"]:
+            print("Warnings:")
+            for warning_text in validation_result["warnings"]:
+                print(f"- {warning_text}")
+
+        return True
+
     if parsed_args.queue_remove_pending_ids:
         requested_ids = sorted({int(job_id) for job_id in parsed_args.queue_remove_pending_ids})
         invalid_ids = [job_id for job_id in requested_ids if job_id <= 0]
