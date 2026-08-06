@@ -71,6 +71,7 @@ CLI options:
 	- Add --queue-limit N to control history size (example: --queue-limit 50, --queue-limit 0 for all).
 	- Add --queue-hours H to filter to jobs created in the last H hours (example: --queue-hours 24).
 	- Add --queue-date YYYY-MM-DD to filter to jobs created on a specific date.
+	- Add --queue-repo-filter TEXT to filter by repository substring (case-insensitive, example: --queue-repo-filter <repository>).
 	- Add --queue-status-filter STATUS to filter by status (PENDING, COMPLETED, FAILED).
 	- Add --queue-report to print a compact summary report (rates, top repos, top skipped items, and skip reasons).
 	- Add --queue-report-only to print only the summary report section.

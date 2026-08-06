@@ -183,6 +183,7 @@ def build_queue_status_options(
     queue_limit: Optional[int] = None,
     queue_hours: Optional[float] = None,
     queue_date: Optional[str] = None,
+    queue_repo_filter: Optional[str] = None,
     queue_status_filter: Optional[str] = None,
     queue_report: bool = False,
     queue_report_only: bool = False,
@@ -194,6 +195,7 @@ def build_queue_status_options(
         "limit": 10,
         "hours": None,
         "date": None,
+        "repo_filter": None,
         "status": None,
         "report": queue_report,
         "report_only": queue_report_only,
@@ -228,6 +230,12 @@ def build_queue_status_options(
 
     if options["hours"] is not None and options["date"] is not None:
         raise ValueError("Use only one of --queue-hours or --queue-date.")
+
+    if queue_repo_filter is not None:
+        repo_filter_value = queue_repo_filter.strip()
+        if not repo_filter_value:
+            raise ValueError("Invalid --queue-repo-filter value. Expected a non-empty string.")
+        options["repo_filter"] = repo_filter_value
 
     if queue_status_filter is not None:
         status_value = queue_status_filter.strip().upper()
@@ -356,6 +364,7 @@ def _write_queue_report_csv(report_data: QueueReportPayload, output_path: str) -
 def _build_queue_scope(
     hours: Optional[float] = None,
     date_value: Optional[str] = None,
+    repo_filter: Optional[str] = None,
     status_filter: Optional[str] = None,
     now_timestamp: Optional[float] = None,
     table_alias: str = "",
@@ -378,6 +387,10 @@ def _build_queue_scope(
         conditions.append(f"{prefix}created_at < ?")
         params.extend([float(start_dt.timestamp()), float(end_dt.timestamp())])
 
+    if repo_filter is not None:
+        conditions.append(f"LOWER({prefix}repo) LIKE ?")
+        params.append(f"%{repo_filter.lower()}%")
+
     if status_filter is not None:
         conditions.append(f"{prefix}status = ?")
         params.append(status_filter)
@@ -392,6 +405,7 @@ def _collect_queue_status_data(
     limit: Optional[int] = 10,
     hours: Optional[float] = None,
     date_value: Optional[str] = None,
+    repo_filter: Optional[str] = None,
     status_filter: Optional[str] = None,
     include_report: bool = False,
 ) -> QueueStatusPayload:
@@ -400,6 +414,7 @@ def _collect_queue_status_data(
     scope_where, scope_params = _build_queue_scope(
         hours=hours,
         date_value=date_value,
+        repo_filter=repo_filter,
         status_filter=status_filter,
         now_timestamp=now_timestamp,
     )
@@ -584,6 +599,7 @@ def _collect_queue_status_data(
             scope_where_q, scope_params_q = _build_queue_scope(
                 hours=hours,
                 date_value=date_value,
+                repo_filter=repo_filter,
                 status_filter=status_filter,
                 now_timestamp=now_timestamp,
                 table_alias="q",
@@ -664,6 +680,7 @@ def _collect_queue_status_data(
         "filters": {
             "hours": hours,
             "date": date_value,
+            "repo_filter": repo_filter,
             "status": status_filter,
             "limit": "all" if limit is None else int(limit),
         },
@@ -681,6 +698,7 @@ def print_queue_status(
     limit: Optional[int] = 10,
     hours: Optional[float] = None,
     date_value: Optional[str] = None,
+    repo_filter: Optional[str] = None,
     status_filter: Optional[str] = None,
     report: bool = False,
     report_only: bool = False,
@@ -691,6 +709,7 @@ def print_queue_status(
         limit=limit,
         hours=hours,
         date_value=date_value,
+        repo_filter=repo_filter,
         status_filter=status_filter,
         include_report=report,
     )
@@ -707,6 +726,8 @@ def print_queue_status(
         active_filters.append(f"last {data['filters']['hours']} hour(s)")
     if data["filters"]["date"] is not None:
         active_filters.append(f"date={data['filters']['date']}")
+    if data["filters"]["repo_filter"] is not None:
+        active_filters.append(f"repo~{data['filters']['repo_filter']}")
     if data["filters"]["status"] is not None:
         active_filters.append(f"status={data['filters']['status']}")
 

@@ -6,6 +6,7 @@ class QueueStatusOptions(TypedDict):
     limit: Optional[int]
     hours: Optional[float]
     date: Optional[str]
+    repo_filter: Optional[str]
     status: Optional[str]
     report: bool
     report_only: bool
@@ -15,6 +16,7 @@ class QueueStatusOptions(TypedDict):
 class QueueStatusFilters(TypedDict):
     hours: Optional[float]
     date: Optional[str]
+    repo_filter: Optional[str]
     status: Optional[str]
     limit: str | int
 

@@ -27,6 +27,10 @@ def parse_cli_args(args: list[str], version: str) -> argparse.Namespace:
     queue_group.add_argument("--queue-hours", type=float, help="Filter jobs created in the last H hours.")
     queue_group.add_argument("--queue-date", help="Filter jobs created on YYYY-MM-DD.")
     queue_group.add_argument(
+        "--queue-repo-filter",
+        help="Filter by repository name substring (case-insensitive).",
+    )
+    queue_group.add_argument(
         "--queue-status-filter",
         choices=("PENDING", "COMPLETED", "FAILED"),
         help="Filter by status.",
@@ -59,6 +63,7 @@ def handle_cli_command(parsed_args: argparse.Namespace, run_smoke_tests: Callabl
                 queue_limit=parsed_args.queue_limit,
                 queue_hours=parsed_args.queue_hours,
                 queue_date=parsed_args.queue_date,
+                queue_repo_filter=parsed_args.queue_repo_filter,
                 queue_status_filter=parsed_args.queue_status_filter,
                 queue_report=parsed_args.queue_report,
                 queue_report_only=parsed_args.queue_report_only,
@@ -73,6 +78,7 @@ def handle_cli_command(parsed_args: argparse.Namespace, run_smoke_tests: Callabl
             limit=queue_options["limit"],
             hours=queue_options["hours"],
             date_value=queue_options["date"],
+            repo_filter=queue_options["repo_filter"],
             status_filter=queue_options["status"],
             report=queue_options["report"],
             report_only=queue_options["report_only"],
