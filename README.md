@@ -55,6 +55,21 @@ Default value:
 pip install requests python-dotenv imapclient
 ```
 
+## Local Configuration Files
+
+This project keeps machine-specific settings out of git:
+
+- config.json
+- mapping.json
+
+Both files are ignored via .gitignore.
+
+First-time setup:
+
+1. Copy config.example.json to config.json.
+2. Update paths and other values in config.json for your machine.
+3. Optional: create or edit mapping.json for repository destination mapping.
+
 ## Running
 
 Default run:

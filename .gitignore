@@ -1,6 +1,8 @@
 __pycache__/
 *.pyc
 .env
+config.json
+mapping.json
 state.db
 state.db-shm
 state.db-wal
