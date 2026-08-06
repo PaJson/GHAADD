@@ -15,6 +15,7 @@ Automated Python utility that reads GitHub release notification emails from Gmai
 - Replaces older pending jobs with the newest notification for the same repo/tag/release type.
 - Supersedes older queue jobs when a release tag commit changes.
 - Supports configurable polling mode with jitter.
+- Supports optional per-run terminal logging to timestamped .log files.
 - Supports config-based download path routing by repo and release type.
 
 ## Requirements
@@ -146,6 +147,10 @@ Example:
 		"jitter_min_seconds": 5,
 		"jitter_max_seconds": 30
 	},
+	"logging": {
+		"enabled": false,
+		"path": ""
+	},
 	"paths": {
 		"default_download_dir": "<set-local-download-path>",
 		"repo_paths": {},
@@ -175,6 +180,13 @@ Key behavior:
 	- true disables persistent duplicate state for the run.
 - polling.interval_seconds, polling.jitter_min_seconds, polling.jitter_max_seconds
 	- Next run delay is interval_seconds + random jitter.
+- logging.enabled
+	- false disables terminal output logging.
+	- true writes all terminal output (stdout and stderr) to a .log file for this run.
+- logging.path
+	- Optional folder path where log files should be created.
+	- When empty or missing, log files are created in paths.default_download_dir.
+	- Each run creates a new log file named with app start time (format: YYYYMMDD_HHMMSS.log).
 
 ## Download Path Routing
 

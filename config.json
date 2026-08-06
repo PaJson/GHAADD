@@ -9,16 +9,20 @@
   "state": {
     "disable_state_persistence": false
   },
-    "polling": {
-        "enabled": true,
-        "interval_seconds": 300,
-        "jitter_min_seconds": 5,
-        "jitter_max_seconds": 30
-    },
-    "paths": {
+  "polling": {
+    "enabled": true,
+    "interval_seconds": 300,
+    "jitter_min_seconds": 5,
+    "jitter_max_seconds": 30
+  },
+  "logging": {
+    "enabled": true,
+    "path": ""
+  },
+  "paths": {
     "default_download_dir": "D:\\Users\\PaJson\\Downloads",
     "repo_paths": {},
     "release_type_paths": {},
     "repo_release_type_paths": {}
-    }
+  }
 }

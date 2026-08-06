@@ -1,5 +1,6 @@
 import json
 import os
+from typing import Any, Dict, Optional, TypedDict
 
 DEFAULT_ENABLE_POLLING = False
 DEFAULT_POLL_INTERVAL_SECONDS = 300
@@ -9,6 +10,12 @@ DEFAULT_MAX_EMAILS_TO_PROCESS = 0
 DEFAULT_RECHECK_INTERVALS_MINUTES = [5, 15, 60, 1440]
 DEFAULT_DISABLE_STATE_PERSISTENCE = False
 DEFAULT_GMAIL_FOLDER = "GitHubNotifications"
+DEFAULT_ENABLE_LOGGING = False
+
+
+class LoggingSettings(TypedDict):
+    enabled: bool
+    path: str
 
 
 def _as_bool(value, default=False):
@@ -49,7 +56,7 @@ def _normalize_release_type(release_type):
     return normalized
 
 
-def load_config():
+def load_config() -> Dict[str, Any]:
     """Load and return config.json as a dictionary, or an empty dict on failure."""
     config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
     try:
@@ -99,12 +106,12 @@ def is_state_persistence_disabled(config=None):
     return _as_bool(value, DEFAULT_DISABLE_STATE_PERSISTENCE)
 
 
-def get_default_download_dir(config=None):
+def get_default_download_dir(config: Optional[Dict[str, Any]] = None) -> str:
     """Return the default download directory from config or user Downloads."""
     config = config if config is not None else load_config()
     configured_dir = _get_nested(config, "paths", "default_download_dir")
-    if configured_dir:
-        return configured_dir
+    if isinstance(configured_dir, str) and configured_dir.strip():
+        return configured_dir.strip()
 
     return os.path.join(os.path.expanduser("~"), "Downloads")
 
@@ -116,6 +123,22 @@ def get_gmail_folder(config=None):
     if isinstance(value, str) and value.strip():
         return value.strip()
     return DEFAULT_GMAIL_FOLDER
+
+
+def get_logging_settings(config: Optional[Dict[str, Any]] = None) -> LoggingSettings:
+    """Return normalized logging settings with safe defaults."""
+    config = config if config is not None else load_config()
+    enabled = _get_nested(config, "logging", "enabled")
+    path = _get_nested(config, "logging", "path")
+
+    normalized_path = ""
+    if isinstance(path, str):
+        normalized_path = path.strip()
+
+    return {
+        "enabled": _as_bool(enabled, DEFAULT_ENABLE_LOGGING),
+        "path": normalized_path,
+    }
 
 
 def get_download_dir_for_release(repo, release_type=None, config=None):

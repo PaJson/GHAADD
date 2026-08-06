@@ -15,6 +15,10 @@
     "jitter_min_seconds": 5,
     "jitter_max_seconds": 30
   },
+  "logging": {
+    "enabled": false,
+    "path": ""
+  },
   "paths": {
     "default_download_dir": "<set-local-download-path>",
     "repo_paths": {},
