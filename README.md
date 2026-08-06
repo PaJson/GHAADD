@@ -8,6 +8,7 @@ Automated Python utility that reads GitHub release notification emails from Gmai
 - Parses both Release and Pre-release subject formats.
 - Logs when a fallback subject parser pattern is used.
 - Downloads all release assets plus zip/tar source archives.
+- Renames all downloaded source archives to include " (source)" before the archive suffix.
 - Attempts to discover and download GitHub release attestations.
 - Preserves file timestamps using upstream metadata when available.
 - Uses local SQLite state to skip files that are already up to date.
@@ -146,6 +147,22 @@ Destination directory resolution order (most specific first):
 4. paths.default_download_dir
 
 Release-type keys are normalized to lowercase with hyphens (for example: release, pre-release).
+
+## Source Archive Naming
+
+Source archives are always saved with a " (source)" marker in the filename.
+
+Suffix placement rules:
+
+- .zip source files are renamed to: <name> (source).zip
+- .tar.gz source files are renamed to: <name> (source).tar.gz
+
+Examples:
+
+- project-v1.2.3.zip becomes project-v1.2.3. (source).zip
+- project-v1.2.3.tar.gz becomes project-v1.2.3 (source).tar.gz
+
+If a generated source filename already exists, a numeric suffix is inserted before the final extension (for example: project-v1.2.3 (source) (2).tar.gz).
 
 ## State Database
 

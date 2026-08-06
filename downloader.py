@@ -30,6 +30,47 @@ def _build_skipped_item_payload(
     }
 
 
+def _is_source_item(item_key: str) -> bool:
+    """Return True when a queue item represents GitHub source archives."""
+    return item_key.startswith("source:")
+
+
+def _insert_source_marker(file_name: str) -> str:
+    """Insert ' (source)' before known source suffixes (.zip/.tar.gz)."""
+    lower_name = file_name.lower()
+
+    if lower_name.endswith(".tar.gz"):
+        split_index = len(file_name) - len(".tar.gz")
+        return f"{file_name[:split_index]} (source){file_name[split_index:]}"
+
+    if lower_name.endswith(".zip"):
+        split_index = len(file_name) - len(".zip")
+        return f"{file_name[:split_index]} (source){file_name[split_index:]}"
+
+    return f"{file_name} (source)"
+
+
+def _resolve_source_name_collision(final_download_dir: str, file_name: str) -> str:
+    """Return a source filename with marker that won't overwrite existing files."""
+    base_candidate = _insert_source_marker(file_name)
+    if not os.path.exists(os.path.join(final_download_dir, base_candidate)):
+        return base_candidate
+
+    # Fallback if the '(source)' name already exists as well.
+    counter = 2
+    while True:
+        dot_index = base_candidate.rfind(".")
+        if dot_index == -1:
+            candidate = f"{base_candidate} ({counter})"
+        else:
+            candidate = f"{base_candidate[:dot_index]} ({counter}){base_candidate[dot_index:]}"
+
+        if not os.path.exists(os.path.join(final_download_dir, candidate)):
+            return candidate
+
+        counter += 1
+
+
 def sanitize_folder_name(text):
     """Return a Windows-safe folder name using JS-compatible rules."""
     if not text:
@@ -327,6 +368,15 @@ def download_all_assets(
                 expected_signature = build_expected_signature(item)
                 file_name = item["name"]
                 download_url = item["url"]
+
+                if file_name is not None and _is_source_item(item_key):
+                    resolved_source_name = _resolve_source_name_collision(final_download_dir, file_name)
+                    if resolved_source_name != file_name:
+                        print(
+                            f"   ℹ️ Source filename adjusted. "
+                            f"Using '{resolved_source_name}' instead of '{file_name}'."
+                        )
+                        file_name = resolved_source_name
 
                 if file_name is not None:
                     file_path = os.path.join(final_download_dir, file_name)
