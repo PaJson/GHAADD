@@ -12,6 +12,8 @@ Automated Python utility that reads GitHub release notification emails from Gmai
 - Attempts to discover and download GitHub release attestations.
 - Preserves file timestamps using upstream metadata when available.
 - Uses local SQLite state to skip files that are already up to date.
+- Replaces older pending jobs with the newest notification for the same repo/tag/release type.
+- Supersedes older queue jobs when a release tag commit changes.
 - Supports configurable polling mode with jitter.
 - Supports config-based download path routing by repo and release type.
 
@@ -66,13 +68,15 @@ CLI options:
 - --purge-state: Delete local state.db and exit.
 - --smoke-test: Run internal smoke tests and exit.
 - --queue-status: Print queue counts, due-now count, next pending job, and recent jobs.
+	- --queue-remove-pending-ids ID [ID ...]: Mark specific pending jobs as SUPERSEDED (removes them from pending queue).
+		- Example: python main.py --queue-remove-pending-ids 23 27 31
 	- Add --json to output machine-readable JSON (example: python main.py --queue-status --json).
 	- Add --queue-all to show all matching jobs instead of the default capped history.
 	- Add --queue-limit N to control history size (example: --queue-limit 50, --queue-limit 0 for all).
 	- Add --queue-hours H to filter to jobs created in the last H hours (example: --queue-hours 24).
 	- Add --queue-date YYYY-MM-DD to filter to jobs created on a specific date.
 	- Add --queue-repo-filter TEXT to filter by repository substring (case-insensitive, example: --queue-repo-filter <repository>).
-	- Add --queue-status-filter STATUS to filter by status (PENDING, COMPLETED, FAILED).
+	- Add --queue-status-filter STATUS to filter by status (PENDING, COMPLETED, FAILED, SUPERSEDED).
 	- Add --queue-report to print a compact summary report (rates, top repos, top skipped items, and skip reasons).
 	- Add --queue-report-only to print only the summary report section.
 	- Add --queue-report-csv [PATH] to export the report section to a CSV file.
@@ -172,6 +176,8 @@ Behavior:
 
 - During retries/rechecks, files are updated in Processing.
 - Repository folders include release type as an extra path segment (for example: Pre-release, Release).
+- When a new notification is ingested for the same repo/tag/release type, existing pending jobs for that identity are marked SUPERSEDED and replaced by a fresh pending job.
+- When a commit hash changes for the same repo/tag during rechecks, the old PENDING job is marked SUPERSEDED and a new PENDING job is created for the updated commit.
 - When a release/tag is not found on GitHub (SKIP: release_not_found), the job is completed immediately and not rechecked.
 - When a queue job reaches a terminal state (COMPLETED or FAILED with no retries left), its release folder is moved to Done.
 
@@ -189,7 +195,13 @@ Examples:
 - project-v1.2.3.zip becomes project-v1.2.3. (source).zip
 - project-v1.2.3.tar.gz becomes project-v1.2.3 (source).tar.gz
 
-If a generated source filename already exists, a numeric suffix is inserted before the final extension (for example: project-v1.2.3 (source) (2).tar.gz).
+Source archive naming is deterministic per item key, which allows rechecks to skip already-downloaded source files instead of creating numbered duplicates.
+
+Re-check source refresh behavior:
+
+- Source archives are processed after all normal assets.
+- If no normal assets were newly downloaded in the current run, existing source archives are skipped.
+- If any normal asset was newly downloaded in the current run, existing source archives are re-downloaded and overwritten.
 
 ## State Database
 

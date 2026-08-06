@@ -1,5 +1,6 @@
 import os
 import sqlite3
+from typing import Iterable
 
 STATE_DB_NAME = "state.db"
 
@@ -279,6 +280,86 @@ def enqueue_job(connection, repo, tag, release_type=None, next_check_time=None, 
     return cursor.lastrowid
 
 
+def get_pending_job_for_release(connection, repo, tag, release_type=None, expected_commit=None, exclude_job_id=None):
+    """Return one pending job for the same release identity, optionally matching commit."""
+    conditions = [
+        "status = 'PENDING'",
+        "repo = ?",
+        "tag = ?",
+        "(release_type = ? OR (release_type IS NULL AND ? IS NULL))",
+    ]
+    params = [repo, tag, release_type, release_type]
+
+    if expected_commit is not None:
+        conditions.append("expected_commit = ?")
+        params.append(expected_commit)
+
+    if exclude_job_id is not None:
+        conditions.append("id <> ?")
+        params.append(int(exclude_job_id))
+
+    query = f"""
+        SELECT
+            id,
+            repo,
+            tag,
+            release_type,
+            status,
+            attempt_count,
+            next_check_time,
+            created_at,
+            expected_commit,
+            downloaded_count,
+            skipped_count,
+            total_items,
+            last_result
+        FROM job_queue
+        WHERE {' AND '.join(conditions)}
+        ORDER BY created_at ASC, id ASC
+        LIMIT 1
+    """
+
+    return connection.execute(query, tuple(params)).fetchone()
+
+
+def supersede_pending_jobs_for_release(
+    connection,
+    repo,
+    tag,
+    release_type=None,
+    replacement_expected_commit=None,
+    last_result="SUPERSEDED_REPLACED_BY_NEW_NOTIFICATION",
+):
+    """Supersede pending jobs for a release identity and return affected row count."""
+    cursor = connection.execute(
+        """
+        UPDATE job_queue
+        SET status = 'SUPERSEDED',
+            expected_commit = COALESCE(?, expected_commit),
+            last_result = ?,
+            updated_at = CAST(strftime('%s', 'now') AS REAL),
+            completed_at = CAST(strftime('%s', 'now') AS REAL)
+        WHERE status = 'PENDING'
+          AND repo = ?
+          AND tag = ?
+          AND (
+                release_type = ?
+                OR (release_type IS NULL AND ? IS NULL)
+              )
+        """,
+        (
+            replacement_expected_commit,
+            last_result,
+            repo,
+            tag,
+            release_type,
+            release_type,
+        ),
+    )
+    connection.commit()
+    return int(cursor.rowcount or 0)
+
+
 def get_due_jobs(connection, now_timestamp, limit=None):
     """Return jobs that are ready to run, sorted by schedule time then id."""
     if limit is not None:
@@ -328,6 +409,177 @@ def get_due_jobs(connection, now_timestamp, limit=None):
         """,
         (float(now_timestamp),),
     ).fetchall()
+
+
+def get_pending_jobs(connection):
+    """Return all pending queue jobs ordered by creation time."""
+    return connection.execute(
+        """
+        SELECT
+            id,
+            repo,
+            tag,
+            release_type,
+            status,
+            attempt_count,
+            next_check_time,
+            created_at,
+            expected_commit,
+            downloaded_count,
+            skipped_count,
+            total_items,
+            last_result
+        FROM job_queue
+        WHERE status = 'PENDING'
+        ORDER BY created_at ASC, id ASC
+        """
+    ).fetchall()
+
+
+def get_jobs_by_ids(connection, job_ids: Iterable[int]):
+    """Return queue jobs for the provided IDs."""
+    normalized_ids = sorted({int(job_id) for job_id in job_ids})
+    if not normalized_ids:
+        return []
+
+    placeholders = ",".join(["?"] * len(normalized_ids))
+    return connection.execute(
+        f"""
+        SELECT
+            id,
+            repo,
+            tag,
+            release_type,
+            status,
+            attempt_count,
+            expected_commit,
+            last_result,
+            next_check_time
+        FROM job_queue
+        WHERE id IN ({placeholders})
+        ORDER BY id ASC
+        """,
+        tuple(normalized_ids),
+    ).fetchall()
+
+
+def supersede_pending_jobs_by_ids(
+    connection,
+    job_ids: Iterable[int],
+    last_result="SUPERSEDED_MANUAL_REMOVE",
+):
+    """Mark specific pending jobs as SUPERSEDED and return removed rows."""
+    normalized_ids = sorted({int(job_id) for job_id in job_ids})
+    if not normalized_ids:
+        return []
+
+    placeholders = ",".join(["?"] * len(normalized_ids))
+    pending_rows = connection.execute(
+        f"""
+        SELECT
+            id,
+            repo,
+            tag,
+            release_type,
+            status,
+            attempt_count,
+            expected_commit,
+            last_result,
+            next_check_time
+        FROM job_queue
+        WHERE status = 'PENDING'
+          AND id IN ({placeholders})
+        ORDER BY id ASC
+        """,
+        tuple(normalized_ids),
+    ).fetchall()
+
+    if not pending_rows:
+        return []
+
+    removable_ids = [int(row["id"]) for row in pending_rows]
+    remove_placeholders = ",".join(["?"] * len(removable_ids))
+    connection.execute(
+        f"""
+        UPDATE job_queue
+        SET status = 'SUPERSEDED',
+            last_result = ?,
+            updated_at = CAST(strftime('%s', 'now') AS REAL),
+            completed_at = CAST(strftime('%s', 'now') AS REAL)
+        WHERE status = 'PENDING'
+          AND id IN ({remove_placeholders})
+        """,
+        (last_result, *removable_ids),
+    )
+    connection.commit()
+    return pending_rows
+
+
+def supersede_duplicate_pending_jobs(connection):
+    """Mark duplicate pending jobs as SUPERSEDED, keeping the oldest per release+commit."""
+    pending_rows = connection.execute(
+        """
+        SELECT
+            id,
+            repo,
+            tag,
+            release_type,
+            expected_commit,
+            attempt_count,
+            downloaded_count,
+            skipped_count,
+            total_items
+        FROM job_queue
+        WHERE status = 'PENDING'
+        ORDER BY created_at ASC, id ASC
+        """
+    ).fetchall()
+
+    seen_release_keys = set()
+    duplicate_rows = []
+
+    for row in pending_rows:
+        release_key = (
+            row["repo"],
+            row["tag"],
+            row["release_type"],
+            row["expected_commit"],
+        )
+        if release_key in seen_release_keys:
+            duplicate_rows.append(row)
+            continue
+        seen_release_keys.add(release_key)
+
+    if not duplicate_rows:
+        return 0
+
+    for row in duplicate_rows:
+        connection.execute(
+            """
+            UPDATE job_queue
+            SET status = 'SUPERSEDED',
+                attempt_count = ?,
+                expected_commit = ?,
+                downloaded_count = ?,
+                skipped_count = ?,
+                total_items = ?,
+                last_result = 'SUPERSEDED_DUPLICATE_PENDING',
+                updated_at = CAST(strftime('%s', 'now') AS REAL),
+                completed_at = CAST(strftime('%s', 'now') AS REAL)
+            WHERE id = ?
+            """,
+            (
+                int(row["attempt_count"] or 0),
+                row["expected_commit"],
+                int(row["downloaded_count"] or 0),
+                int(row["skipped_count"] or 0),
+                int(row["total_items"] or 0),
+                int(row["id"]),
+            ),
+        )
+
+    connection.commit()
+    return len(duplicate_rows)
 
 
 def mark_job_completed(
@@ -420,6 +672,68 @@ def mark_job_failed(
             """
             UPDATE job_queue
             SET status = 'FAILED',
+                attempt_count = ?,
+                expected_commit = ?,
+                downloaded_count = ?,
+                skipped_count = ?,
+                total_items = ?,
+                last_result = ?,
+                updated_at = CAST(strftime('%s', 'now') AS REAL),
+                completed_at = CAST(strftime('%s', 'now') AS REAL)
+            WHERE id = ?
+            """,
+            (
+                int(attempt_count),
+                expected_commit,
+                int(downloaded_count),
+                int(skipped_count),
+                int(total_items),
+                last_result,
+                job_id,
+            ),
+        )
+    connection.commit()
+
+
+def mark_job_superseded(
+    connection,
+    job_id,
+    attempt_count=None,
+    expected_commit=None,
+    downloaded_count=0,
+    skipped_count=0,
+    total_items=0,
+    last_result="SUPERSEDED",
+):
+    """Mark a queued job as superseded by a newer commit/job."""
+    if attempt_count is None:
+        connection.execute(
+            """
+            UPDATE job_queue
+            SET status = 'SUPERSEDED',
+                expected_commit = ?,
+                downloaded_count = ?,
+                skipped_count = ?,
+                total_items = ?,
+                last_result = ?,
+                updated_at = CAST(strftime('%s', 'now') AS REAL),
+                completed_at = CAST(strftime('%s', 'now') AS REAL)
+            WHERE id = ?
+            """,
+            (
+                expected_commit,
+                int(downloaded_count),
+                int(skipped_count),
+                int(total_items),
+                last_result,
+                job_id,
+            ),
+        )
+    else:
+        connection.execute(
+            """
+            UPDATE job_queue
+            SET status = 'SUPERSEDED',
                 attempt_count = ?,
                 expected_commit = ?,
                 downloaded_count = ?,

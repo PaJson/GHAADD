@@ -2,7 +2,12 @@ import argparse
 import sys
 from typing import Callable
 
-from db_manager import purge_state_database
+from db_manager import (
+    get_jobs_by_ids,
+    open_database,
+    purge_state_database,
+    supersede_pending_jobs_by_ids,
+)
 from queue_reporting import build_queue_status_options, print_queue_status
 
 
@@ -32,7 +37,7 @@ def parse_cli_args(args: list[str], version: str) -> argparse.Namespace:
     )
     queue_group.add_argument(
         "--queue-status-filter",
-        choices=("PENDING", "COMPLETED", "FAILED"),
+        choices=("PENDING", "COMPLETED", "FAILED", "SUPERSEDED"),
         help="Filter by status.",
     )
     queue_group.add_argument("--queue-report", action="store_true", help="Print a compact report.")
@@ -50,11 +55,70 @@ def parse_cli_args(args: list[str], version: str) -> argparse.Namespace:
         help="Export the report section to CSV.",
     )
 
+    queue_maintenance_group = parser.add_argument_group("queue maintenance options")
+    queue_maintenance_group.add_argument(
+        "--queue-remove-pending-ids",
+        nargs="+",
+        type=int,
+        metavar="ID",
+        help="Mark specific pending job IDs as SUPERSEDED (removes them from pending queue).",
+    )
+
     return parser.parse_args(args)
 
 
 def handle_cli_command(parsed_args: argparse.Namespace, run_smoke_tests: Callable[[], None]) -> bool:
     """Execute one-shot command-line operations after parsing."""
+    if parsed_args.queue_remove_pending_ids:
+        requested_ids = sorted({int(job_id) for job_id in parsed_args.queue_remove_pending_ids})
+        invalid_ids = [job_id for job_id in requested_ids if job_id <= 0]
+        if invalid_ids:
+            print(
+                "Queue maintenance option error: invalid job ID(s). "
+                "Expected positive integers only.",
+                file=sys.stderr,
+            )
+            return True
+
+        with open_database() as connection:
+            removed_rows = supersede_pending_jobs_by_ids(connection, requested_ids)
+            all_rows = get_jobs_by_ids(connection, requested_ids)
+
+        removed_ids = {int(row["id"]) for row in removed_rows}
+        all_rows_by_id = {int(row["id"]): row for row in all_rows}
+        not_found_ids = [job_id for job_id in requested_ids if job_id not in all_rows_by_id]
+        not_pending_rows = [
+            all_rows_by_id[job_id]
+            for job_id in requested_ids
+            if job_id in all_rows_by_id and job_id not in removed_ids
+        ]
+
+        print(
+            f"Queue maintenance complete. Removed {len(removed_rows)} pending job(s) "
+            "(status -> SUPERSEDED)."
+        )
+
+        if removed_rows:
+            print("Removed pending jobs:")
+            for row in removed_rows:
+                print(
+                    f"- #{int(row['id'])} {row['repo']} {row['tag']} "
+                    f"({row['release_type'] or 'Release'}, expected_commit={row['expected_commit'] or 'unknown'})"
+                )
+
+        if not_pending_rows:
+            print("Skipped (not pending):")
+            for row in not_pending_rows:
+                print(
+                    f"- #{int(row['id'])} status={row['status']} {row['repo']} {row['tag']} "
+                    f"({row['release_type'] or 'Release'})"
+                )
+
+        if not_found_ids:
+            print("Skipped (not found): " + ", ".join(str(job_id) for job_id in not_found_ids))
+
+        return True
+
     if parsed_args.queue_status:
         try:
             queue_options = build_queue_status_options(

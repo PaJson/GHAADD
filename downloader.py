@@ -120,25 +120,9 @@ def _insert_source_marker(file_name: str) -> str:
     return f"{file_name} (source)"
 
 
-def _resolve_source_name_collision(final_download_dir: str, file_name: str) -> str:
-    """Return a source filename with marker that won't overwrite existing files."""
-    base_candidate = _insert_source_marker(file_name)
-    if not os.path.exists(os.path.join(final_download_dir, base_candidate)):
-        return base_candidate
-
-    # Fallback if the '(source)' name already exists as well.
-    counter = 2
-    while True:
-        dot_index = base_candidate.rfind(".")
-        if dot_index == -1:
-            candidate = f"{base_candidate} ({counter})"
-        else:
-            candidate = f"{base_candidate[:dot_index]} ({counter}){base_candidate[dot_index:]}"
-
-        if not os.path.exists(os.path.join(final_download_dir, candidate)):
-            return candidate
-
-        counter += 1
+def _resolve_source_file_name(file_name: str) -> str:
+    """Return the deterministic source filename with marker."""
+    return _insert_source_marker(file_name)
 
 
 def sanitize_folder_name(text):
@@ -380,6 +364,10 @@ def download_all_assets(
 
     print(f"📦 Found {len(download_queue)} total items to download (including source code and attestations).")
 
+    non_source_items = [item for item in download_queue if not _is_source_item(item["key"])]
+    source_items = [item for item in download_queue if _is_source_item(item["key"])]
+    ordered_download_queue = non_source_items + source_items
+
     custom_folder = generate_folder_name(repo, release_data, headers_api)
     repo_parent_folder = _build_repo_parent_folder(repo)
     effective_release_type = release_type
@@ -413,9 +401,10 @@ def download_all_assets(
     else:
         fallback_timestamp = time.time()
 
-    total_files = len(download_queue)
+    total_files = len(ordered_download_queue)
     per_file_retries = 3
     per_file_retry_delay = 2
+    normal_downloaded_count = 0
 
     def refresh_release_state():
         nonlocal release_state
@@ -458,23 +447,43 @@ def download_all_assets(
         with requests.Session() as session:
             session.headers.update(headers_api)
 
-            for i, item in enumerate(download_queue, 1):
+            for i, item in enumerate(ordered_download_queue, 1):
                 item_key = item["key"]
+                is_source_item = _is_source_item(item_key)
                 expected_signature = build_expected_signature(item)
                 file_name = item["name"]
                 download_url = item["url"]
 
-                if file_name is not None and _is_source_item(item_key):
-                    resolved_source_name = _resolve_source_name_collision(final_download_dir, file_name)
+                if file_name is not None and is_source_item:
+                    resolved_source_name = _resolve_source_file_name(file_name)
                     if resolved_source_name != file_name:
                         print(
                             f"   ℹ️ Source filename adjusted. "
                             f"Using '{resolved_source_name}' instead of '{file_name}'."
                         )
-                        file_name = resolved_source_name
+                    file_name = resolved_source_name
 
+                file_path: Optional[str] = None
+                force_redownload_source = False
                 if file_name is not None:
                     file_path = os.path.join(final_download_dir, file_name)
+                    if is_source_item and os.path.exists(file_path):
+                        if normal_downloaded_count == 0:
+                            print(
+                                f"   ⏭️ Skipping ({i}/{total_files}): {file_name} "
+                                "because no normal assets changed in this run."
+                            )
+                            skipped_count += 1
+                            skipped_items.append(_build_skipped_item_payload(item_key, file_name, "source_unchanged_no_asset_changes"))
+                            continue
+
+                        force_redownload_source = True
+                        print(
+                            f"   🔁 Refreshing ({i}/{total_files}): {file_name} "
+                            "because normal assets changed in this run."
+                        )
+
+                if file_name is not None:
                     try:
                         head_response = session.head(download_url, allow_redirects=True, timeout=(10, 30))
                         head_response.raise_for_status()
@@ -493,7 +502,7 @@ def download_all_assets(
 
                         remote_etag = head_response.headers.get('ETag')
 
-                        if should_skip_existing_file(
+                        if not force_redownload_source and should_skip_existing_file(
                             file_path,
                             item_key,
                             expected_signature,
@@ -558,7 +567,7 @@ def download_all_assets(
 
                             remote_etag = response.headers.get('ETag')
 
-                            if should_skip_existing_file(
+                            if not force_redownload_source and should_skip_existing_file(
                                 file_path,
                                 item_key,
                                 expected_signature,
@@ -619,6 +628,8 @@ def download_all_assets(
 
                             print("   ✅ Saved & timestamp preserved.")
                             downloaded_count += 1
+                            if not is_source_item:
+                                normal_downloaded_count += 1
                             file_saved = True
                             break
                     except (ChunkedEncodingError, ConnectionError, Timeout) as error:
