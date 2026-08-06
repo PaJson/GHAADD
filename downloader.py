@@ -2,6 +2,7 @@ import datetime
 import os
 import re
 import requests
+import shutil
 import time
 from db_manager import open_database, load_release_state, save_state_entry, prune_release_state
 from dotenv import load_dotenv
@@ -28,6 +29,75 @@ def _build_skipped_item_payload(
         "file_name": file_name,
         "reason": reason,
     }
+
+
+def _resolve_directory_name_collision(target_dir: str) -> str:
+    """Return a unique directory path by appending a numeric suffix when needed."""
+    if not os.path.exists(target_dir):
+        return target_dir
+
+    counter = 2
+    while True:
+        candidate = f"{target_dir} ({counter})"
+        if not os.path.exists(candidate):
+            return candidate
+        counter += 1
+
+
+def _build_staging_directories(base_download_dir: str) -> tuple[str, str]:
+    """Return (processing_dir, done_dir) under the GHAADD staging root."""
+    ghaadd_root = os.path.join(base_download_dir, "GHAADD")
+    processing_dir = os.path.join(ghaadd_root, "Processing")
+    done_dir = os.path.join(ghaadd_root, "Done")
+    os.makedirs(processing_dir, exist_ok=True)
+    os.makedirs(done_dir, exist_ok=True)
+    return processing_dir, done_dir
+
+
+def _build_repo_parent_folder(repo: str) -> str:
+    """Return a safe parent folder name like 'owner (repo)' from 'owner/repo'."""
+    if not repo:
+        return "unknown (unknown)"
+
+    owner, repo_name = (repo.split("/", 1) + [""])[:2]
+    safe_owner = sanitize_folder_name(owner) or "unknown"
+    safe_repo_name = sanitize_folder_name(repo_name or owner) or "unknown"
+    return f"{safe_owner} ({safe_repo_name})"
+
+
+def move_processing_folder_to_done(working_dir: str) -> Optional[str]:
+    """Move a finished release folder from .../GHAADD/Processing to .../GHAADD/Done."""
+    if not working_dir:
+        return None
+
+    normalized_working_dir = os.path.normpath(working_dir)
+    if not os.path.isdir(normalized_working_dir):
+        return None
+
+    processing_root = normalized_working_dir
+    while True:
+        parent_dir = os.path.dirname(processing_root)
+        if parent_dir == processing_root:
+            processing_root = ""
+            break
+        if os.path.basename(parent_dir).lower() == "processing":
+            processing_root = parent_dir
+            break
+        processing_root = parent_dir
+
+    if not processing_root:
+        return None
+
+    ghaadd_root = os.path.dirname(processing_root)
+    done_dir = os.path.join(ghaadd_root, "Done")
+    os.makedirs(done_dir, exist_ok=True)
+
+    relative_path = os.path.relpath(normalized_working_dir, processing_root)
+    target_dir = os.path.normpath(os.path.join(done_dir, relative_path))
+    os.makedirs(os.path.dirname(target_dir), exist_ok=True)
+    target_dir = _resolve_directory_name_collision(target_dir)
+    shutil.move(normalized_working_dir, target_dir)
+    return target_dir
 
 
 def _is_source_item(item_key: str) -> bool:
@@ -185,6 +255,8 @@ def _build_download_result(
     total_items: int,
     include_stats: bool,
     skipped_items: Optional[list[SkippedItemPayload]] = None,
+    working_dir: Optional[str] = None,
+    skip_reason: Optional[str] = None,
 ) -> DownloadReleaseResult:
     """Return either legacy status values or a detailed result payload."""
     if skipped_items is None:
@@ -197,6 +269,8 @@ def _build_download_result(
             "skipped_count": int(skipped_count),
             "total_items": int(total_items),
             "skipped_items": skipped_items,
+            "working_dir": working_dir,
+            "skip_reason": skip_reason,
         }
 
     if status == "SUCCESS":
@@ -214,7 +288,7 @@ def download_release(
 ) -> DownloadReleaseResult:
     """Download a GitHub release and all assets using config-driven routing."""
     download_dir = cast(str, get_download_dir_for_release(repo, release_type))
-    return download_all_assets(repo, tag, download_dir, include_stats=include_stats)
+    return download_all_assets(repo, tag, download_dir, include_stats=include_stats, release_type=release_type)
 
 
 def download_all_assets(
@@ -222,6 +296,7 @@ def download_all_assets(
     tag: str,
     download_dir: str,
     include_stats: bool = False,
+    release_type: Optional[str] = None,
 ) -> DownloadReleaseResult:
     """Download all release items with retries and preserved timestamps."""
     max_retries = 1
@@ -230,6 +305,7 @@ def download_all_assets(
     downloaded_count = 0
     skipped_count = 0
     skipped_items: list[SkippedItemPayload] = []
+    final_download_dir: Optional[str] = None
 
     for attempt in range(max_retries):
         print(f"🔍 Checking GitHub API for {repo} ({tag})...")
@@ -246,7 +322,15 @@ def download_all_assets(
             break
 
         print(f"   ⏭️ Skipping {repo} ({tag}): Release no longer exists.")
-        return _build_download_result("SKIP", downloaded_count, skipped_count, 0, include_stats, skipped_items)
+        return _build_download_result(
+            "SKIP",
+            downloaded_count,
+            skipped_count,
+            0,
+            include_stats,
+            skipped_items,
+            skip_reason="release_not_found",
+        )
     else:
         print(f"   ❌ Timed out waiting for assets to populate for {repo}.")
         return _build_download_result("FAILED", downloaded_count, skipped_count, 0, include_stats, skipped_items)
@@ -297,7 +381,18 @@ def download_all_assets(
     print(f"📦 Found {len(download_queue)} total items to download (including source code and attestations).")
 
     custom_folder = generate_folder_name(repo, release_data, headers_api)
-    final_download_dir = os.path.join(download_dir, custom_folder)
+    repo_parent_folder = _build_repo_parent_folder(repo)
+    effective_release_type = release_type
+    if not effective_release_type:
+        effective_release_type = "Pre-release" if release_data.get("prerelease") else "Release"
+    release_type_folder = sanitize_folder_name(effective_release_type) or "Release"
+    processing_download_dir, _ = _build_staging_directories(download_dir)
+    final_download_dir = os.path.join(
+        processing_download_dir,
+        repo_parent_folder,
+        release_type_folder,
+        custom_folder,
+    )
     os.makedirs(final_download_dir, exist_ok=True)
 
     release_key = f"{repo}|{tag}"
@@ -562,6 +657,7 @@ def download_all_assets(
                         total_files,
                         include_stats,
                         skipped_items,
+                        working_dir=final_download_dir,
                     )
     finally:
         if state_db is not None:
@@ -574,6 +670,7 @@ def download_all_assets(
         total_files,
         include_stats,
         skipped_items,
+        working_dir=final_download_dir,
     )
 
 # Run this file directly for manual release-download testing.

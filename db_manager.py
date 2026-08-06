@@ -328,22 +328,54 @@ def get_due_jobs(connection, now_timestamp, limit=None):
     ).fetchall()
 
 
-def mark_job_completed(connection, job_id, downloaded_count=0, skipped_count=0, total_items=0, last_result="SUCCESS"):
+def mark_job_completed(
+    connection,
+    job_id,
+    attempt_count=None,
+    downloaded_count=0,
+    skipped_count=0,
+    total_items=0,
+    last_result="SUCCESS",
+):
     """Mark a queued job as completed."""
-    connection.execute(
-        """
-        UPDATE job_queue
-        SET status = 'COMPLETED',
-            downloaded_count = ?,
-            skipped_count = ?,
-            total_items = ?,
-            last_result = ?,
-            updated_at = CAST(strftime('%s', 'now') AS REAL),
-            completed_at = CAST(strftime('%s', 'now') AS REAL)
-        WHERE id = ?
-        """,
-        (int(downloaded_count), int(skipped_count), int(total_items), last_result, job_id),
-    )
+    if attempt_count is None:
+        connection.execute(
+            """
+            UPDATE job_queue
+            SET status = 'COMPLETED',
+                downloaded_count = ?,
+                skipped_count = ?,
+                total_items = ?,
+                last_result = ?,
+                updated_at = CAST(strftime('%s', 'now') AS REAL),
+                completed_at = CAST(strftime('%s', 'now') AS REAL)
+            WHERE id = ?
+            """,
+            (int(downloaded_count), int(skipped_count), int(total_items), last_result, job_id),
+        )
+    else:
+        connection.execute(
+            """
+            UPDATE job_queue
+            SET status = 'COMPLETED',
+                attempt_count = ?,
+                downloaded_count = ?,
+                skipped_count = ?,
+                total_items = ?,
+                last_result = ?,
+                updated_at = CAST(strftime('%s', 'now') AS REAL),
+                completed_at = CAST(strftime('%s', 'now') AS REAL)
+            WHERE id = ?
+            """,
+            (
+                int(attempt_count),
+                int(downloaded_count),
+                int(skipped_count),
+                int(total_items),
+                last_result,
+                job_id,
+            ),
+        )
     connection.commit()
 
 

@@ -128,6 +128,8 @@ Key behavior:
 - processing.recheck_intervals_minutes
 	- Re-check cadence list used by the queue system.
 	- Values are interpreted as minutes.
+	- Every queued job is re-checked using each interval in order until intervals are exhausted.
+	- This allows late-added release assets to be discovered in later re-checks.
 	- Invalid or non-positive values are ignored; defaults are used when the list is missing or fully invalid.
 - mailbox.folder
 	- Gmail folder used for reading and post-processing notification emails.
@@ -148,6 +150,25 @@ Destination directory resolution order (most specific first):
 4. paths.default_download_dir
 
 Release-type keys are normalized to lowercase with hyphens (for example: release, pre-release).
+
+## Staging Folders
+
+Downloads are staged under the resolved base path in a GHAADD working area:
+
+- <resolved-base-path>/GHAADD/Processing
+- <resolved-base-path>/GHAADD/Done
+
+Each release is stored under a repository parent folder:
+
+- <resolved-base-path>/GHAADD/Processing/<owner> (<repo>)/<type of release>/<release-folder>
+- <resolved-base-path>/GHAADD/Done/<owner> (<repo>)/<type of release>/<release-folder>
+
+Behavior:
+
+- During retries/rechecks, files are updated in Processing.
+- Repository folders include release type as an extra path segment (for example: Pre-release, Release).
+- When a release/tag is not found on GitHub (SKIP: release_not_found), the job is completed immediately and not rechecked.
+- When a queue job reaches a terminal state (COMPLETED or FAILED with no retries left), its release folder is moved to Done.
 
 ## Source Archive Naming
 

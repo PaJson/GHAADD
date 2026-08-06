@@ -11,13 +11,33 @@ from db_manager import (
     reschedule_job,
     save_job_skip_details,
 )
-from downloader import download_release
+from downloader import download_release, move_processing_folder_to_done
 from listener import get_pending_notifications, mark_as_read_and_delete
 from payload_types import DownloadReleaseResult, NotificationPayload, QueuedNotificationPayload, SkippedItemPayload
 from typing import Literal, Optional, Tuple, Union, overload
 
 
 GITHUB_API_VERSION = "2022-11-28"
+
+
+def _finalize_staged_release_folder(working_dir: Optional[str]) -> None:
+    """Move a terminal job's staging folder from Processing to Done."""
+    if not working_dir:
+        return
+
+    try:
+        done_dir = move_processing_folder_to_done(working_dir)
+    except OSError as exc:
+        print(f"   ⚠️ Could not move staging folder to Done: {exc}")
+        return
+
+    if done_dir:
+        print(f"   📁 Finalized artifacts: {done_dir}")
+
+
+def _is_terminal_skip_reason(skip_reason: Optional[str]) -> bool:
+    """Return True when a SKIP result should end the re-check plan immediately."""
+    return skip_reason in {"release_not_found"}
 
 
 @overload
@@ -190,7 +210,7 @@ def ingest_notifications_once(connection, github_token: Optional[str]) -> int:
 
 
 def process_queue_once(connection, github_token: Optional[str]) -> None:
-    """Process due queue rows, compare commit hashes, and apply retry intervals."""
+    """Process due queue rows and re-check each job using configured intervals."""
     retry_intervals_minutes = get_recheck_intervals_minutes()
     now_timestamp = time.time()
     due_jobs = get_due_jobs(connection, now_timestamp)
@@ -243,6 +263,8 @@ def process_queue_once(connection, github_token: Optional[str]) -> None:
                 "skipped_count": 0,
                 "total_items": 0,
                 "skipped_items": [],
+                "working_dir": None,
+                "skip_reason": None,
             }
 
         if isinstance(result, dict):
@@ -251,43 +273,47 @@ def process_queue_once(connection, github_token: Optional[str]) -> None:
             skipped_count = int(result.get("skipped_count", 0) or 0)
             total_items = int(result.get("total_items", 0) or 0)
             skipped_items: list[SkippedItemPayload] = result.get("skipped_items") or []
+            working_dir = result.get("working_dir")
+            skip_reason = result.get("skip_reason")
         else:
             result_status = "SUCCESS" if result is True else ("SKIP" if result == "SKIP" else "FAILED")
             downloaded_count = 0
             skipped_count = 0
             total_items = 0
             skipped_items: list[SkippedItemPayload] = []
+            working_dir = None
+            skip_reason = None
 
         current_attempt_count = attempt_count + 1
+        latest_commit = current_commit or expected_commit
 
-        if result_status in ("SUCCESS", "SKIP"):
+        if result_status == "SKIP" and _is_terminal_skip_reason(skip_reason):
             mark_job_completed(
                 connection,
                 job_id,
+                attempt_count=current_attempt_count,
                 downloaded_count=downloaded_count,
                 skipped_count=skipped_count,
                 total_items=total_items,
                 last_result=result_status,
             )
             save_job_skip_details(connection, job_id, current_attempt_count, skipped_items)
-            if result_status == "SUCCESS":
-                print("   ✅ Job completed successfully.")
-            else:
-                print("   ⏭️ Job completed with SKIP (release not found).")
+            print(
+                "   ⏹️ Release/tag not found; marked COMPLETED immediately "
+                f"at attempt={current_attempt_count}."
+            )
             print(f"   📊 Files: downloaded={downloaded_count}, skipped={skipped_count}, total={total_items}")
+            _finalize_staged_release_folder(working_dir)
             continue
 
-        next_attempt_count = attempt_count + 1
-        latest_commit = current_commit or expected_commit
-
-        if next_attempt_count <= len(retry_intervals_minutes):
-            delay_minutes = retry_intervals_minutes[next_attempt_count - 1]
+        if current_attempt_count <= len(retry_intervals_minutes):
+            delay_minutes = retry_intervals_minutes[current_attempt_count - 1]
             next_check_time = time.time() + (delay_minutes * 60)
             reschedule_job(
                 connection,
                 job_id,
                 next_check_time=next_check_time,
-                attempt_count=next_attempt_count,
+                attempt_count=current_attempt_count,
                 expected_commit=latest_commit,
                 downloaded_count=downloaded_count,
                 skipped_count=skipped_count,
@@ -296,27 +322,45 @@ def process_queue_once(connection, github_token: Optional[str]) -> None:
             )
             save_job_skip_details(connection, job_id, current_attempt_count, skipped_items)
             print(
-                f"   🔄 Download failed; rescheduled in {delay_minutes} minute(s) "
-                f"(attempt={next_attempt_count})."
+                f"   🔄 Re-check scheduled in {delay_minutes} minute(s) "
+                f"(attempt={current_attempt_count}, last_status={result_status})."
             )
             print(f"   📊 Files: downloaded={downloaded_count}, skipped={skipped_count}, total={total_items}")
         else:
-            mark_job_failed(
-                connection,
-                job_id,
-                attempt_count=next_attempt_count,
-                expected_commit=latest_commit,
-                downloaded_count=downloaded_count,
-                skipped_count=skipped_count,
-                total_items=total_items,
-                last_result="FAILED",
-            )
+            if result_status in ("SUCCESS", "SKIP"):
+                mark_job_completed(
+                    connection,
+                    job_id,
+                    attempt_count=current_attempt_count,
+                    downloaded_count=downloaded_count,
+                    skipped_count=skipped_count,
+                    total_items=total_items,
+                    last_result=result_status,
+                )
+            else:
+                mark_job_failed(
+                    connection,
+                    job_id,
+                    attempt_count=current_attempt_count,
+                    expected_commit=latest_commit,
+                    downloaded_count=downloaded_count,
+                    skipped_count=skipped_count,
+                    total_items=total_items,
+                    last_result="FAILED",
+                )
             save_job_skip_details(connection, job_id, current_attempt_count, skipped_items)
-            print(
-                "   ❌ Download failed; no retry intervals remaining. "
-                f"Marked FAILED at attempt={next_attempt_count}."
-            )
+            if result_status in ("SUCCESS", "SKIP"):
+                print(
+                    "   ✅ Re-check plan complete; marked COMPLETED "
+                    f"at attempt={current_attempt_count} (last_status={result_status})."
+                )
+            else:
+                print(
+                    "   ❌ Re-check plan complete; marked FAILED "
+                    f"at attempt={current_attempt_count}."
+                )
             print(f"   📊 Files: downloaded={downloaded_count}, skipped={skipped_count}, total={total_items}")
+            _finalize_staged_release_folder(working_dir)
 
 
 def run_ingest_and_queue_cycle(connection, github_token: Optional[str]) -> None:

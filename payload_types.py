@@ -149,6 +149,8 @@ class DownloadResultPayload(TypedDict):
     skipped_count: int
     total_items: int
     skipped_items: list[SkippedItemPayload]
+    working_dir: Optional[str]
+    skip_reason: Optional[str]
 
 
 DownloadReleaseResult = Union[bool, str, DownloadResultPayload]
