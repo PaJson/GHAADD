@@ -260,6 +260,7 @@ def process_queue_once(connection, github_token: Optional[str]) -> None:
         tag = job["tag"]
         release_type = job["release_type"]
         attempt_count = int(job["attempt_count"])
+        created_at = float(job["created_at"])
         expected_commit = job["expected_commit"]
 
         print(
@@ -341,7 +342,7 @@ def process_queue_once(connection, github_token: Optional[str]) -> None:
 
         if current_attempt_count <= len(retry_intervals_minutes):
             delay_minutes = retry_intervals_minutes[current_attempt_count - 1]
-            next_check_time = time.time() + (delay_minutes * 60)
+            next_check_time = created_at + (delay_minutes * 60)
             reschedule_job(
                 connection,
                 job_id,

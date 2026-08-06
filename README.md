@@ -132,7 +132,8 @@ Key behavior:
 - processing.recheck_intervals_minutes
 	- Re-check cadence list used by the queue system.
 	- Values are interpreted as minutes.
-	- Every queued job is re-checked using each interval in order until intervals are exhausted.
+	- Every queued job is re-checked at each listed age from the original queue time.
+	- Example: [5, 15, 60] means checks at queue time, then at +5, +15, and +60 minutes.
 	- This allows late-added release assets to be discovered in later re-checks.
 	- Invalid or non-positive values are ignored; defaults are used when the list is missing or fully invalid.
 - mailbox.folder
