@@ -70,6 +70,14 @@ First-time setup:
 2. Update paths and other values in config.json for your machine.
 3. Optional: create or edit mapping.json for repository destination mapping.
 
+Path note:
+
+- Use local paths (including in the config.json example below) that match your operating system.
+- Do not copy Windows-style paths on Linux/macOS, or POSIX paths on Windows.
+- Examples:
+	- Windows: D:\\Users\\YourUser\\Downloads
+	- Linux/macOS: /home/youruser/Downloads
+
 ## Running
 
 Default run:
@@ -82,6 +90,8 @@ CLI options:
 
 - --purge-state: Delete local state.db and exit.
 - --smoke-test: Run internal smoke tests and exit.
+- --doctor: Run environment and cross-platform diagnostics.
+	- Add --json to output the diagnostics report as JSON.
 - --mapping-validate: Validate mapping.json schema and print errors/warnings.
 	- Add --json to output the validation result as JSON.
 - --queue-status: Print queue counts, due-now count, next pending job, and recent jobs.
@@ -137,7 +147,7 @@ Example:
 		"jitter_max_seconds": 30
 	},
 	"paths": {
-		"default_download_dir": "D:\\Users\\YourUser\\Downloads",
+		"default_download_dir": "<set-local-download-path>",
 		"repo_paths": {},
 		"release_type_paths": {},
 		"repo_release_type_paths": {}

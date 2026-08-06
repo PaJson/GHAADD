@@ -9,6 +9,7 @@ from db_manager import (
     purge_state_database,
     supersede_pending_jobs_by_ids,
 )
+from doctor import run_doctor
 from mapping_manager import validate_mapping_schema
 from queue_reporting import build_queue_status_options, print_queue_status
 
@@ -26,10 +27,11 @@ def parse_cli_args(args: list[str], version: str) -> argparse.Namespace:
     parser.add_argument("--purge-state", action="store_true", help="Delete the local state database (state.db).")
     parser.add_argument("--smoke-test", action="store_true", help="Run internal smoke tests for download behavior.")
     parser.add_argument("--mapping-validate", action="store_true", help="Validate mapping.json schema and report issues.")
+    parser.add_argument("--doctor", action="store_true", help="Run environment and cross-platform diagnostics.")
 
     queue_group = parser.add_argument_group("queue status/reporting options")
     queue_group.add_argument("--queue-status", action="store_true", help="Print current queue counts and scheduling details.")
-    queue_group.add_argument("--json", action="store_true", help="Output --queue-status as JSON.")
+    queue_group.add_argument("--json", action="store_true", help="Output JSON for compatible commands (queue-status, mapping-validate, doctor).")
     queue_group.add_argument("--queue-all", action="store_true", help="Show all matching jobs instead of a limited list.")
     queue_group.add_argument("--queue-limit", type=int, help="Show up to N jobs in history (0 means all).")
     queue_group.add_argument("--queue-hours", type=float, help="Filter jobs created in the last H hours.")
@@ -72,6 +74,36 @@ def parse_cli_args(args: list[str], version: str) -> argparse.Namespace:
 
 def handle_cli_command(parsed_args: argparse.Namespace, run_smoke_tests: Callable[[], None]) -> bool:
     """Execute one-shot command-line operations after parsing."""
+    if parsed_args.doctor:
+        doctor_report = run_doctor()
+        if parsed_args.json:
+            print(json.dumps(doctor_report, indent=2))
+            return True
+
+        if doctor_report["ok"]:
+            print("Doctor checks passed.")
+        else:
+            print("Doctor checks found blocking issues.")
+
+        print(f"Platform: {doctor_report['platform']}")
+
+        if doctor_report["errors"]:
+            print("Errors:")
+            for error_text in doctor_report["errors"]:
+                print(f"- {error_text}")
+
+        if doctor_report["warnings"]:
+            print("Warnings:")
+            for warning_text in doctor_report["warnings"]:
+                print(f"- {warning_text}")
+
+        if doctor_report["checks"]:
+            print("Checks:")
+            for check_text in doctor_report["checks"]:
+                print(f"- {check_text}")
+
+        return True
+
     if parsed_args.mapping_validate:
         validation_result = validate_mapping_schema()
         if parsed_args.json:

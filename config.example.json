@@ -16,7 +16,7 @@
     "jitter_max_seconds": 30
   },
   "paths": {
-    "default_download_dir": "D:\\Users\\YourUser\\Downloads",
+    "default_download_dir": "<set-local-download-path>",
     "repo_paths": {},
     "release_type_paths": {},
     "repo_release_type_paths": {}
