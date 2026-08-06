@@ -55,14 +55,14 @@ def _build_staging_directories(base_download_dir: str) -> tuple[str, str]:
 
 
 def _build_repo_parent_folder(repo: str) -> str:
-    """Return a safe parent folder name like 'owner (repo)' from 'owner/repo'."""
+    """Return a safe parent folder name like 'repo (owner)' from 'owner/repo'."""
     if not repo:
         return "unknown (unknown)"
 
     owner, repo_name = (repo.split("/", 1) + [""])[:2]
     safe_owner = sanitize_folder_name(owner) or "unknown"
     safe_repo_name = sanitize_folder_name(repo_name or owner) or "unknown"
-    return f"{safe_owner} ({safe_repo_name})"
+    return f"{safe_repo_name} ({safe_owner})"
 
 
 def move_processing_folder_to_done(working_dir: str) -> Optional[str]:

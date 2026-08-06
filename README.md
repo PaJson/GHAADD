@@ -78,6 +78,10 @@ CLI options:
 	- Add --queue-report-csv [PATH] to export the report section to a CSV file.
 		- When PATH is omitted, a timestamped filename is auto-generated in the current working directory.
 	- Includes per-job file counters: downloaded, skipped, and total items.
+	- JSON output includes previous successful baseline fields on recent successful jobs:
+		- previous_success_tag
+		- previous_success_total_items
+		- file_count_delta_vs_previous_success
 	- Queue status also includes skipped-item detail previews (when available) for listed jobs.
 - --once: Force single-run mode even when polling is enabled.
 - --poll: Force polling mode for this run.
@@ -160,8 +164,8 @@ Downloads are staged under the resolved base path in a GHAADD working area:
 
 Each release is stored under a repository parent folder:
 
-- <resolved-base-path>/GHAADD/Processing/<owner> (<repo>)/<type of release>/<release-folder>
-- <resolved-base-path>/GHAADD/Done/<owner> (<repo>)/<type of release>/<release-folder>
+- <resolved-base-path>/GHAADD/Processing/<repo> (<owner>)/<type of release>/<release-folder>
+- <resolved-base-path>/GHAADD/Done/<repo> (<owner>)/<type of release>/<release-folder>
 
 Behavior:
 

@@ -518,3 +518,32 @@ def save_job_skip_details(connection, job_id, attempt_count, skipped_items):
         rows,
     )
     connection.commit()
+
+
+def get_previous_successful_completed_job(connection, repo, release_type, exclude_job_id):
+    """Return the previous successful completed job for the same repo/release_type."""
+    return connection.execute(
+        """
+        SELECT
+            id,
+            repo,
+            tag,
+            release_type,
+            total_items,
+            downloaded_count,
+            skipped_count,
+            completed_at
+        FROM job_queue
+        WHERE id <> ?
+          AND status = 'COMPLETED'
+          AND last_result = 'SUCCESS'
+          AND repo = ?
+          AND (
+                release_type = ?
+                OR (release_type IS NULL AND ? IS NULL)
+              )
+        ORDER BY completed_at DESC, id DESC
+        LIMIT 1
+        """,
+        (int(exclude_job_id), repo, release_type, release_type),
+    ).fetchone()

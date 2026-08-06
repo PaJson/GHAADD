@@ -5,6 +5,7 @@ import time
 from config_manager import get_max_emails_to_process, get_recheck_intervals_minutes
 from db_manager import (
     enqueue_job,
+    get_previous_successful_completed_job,
     get_due_jobs,
     mark_job_completed,
     mark_job_failed,
@@ -38,6 +39,38 @@ def _finalize_staged_release_folder(working_dir: Optional[str]) -> None:
 def _is_terminal_skip_reason(skip_reason: Optional[str]) -> bool:
     """Return True when a SKIP result should end the re-check plan immediately."""
     return skip_reason in {"release_not_found"}
+
+
+def _warn_if_file_count_changed_from_previous_success(
+    connection,
+    job_id: int,
+    repo: str,
+    release_type: Optional[str],
+    current_total_items: int,
+) -> None:
+    """Print a warning when the final successful file count differs from the previous release."""
+    previous_job = get_previous_successful_completed_job(
+        connection,
+        repo=repo,
+        release_type=release_type,
+        exclude_job_id=job_id,
+    )
+    if previous_job is None:
+        return
+
+    previous_total_items = int(previous_job["total_items"] or 0)
+    if previous_total_items == int(current_total_items):
+        return
+
+    delta = int(current_total_items) - previous_total_items
+    delta_sign = "+" if delta > 0 else ""
+    previous_tag = previous_job["tag"] or "unknown"
+    print(
+        "   ⚠️ Sanity check: file count changed versus previous successful release "
+        f"for {repo} ({release_type or 'Release'}). "
+        f"Current={current_total_items}, Previous={previous_total_items} "
+        f"(tag={previous_tag}, delta={delta_sign}{delta})."
+    )
 
 
 @overload
@@ -337,6 +370,14 @@ def process_queue_once(connection, github_token: Optional[str]) -> None:
                     total_items=total_items,
                     last_result=result_status,
                 )
+                if result_status == "SUCCESS":
+                    _warn_if_file_count_changed_from_previous_success(
+                        connection,
+                        job_id=job_id,
+                        repo=repo,
+                        release_type=release_type,
+                        current_total_items=total_items,
+                    )
             else:
                 mark_job_failed(
                     connection,

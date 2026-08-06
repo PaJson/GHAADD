@@ -76,6 +76,9 @@ def _build_queue_job_payload(
     row,
     skip_detail_count: int,
     skipped_items_preview: list[SkippedItemPreview],
+    previous_success_tag: Optional[str] = None,
+    previous_success_total_items: Optional[int] = None,
+    file_count_delta_vs_previous_success: Optional[int] = None,
 ) -> QueueJobPayload:
     """Build a typed queue-job payload from a database row."""
     return {
@@ -98,6 +101,9 @@ def _build_queue_job_payload(
         "updated_at_readable": _format_timestamp(row["updated_at"]),
         "completed_at": float(row["completed_at"]) if row["completed_at"] is not None else None,
         "completed_at_readable": _format_timestamp(row["completed_at"]),
+        "previous_success_tag": previous_success_tag,
+        "previous_success_total_items": previous_success_total_items,
+        "file_count_delta_vs_previous_success": file_count_delta_vs_previous_success,
         "skip_detail_count": skip_detail_count,
         "skipped_items_preview": skipped_items_preview,
     }
@@ -508,6 +514,41 @@ def _collect_queue_status_data(
             recent_params.append(int(limit))
         recent_jobs = connection.execute(recent_query, tuple(recent_params)).fetchall()
 
+        previous_success_comparison_by_job_id: dict[int, tuple[str, int, int]] = {}
+        for job in recent_jobs:
+            if job["status"] != "COMPLETED" or job["last_result"] != "SUCCESS":
+                continue
+
+            previous_success_row = connection.execute(
+                """
+                SELECT
+                    tag,
+                    total_items
+                FROM job_queue
+                WHERE id <> ?
+                  AND status = 'COMPLETED'
+                  AND last_result = 'SUCCESS'
+                  AND repo = ?
+                  AND (
+                        release_type = ?
+                        OR (release_type IS NULL AND ? IS NULL)
+                      )
+                ORDER BY completed_at DESC, id DESC
+                LIMIT 1
+                """,
+                (int(job["id"]), job["repo"], job["release_type"], job["release_type"]),
+            ).fetchone()
+            if previous_success_row is None:
+                continue
+
+            previous_total_items = int(previous_success_row["total_items"] or 0)
+            current_total_items = int(job["total_items"] or 0)
+            previous_success_comparison_by_job_id[int(job["id"])] = (
+                str(previous_success_row["tag"] or "unknown"),
+                previous_total_items,
+                current_total_items - previous_total_items,
+            )
+
         skip_detail_rows = []
         skip_detail_count_rows = []
         details_job_ids = {int(job["id"]) for job in recent_jobs}
@@ -666,11 +707,15 @@ def _collect_queue_status_data(
 
     recent_jobs_payload: list[QueueJobPayload] = []
     for job in recent_jobs:
+        previous_comparison = previous_success_comparison_by_job_id.get(int(job["id"]))
         recent_jobs_payload.append(
             _build_queue_job_payload(
                 job,
                 skip_detail_count_map.get(int(job["id"]), 0),
                 skip_detail_preview_map.get(int(job["id"]), []),
+                previous_success_tag=previous_comparison[0] if previous_comparison else None,
+                previous_success_total_items=previous_comparison[1] if previous_comparison else None,
+                file_count_delta_vs_previous_success=previous_comparison[2] if previous_comparison else None,
             )
         )
 

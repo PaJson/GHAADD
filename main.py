@@ -6,7 +6,7 @@ from config_manager import get_polling_settings
 from datetime import datetime
 from dotenv import load_dotenv
 
-__version__ = "0.6.7-beta"
+__version__ = "0.7.0-beta"
 
 # Load environment variables from .env.
 load_dotenv()
