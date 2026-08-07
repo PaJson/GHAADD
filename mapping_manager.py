@@ -70,7 +70,9 @@ def save_mapping(mapping_payload: dict[str, list[dict[str, Any]]]) -> None:
     normalized_payload = _normalize_mapping_payload(mapping_payload)
     normalized_payload["repositories"] = sorted(
         normalized_payload["repositories"],
-        key=lambda entry: str(entry.get("name") or "").strip().lower(),
+        key=lambda entry: str(
+            entry.get("nicename") or entry.get("name") or ""
+        ).strip().lower(),
     )
     with open(file_path, "w", encoding="utf-8") as mapping_file:
         json.dump(normalized_payload, mapping_file, indent=2)
