@@ -469,8 +469,12 @@ def process_queue_once(connection, github_token: Optional[str]) -> None:
             continue
 
         if current_attempt_count <= len(retry_intervals_minutes):
-            delay_minutes = retry_intervals_minutes[current_attempt_count - 1]
-            next_check_time = created_at + (delay_minutes * 60)
+            target_age_minutes = retry_intervals_minutes[current_attempt_count - 1]
+            next_check_time = created_at + (target_age_minutes * 60)
+
+            # Calculate remaining delay relative to right now
+            remaining_minutes = max(0, int(round((next_check_time - time.time()) / 60)))
+
             reschedule_job(
                 connection,
                 job_id,
@@ -484,8 +488,8 @@ def process_queue_once(connection, github_token: Optional[str]) -> None:
             )
             save_job_skip_details(connection, job_id, current_attempt_count, skipped_items)
             print(
-                f"   🔄 Re-check scheduled in {delay_minutes} minute(s) "
-                f"(attempt={current_attempt_count}, last_status={result_status})."
+                f"   🔄 Re-check scheduled in {remaining_minutes} minute(s) "
+                f"(target task age: {target_age_minutes}m, attempt={current_attempt_count}, last_status={result_status})."
             )
             print(f"   📊 Files: downloaded={downloaded_count}, skipped={skipped_count}, total={total_items}")
         else:
