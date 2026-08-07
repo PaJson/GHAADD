@@ -35,14 +35,39 @@ class TeeStream:
         self.primary_stream = primary_stream
         self.secondary_stream = secondary_stream
 
+    def _disable_secondary_stream(self, exc):
+        if self.secondary_stream is None:
+            return
+
+        failed_stream = self.secondary_stream
+        self.secondary_stream = None
+        try:
+            failed_stream.close()
+        except OSError:
+            pass
+
+        print(
+            f"Logging disabled after file stream failure: {exc}",
+            file=_ORIGINAL_STDERR,
+        )
+
     def write(self, data):
         self.primary_stream.write(data)
-        self.secondary_stream.write(data)
+        if self.secondary_stream is not None:
+            try:
+                self.secondary_stream.write(data)
+                self.secondary_stream.flush()
+            except (OSError, ValueError) as exc:
+                self._disable_secondary_stream(exc)
         return len(data)
 
     def flush(self):
         self.primary_stream.flush()
-        self.secondary_stream.flush()
+        if self.secondary_stream is not None:
+            try:
+                self.secondary_stream.flush()
+            except (OSError, ValueError) as exc:
+                self._disable_secondary_stream(exc)
 
     def isatty(self):
         return self.primary_stream.isatty()
@@ -65,7 +90,7 @@ def setup_terminal_logging(config):
         os.makedirs(log_dir, exist_ok=True)
         filename = datetime.now().strftime("%Y%m%d_%H%M%S") + ".log"
         log_path = os.path.join(log_dir, filename)
-        log_stream = open(log_path, "a", encoding="utf-8")
+        log_stream = open(log_path, "a", encoding="utf-8", buffering=1)
     except OSError as exc:
         print(f"Logging setup failed: {exc}", file=sys.stderr)
         return None
