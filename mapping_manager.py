@@ -68,6 +68,10 @@ def save_mapping(mapping_payload: dict[str, list[dict[str, Any]]]) -> None:
     """Persist mapping payload to mapping.json."""
     file_path = _mapping_file_path()
     normalized_payload = _normalize_mapping_payload(mapping_payload)
+    normalized_payload["repositories"] = sorted(
+        normalized_payload["repositories"],
+        key=lambda entry: str(entry.get("name") or "").strip().lower(),
+    )
     with open(file_path, "w", encoding="utf-8") as mapping_file:
         json.dump(normalized_payload, mapping_file, indent=2)
         mapping_file.write("\n")
