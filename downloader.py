@@ -387,7 +387,7 @@ def download_all_assets(
     state_enabled = is_state_persistence_enabled()
     state_db = open_database() if state_enabled else None
     if state_db is not None:
-        prune_release_state(state_db, release_key, {item["key"] for item in download_queue})
+        prune_release_state(state_db, release_key, {item["key"] for item in download_queue}, download_dir)
         release_state = load_release_state(state_db, release_key)
     else:
         release_state = {}
@@ -464,9 +464,11 @@ def download_all_assets(
                     file_name = resolved_source_name
 
                 file_path: Optional[str] = None
+                rel_file_path: Optional[str] = None
                 force_redownload_source = False
                 if file_name is not None:
                     file_path = os.path.join(final_download_dir, file_name)
+                    rel_file_path = os.path.relpath(file_path, download_dir)
                     if is_source_item and os.path.exists(file_path):
                         if normal_downloaded_count == 0:
                             print(
@@ -516,11 +518,12 @@ def download_all_assets(
                                     release_key,
                                     item_key,
                                     file_name,
-                                    file_path,
+                                    rel_file_path,
                                     expected_signature,
                                     remote_size,
                                     remote_last_modified,
                                     remote_etag,
+                                    download_dir,
                                 )
                                 refresh_release_state()
                             print(f"   ⏭️ Skipping ({i}/{total_files}): {file_name} already exists and matches remote metadata.")
@@ -551,6 +554,7 @@ def download_all_assets(
                                     file_name = f"attestation-{i}.json"
 
                             file_path = os.path.join(final_download_dir, file_name)
+                            rel_file_path = os.path.relpath(file_path, download_dir)
                             temp_file_path = f"{file_path}.part"
 
                             remote_size = None
@@ -581,11 +585,12 @@ def download_all_assets(
                                         release_key,
                                         item_key,
                                         file_name,
-                                        file_path,
+                                        rel_file_path,
                                         expected_signature,
                                         remote_size,
                                         remote_last_modified,
                                         remote_etag,
+                                        download_dir,
                                     )
                                     refresh_release_state()
                                 print(f"   ⏭️ Skipping ({i}/{total_files}): {file_name} already exists and matches remote metadata.")
@@ -618,11 +623,12 @@ def download_all_assets(
                                     release_key,
                                     item_key,
                                     file_name,
-                                    file_path,
+                                    rel_file_path,
                                     expected_signature,
                                     remote_size,
                                     remote_last_modified,
                                     remote_etag,
+                                    download_dir,
                                 )
                                 refresh_release_state()
 

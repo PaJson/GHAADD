@@ -203,11 +203,13 @@ def load_release_state(connection, release_key):
     return state
 
 
-def save_state_entry(connection, release_key, item_key, file_name, file_path, expected_signature, remote_size, remote_last_modified, remote_etag):
-    """Insert or update one asset-state record for a release item."""
+def save_state_entry(connection, release_key, item_key, file_name, rel_file_path, expected_signature, remote_size, remote_last_modified, remote_etag, base_dir):
+    """Insert or update one asset-state record using a relative path."""
+    # Reconstruct the absolute path for local filesystem checks
+    abs_path = os.path.join(base_dir, rel_file_path)
     try:
-        local_size = os.path.getsize(file_path)
-        local_mtime = os.path.getmtime(file_path)
+        local_size = os.path.getsize(abs_path)
+        local_mtime = os.path.getmtime(abs_path)
     except OSError:
         local_size = None
         local_mtime = None
@@ -229,15 +231,27 @@ def save_state_entry(connection, release_key, item_key, file_name, file_path, ex
             local_size = excluded.local_size,
             local_mtime = excluded.local_mtime
         """,
-        (release_key, item_key, file_name, file_path, remote_size, remote_last_modified, remote_etag, expected_signature, local_size, local_mtime),
+        (release_key, item_key, file_name, rel_file_path, remote_size, remote_last_modified, remote_etag, expected_signature, local_size, local_mtime),
     )
     connection.commit()
 
 
-def prune_release_state(connection, release_key, valid_item_keys):
-    """Delete stale asset-state rows that are missing or no longer valid."""
+def prune_release_state(connection, release_key, valid_item_keys, base_dir):
+    """Delete stale asset-state rows using dynamically constructed absolute paths."""
     rows = connection.execute("SELECT item_key, file_path FROM asset_state WHERE release_key = ?", (release_key,)).fetchall()
-    stale_keys = [row["item_key"] for row in rows if row["item_key"] not in valid_item_keys or not row["file_path"] or not os.path.exists(row["file_path"])]
+    
+    stale_keys = []
+    for row in rows:
+        item_key = row["item_key"]
+        rel_path = row["file_path"]
+        
+        if not rel_path:
+            stale_keys.append(item_key)
+            continue
+            
+        abs_path = os.path.join(base_dir, rel_path)
+        if item_key not in valid_item_keys or not os.path.exists(abs_path):
+            stale_keys.append(item_key)
 
     if stale_keys:
         connection.executemany(
