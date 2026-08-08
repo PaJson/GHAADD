@@ -14,8 +14,11 @@ Automated Python utility that reads GitHub release notification emails from Gmai
 - Uses local SQLite state to skip files that are already up to date.
 - Replaces older pending jobs with the newest notification for the same repo/tag/release type.
 - Supersedes older queue jobs when a release tag commit changes.
+- Supports repository-specific queue re-check intervals via mapping.json overrides.
 - Supports configurable polling mode with jitter.
+- Prints app version at startup and prints the next pending job after each ingest/process cycle.
 - Supports optional per-run terminal logging to timestamped .log files.
+- Writes lifecycle logs for completed moves, superseded partial moves, and typed warnings.
 - Supports config-based download path routing by repo and release type.
 
 ## Requirements
@@ -82,6 +85,7 @@ Each repository entry supports these fields:
 - destination: optional destination base path for custom routing
 - subfolder: optional subfolder path to append under the destination
 - limit: optional integer warning threshold for the number of folders at the destination (`0` disables checks)
+- recheck_intervals_minutes: optional list of positive integers to override queue re-check cadence for this repository
 - active: timestamp of the last activity for that repository entry
 
 When a new repository is seen, the app fills in a default skeleton entry with:
@@ -98,12 +102,13 @@ Example:
 
 ```json
 {
-  "name": "example-org/example-repo",
-  "nicename": "My name for this repository",
-  "destination": "X:\\Path\\To\\Destination",
+	"name": "example-org/example-repo",
+	"nicename": "My name for this repository",
+	"destination": "X:\\Path\\To\\Destination",
 	"subfolder": "@GitHub/Nightly",
-  "limit": 25,
-  "active": "2026-08-08_14-59"
+	"limit": 25,
+	"recheck_intervals_minutes": [3, 10, 30, 120],
+	"active": "2026-08-08_14-59"
 }
 ```
 
@@ -132,6 +137,8 @@ Destination behavior:
 
 If `limit` is `0`, no folder-count warning is applied for that repository.
 If `limit` is greater than `0`, the app warns when the repository destination appears to contain too many folders.
+
+If `recheck_intervals_minutes` is set for a repository, those values are used for that repository's re-check schedule. If the list is missing or invalid, the global `processing.recheck_intervals_minutes` values are used.
 
 The doctor check validates the mapping schema and warns when destination values are empty or when path styles do not match the current OS.
 
@@ -192,6 +199,8 @@ Polling behavior:
 	- --poll is provided, or
 	- polling.enabled is true in config.json.
 - --once always overrides polling and runs a single cycle.
+- Polling output includes a computed next poll timestamp.
+- After each ingest/process cycle, the app prints the next scheduled pending job (or `NONE` when the queue is empty).
 
 ## Configuration (config.json)
 
@@ -246,6 +255,7 @@ Key behavior:
 	- Example: [5, 15, 60] means checks at queue time, then at +5, +15, and +60 minutes.
 	- This allows late-added release assets to be discovered in later re-checks.
 	- Invalid or non-positive values are ignored; defaults are used when the list is missing or fully invalid.
+	- Per-repository mapping overrides can replace this cadence for specific repositories.
 - mailbox.folder
 	- Gmail folder used for reading and post-processing notification emails.
 	- Defaults to GitHubNotifications when missing or empty.
@@ -262,6 +272,10 @@ Key behavior:
 	- true writes all terminal output (stdout and stderr) to a .log file for this run.
 	- Log files are written under: paths.default_download_dir/folders.ghaadd_root/folders.logs.
 	- Each run creates a new log file named with app start time (format: YYYYMMDD_HHMMSS.log).
+	- The app also writes lifecycle files in the same logs directory:
+		- Complete.log: completed staging-folder finalizations.
+		- Partial.log: superseded incomplete staging folders moved to Partial.
+		- Warning.log: typed warning entries (for example API, destination, move, sanity-check, and supersede warnings).
 
 ## Download Path Routing
 
