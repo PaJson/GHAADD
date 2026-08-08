@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Any, Optional, TypedDict
 
 from config_manager import get_recheck_intervals_minutes
+from lifecycle_logger import log_warning
 
 
 class MappingValidationResult(TypedDict):
@@ -184,6 +185,10 @@ def upsert_repository_mapping(
     }
     repositories.append(skeleton_entry)
     save_mapping(mapping_payload)
+    log_warning(
+        "MAPPING",
+        f"Repository '{repo}' was added without a configured destination; it will use default routing until mapped.",
+    )
     return (True, False)
 
 
