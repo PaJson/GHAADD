@@ -144,7 +144,10 @@ def run_polling_loop(interval_seconds, jitter_min_seconds, jitter_max_seconds):
 
             jitter = random.randint(jitter_min_seconds, jitter_max_seconds)
             sleep_seconds = interval_seconds + jitter
-            print(f"Next poll in {sleep_seconds}s ({interval_seconds}s + {jitter}s jitter).\n")
+            next_poll_at = datetime.fromtimestamp(time.time() + sleep_seconds).strftime("%Y-%m-%d %H:%M:%S")
+            print(
+                f"Next poll in {sleep_seconds}s ({interval_seconds}s + {jitter}s jitter) @ {next_poll_at}.\n"
+            )
             time.sleep(sleep_seconds)
             cycle += 1
 

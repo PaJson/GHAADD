@@ -493,6 +493,33 @@ def get_pending_jobs(connection):
     ).fetchall()
 
 
+def get_next_pending_job(connection):
+    """Return the next scheduled pending job, or None when queue is empty."""
+    return connection.execute(
+        """
+        SELECT
+            id,
+            repo,
+            tag,
+            release_type,
+            status,
+            attempt_count,
+            next_check_time,
+            created_at,
+            expected_commit,
+            downloaded_count,
+            skipped_count,
+            total_items,
+            working_dir,
+            last_result
+        FROM job_queue
+        WHERE status = 'PENDING'
+        ORDER BY next_check_time ASC, id ASC
+        LIMIT 1
+        """
+    ).fetchone()
+
+
 def get_jobs_by_ids(connection, job_ids: Iterable[int]):
     """Return queue jobs for the provided IDs."""
     normalized_ids = sorted({int(job_id) for job_id in job_ids})

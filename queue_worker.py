@@ -7,6 +7,7 @@ from config_manager import get_folder_settings, get_max_emails_to_process, get_r
 from db_manager import (
     enqueue_job,
     get_jobs_by_ids,
+    get_next_pending_job,
     get_pending_jobs_for_release,
     get_pending_job_for_release,
     get_previous_successful_completed_job,
@@ -896,3 +897,17 @@ def run_ingest_and_queue_cycle(connection, github_token: Optional[str]) -> None:
     """Run one full cycle: ingest new emails, then process due queue jobs."""
     ingest_notifications_once(connection, github_token)
     process_queue_once(connection, github_token)
+
+    next_pending_job = get_next_pending_job(connection)
+    if next_pending_job is None:
+        print("Next pending job: NONE")
+        return
+
+    next_check_time_readable = time.strftime(
+        "%Y-%m-%d %H:%M:%S",
+        time.localtime(float(next_pending_job["next_check_time"])),
+    )
+    print(
+        "Next pending job: "
+        f"{next_pending_job['repo']} {next_pending_job['tag']} @ {next_check_time_readable}"
+    )
