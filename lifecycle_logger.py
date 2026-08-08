@@ -33,7 +33,7 @@ def log_completed_move(
 ) -> None:
     """Record a short completed-move line in Complete.log."""
     commit_label = (commit or "unknown")[:7]
-    message = f"Completed {repo} {tag} ({commit_label}) moved to {destination_path}"
+    message = f"Completed [{repo} {tag} ({commit_label})] moved to [{destination_path}]"
     _append_lifecycle_line("Complete.log", message)
 
 
@@ -45,5 +45,11 @@ def log_partial_move(
 ) -> None:
     """Record a short superseded-partial move line in Partial.log."""
     commit_label = (commit or "unknown")[:7]
-    message = f"Superseded {repo} {tag} ({commit_label}) moved to {destination_path}"
+    message = f"Superseded [{repo} {tag} ({commit_label})] moved to [{destination_path}]"
     _append_lifecycle_line("Partial.log", message)
+
+
+def log_warning(warning_type: str, message: str) -> None:
+    """Record a typed warning line in Warning.log."""
+    normalized_type = str(warning_type or "GENERAL").strip().upper() or "GENERAL"
+    _append_lifecycle_line("Warning.log", f"- [{normalized_type}] - {message}")

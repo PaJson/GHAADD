@@ -15,6 +15,7 @@ from config_manager import (
     load_config,
 )
 from email.utils import parsedate_tz, mktime_tz
+from lifecycle_logger import log_warning
 from mapping_manager import build_default_nicename, get_repository_mapping, load_mapping
 from payload_types import DownloadReleaseResult, DownloadResultPayload, ReleaseAssetQueueItem, SkippedItemPayload
 from requests.exceptions import ChunkedEncodingError, ConnectionError, Timeout
@@ -196,11 +197,13 @@ def _warn_if_destination_limit_exceeded(repo: Optional[str], repo_destination_ro
         return
 
     repo_label = str(repo or "unknown")
-    print(
-        "   ⚠️ Folder limit warning: "
+    warning_message = (
+        "Folder limit warning: "
         f"{repo_label} currently has {release_folder_count} folder(s) "
         f"in '{repo_destination_root}' (limit={folder_limit})."
     )
+    print(f"   ⚠️ {warning_message}")
+    log_warning("LIMIT", warning_message)
 
 
 def _move_complete_repo_tree(source_repo_dir: str, target_repo_root: str) -> int:
@@ -308,6 +311,7 @@ def move_complete_folders_to_mapped_destinations() -> dict[str, int]:
             if fallback_warning:
                 missing_destination_warnings += 1
                 print(f"⚠️ {fallback_warning}")
+                log_warning("DESTINATION", fallback_warning)
                 continue
 
             if not uses_mapping_destination:
@@ -375,6 +379,7 @@ def move_processing_folder_to_complete(working_dir: str, repo: Optional[str] = N
     )
     if fallback_warning:
         print(f"   ⚠️ {fallback_warning}")
+        log_warning("DESTINATION", fallback_warning)
     os.makedirs(base_destination, exist_ok=True)
 
     target_relative_path = relative_path

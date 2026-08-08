@@ -25,7 +25,7 @@ from asset_downloader import (
     move_processing_folder_to_complete,
     move_processing_folder_to_partial,
 )
-from lifecycle_logger import log_completed_move, log_partial_move
+from lifecycle_logger import log_completed_move, log_partial_move, log_warning
 from mailbox_listener import get_pending_notifications, mark_as_read_and_delete
 from mapping_manager import get_repository_recheck_intervals_minutes, upsert_repository_mapping
 from payload_types import DownloadReleaseResult, NotificationPayload, QueuedNotificationPayload, SkippedItemPayload
@@ -53,6 +53,7 @@ def _finalize_staged_release_folder(
         done_dir = move_processing_folder_to_complete(working_dir, repo=repo)
     except OSError as exc:
         print(f"   ⚠️ Could not move staging folder to {_COMPLETE_LABEL}: {exc}")
+        log_warning("MOVE", f"Could not move staging folder to {_COMPLETE_LABEL}: {exc}")
         return None
 
     if done_dir:
@@ -116,6 +117,7 @@ def _handle_superseded_pending_job_artifacts(
             superseded_dir = move_processing_folder_to_partial(working_dir)
         except OSError as exc:
             print(f"   ⚠️ Could not move incomplete superseded staging folder: {exc}")
+            log_warning("SUPERSEDE_MOVE", f"Could not move incomplete superseded staging folder: {exc}")
             return "none"
 
         if superseded_dir:
@@ -160,11 +162,12 @@ def _handle_superseded_pending_job_artifacts(
         commit=row["expected_commit"],
         write_complete_log=False,
     )
-    print(
-        "   [SUPERSEDE_FINALIZE] "
+    supersede_finalize_message = (
         f"{reason_code}: finalized staged artifacts for superseded pending job #{job_id} "
         f"({repo} {tag}, files={downloaded_count}+{skipped_count}/{total_items})."
     )
+    print(f"   [SUPERSEDE_FINALIZE] {supersede_finalize_message}")
+    log_warning("SUPERSEDE_FINALIZE", supersede_finalize_message)
     return "finalized"
 
 
@@ -194,12 +197,14 @@ def _warn_if_file_count_changed_from_previous_success(
     delta = int(current_total_items) - previous_total_items
     delta_sign = "+" if delta > 0 else ""
     previous_tag = previous_job["tag"] or "unknown"
-    print(
-        "   ⚠️ Sanity check: file count changed versus previous successful release "
+    warning_message = (
+        "Sanity check: file count changed versus previous successful release "
         f"for {repo} ({release_type or 'Release'}). "
         f"Current={current_total_items}, Previous={previous_total_items} "
         f"(tag={previous_tag}, delta={delta_sign}{delta})."
     )
+    print(f"   ⚠️ {warning_message}")
+    log_warning("SANITY_CHECK", warning_message)
 
 
 @overload
@@ -556,10 +561,12 @@ def process_selected_pending_jobs(connection, github_token: Optional[str], job_i
         elif current_commit:
             print(f"   ℹ️ Commit baseline discovered: {current_commit}")
         else:
-            print(
-                "   ⚠️ Could not resolve current commit hash from GitHub API "
+            warning_message = (
+                "Could not resolve current commit hash from GitHub API "
                 f"(reason={current_commit_reason or 'unavailable'})."
             )
+            print(f"   ⚠️ {warning_message}")
+            log_warning("API", warning_message)
 
         result: DownloadReleaseResult
         try:
@@ -791,10 +798,12 @@ def process_queue_once(connection, github_token: Optional[str]) -> None:
         elif current_commit:
             print(f"   ℹ️ Commit baseline discovered: {current_commit}")
         else:
-            print(
-                "   ⚠️ Could not resolve current commit hash from GitHub API "
+            warning_message = (
+                "Could not resolve current commit hash from GitHub API "
                 f"(reason={current_commit_reason or 'unavailable'})."
             )
+            print(f"   ⚠️ {warning_message}")
+            log_warning("API", warning_message)
 
         result: DownloadReleaseResult
         try:
