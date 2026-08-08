@@ -195,15 +195,20 @@ def validate_mapping_schema() -> MappingValidationResult:
             errors.append(f"{location} must be an object.")
             continue
 
+        display_location = location
+        display_suffix = ""
+        name = entry.get("name")
+        if isinstance(name, str) and name.strip():
+            display_suffix = f" ({name.strip()})"
+
         unknown_keys = sorted(
             key
             for key in entry.keys()
             if key not in {"name", "nicename", "destination", "subfolder", "limit", "active"}
         )
         for key in unknown_keys:
-            warnings.append(f"{location} has unknown key '{key}'.")
+            warnings.append(f"{display_location} has unknown key '{key}'.{display_suffix}")
 
-        name = entry.get("name")
         if not isinstance(name, str) or not name.strip():
             errors.append(f"{location}.name must be a non-empty string.")
         else:
@@ -211,7 +216,7 @@ def validate_mapping_schema() -> MappingValidationResult:
             if normalized_name in seen_names:
                 other_index = seen_names[normalized_name]
                 errors.append(
-                    f"{location}.name duplicates repositories[{other_index}].name ('{name}')."
+                    f"{display_location}.name duplicates repositories[{other_index}].name ('{name}').{display_suffix}"
                 )
             else:
                 seen_names[normalized_name] = index
@@ -223,24 +228,30 @@ def validate_mapping_schema() -> MappingValidationResult:
                     continue
                 if isinstance(field_value, int):
                     if field_value < 0:
-                        errors.append(f"{location}.limit must be an integer greater than or equal to 0.")
+                        errors.append(
+                            f"{display_location}.limit must be an integer greater than or equal to 0.{display_suffix}"
+                        )
                     continue
-                errors.append(f"{location}.limit must be an integer greater than or equal to 0.")
+                errors.append(
+                    f"{display_location}.limit must be an integer greater than or equal to 0.{display_suffix}"
+                )
                 continue
 
             if field_value is not None and not isinstance(field_value, str):
-                errors.append(f"{location}.{field_name} must be a string when provided.")
+                errors.append(
+                    f"{display_location}.{field_name} must be a string when provided.{display_suffix}"
+                )
 
         destination = entry.get("destination")
         if isinstance(destination, str) and not destination.strip():
             warnings.append(
-                f"{location}.destination is empty; files will keep default routing until configured."
+                f"{display_location}.destination is empty; files will keep default routing until configured.{display_suffix}"
             )
 
         nicename = entry.get("nicename")
         if isinstance(nicename, str) and not nicename.strip():
             warnings.append(
-                f"{location}.nicename is empty; default display name will be used."
+                f"{display_location}.nicename is empty; default display name will be used.{display_suffix}"
             )
 
     return {
