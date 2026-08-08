@@ -530,13 +530,24 @@ def _collect_queue_status_data(
                   AND last_result = 'SUCCESS'
                   AND repo = ?
                   AND (
+                        tag = ?
+                        OR (tag IS NULL AND ? IS NULL)
+                      )
+                  AND (
                         release_type = ?
                         OR (release_type IS NULL AND ? IS NULL)
                       )
                 ORDER BY completed_at DESC, id DESC
                 LIMIT 1
                 """,
-                (int(job["id"]), job["repo"], job["release_type"], job["release_type"]),
+                (
+                    int(job["id"]),
+                    job["repo"],
+                    job["tag"],
+                    job["tag"],
+                    job["release_type"],
+                    job["release_type"],
+                ),
             ).fetchone()
             if previous_success_row is None:
                 continue

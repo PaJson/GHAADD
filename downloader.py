@@ -97,7 +97,40 @@ def move_processing_folder_to_done(working_dir: str) -> Optional[str]:
     os.makedirs(os.path.dirname(target_dir), exist_ok=True)
     target_dir = _resolve_directory_name_collision(target_dir)
     shutil.move(normalized_working_dir, target_dir)
+    _remove_empty_processing_parents(
+        start_dir=os.path.dirname(normalized_working_dir),
+        processing_root=processing_root,
+    )
     return target_dir
+
+
+def _remove_empty_processing_parents(start_dir: str, processing_root: str) -> None:
+    """Remove empty parent directories under Processing after a move.
+
+    This prunes only the branch that contained the moved folder and stops
+    before removing the Processing root itself.
+    """
+    current_dir = os.path.normpath(start_dir)
+    stop_dir = os.path.normpath(processing_root)
+
+    while os.path.normcase(current_dir) != os.path.normcase(stop_dir):
+        if not os.path.isdir(current_dir):
+            parent_dir = os.path.dirname(current_dir)
+            if parent_dir == current_dir:
+                break
+            current_dir = parent_dir
+            continue
+
+        try:
+            os.rmdir(current_dir)
+        except OSError:
+            # Stop as soon as we hit a non-empty or non-removable directory.
+            break
+
+        parent_dir = os.path.dirname(current_dir)
+        if parent_dir == current_dir:
+            break
+        current_dir = parent_dir
 
 
 def _is_source_item(item_key: str) -> bool:

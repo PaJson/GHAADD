@@ -50,6 +50,7 @@ def _warn_if_file_count_changed_from_previous_success(
     connection,
     job_id: int,
     repo: str,
+    tag: str,
     release_type: Optional[str],
     current_total_items: int,
 ) -> None:
@@ -57,6 +58,7 @@ def _warn_if_file_count_changed_from_previous_success(
     previous_job = get_previous_successful_completed_job(
         connection,
         repo=repo,
+        tag=tag,
         release_type=release_type,
         exclude_job_id=job_id,
     )
@@ -465,6 +467,7 @@ def process_queue_once(connection, github_token: Optional[str]) -> None:
                         connection,
                         job_id=job_id,
                         repo=repo,
+                        tag=tag,
                         release_type=release_type,
                         current_total_items=total_items,
                     )
