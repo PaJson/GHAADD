@@ -16,8 +16,8 @@ from db_manager import (
     reschedule_job,
     save_job_skip_details,
 )
-from downloader import download_release, move_processing_folder_to_done
-from listener import get_pending_notifications, mark_as_read_and_delete
+from asset_downloader import download_release, move_processing_folder_to_done
+from mailbox_listener import get_pending_notifications, mark_as_read_and_delete
 from mapping_manager import upsert_repository_mapping
 from payload_types import DownloadReleaseResult, NotificationPayload, QueuedNotificationPayload, SkippedItemPayload
 from typing import Literal, Optional, Tuple, Union, cast, overload

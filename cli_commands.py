@@ -9,9 +9,9 @@ from db_manager import (
     purge_state_database,
     supersede_pending_jobs_by_ids,
 )
-from doctor import run_doctor
+from doctor_checks import run_doctor
 from mapping_manager import validate_mapping_schema
-from queue_reporting import build_queue_status_options, print_queue_status
+from queue_reports import build_queue_status_options, print_queue_status
 
 
 def parse_cli_args(args: list[str], version: str) -> argparse.Namespace:

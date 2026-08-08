@@ -11,7 +11,7 @@ from config_manager import (
 from datetime import datetime
 from dotenv import load_dotenv
 
-__version__ = "0.8.7-beta"
+__version__ = "0.8.8-beta"
 
 # Load environment variables from .env.
 load_dotenv()
@@ -20,8 +20,8 @@ GITHUB_TOKEN = os.getenv("GITHUB_PAT")
 # Import application modules.
 from cli_commands import handle_cli_command, parse_cli_args
 from db_manager import open_database
-from downloader import download_release
-from queue_processor import run_ingest_and_queue_cycle
+from asset_downloader import download_release
+from queue_worker import run_ingest_and_queue_cycle
 
 
 _ORIGINAL_STDOUT = sys.stdout
