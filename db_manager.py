@@ -493,28 +493,6 @@ def get_pending_jobs(connection):
     ).fetchall()
 
 
-def get_pending_working_dirs(connection):
-    """Return normalized non-empty working_dir paths for pending jobs."""
-    rows = connection.execute(
-        """
-        SELECT working_dir
-        FROM job_queue
-        WHERE status = 'PENDING'
-          AND working_dir IS NOT NULL
-          AND TRIM(working_dir) <> ''
-        """
-    ).fetchall()
-
-    normalized_paths = set()
-    for row in rows:
-        working_dir = row["working_dir"]
-        if not working_dir:
-            continue
-        normalized_paths.add(os.path.normcase(os.path.normpath(str(working_dir))))
-
-    return normalized_paths
-
-
 def get_jobs_by_ids(connection, job_ids: Iterable[int]):
     """Return queue jobs for the provided IDs."""
     normalized_ids = sorted({int(job_id) for job_id in job_ids})

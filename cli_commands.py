@@ -11,7 +11,6 @@ from db_manager import (
 )
 from asset_downloader import (
     move_done_folders_to_mapped_destinations,
-    quarantine_orphaned_processing_folders,
 )
 from doctor_checks import run_doctor
 from mapping_manager import validate_mapping_schema
@@ -36,22 +35,7 @@ def parse_cli_args(args: list[str], version: str) -> argparse.Namespace:
         help="Retry moving repository folders from Done to configured mapping destinations.",
     )
     parser.add_argument(
-        "--quarantine-orphaned-processing",
-        action="store_true",
-        help=(
-            "Preview orphaned Processing folders; add --yes to move them "
-            "into GHAADD/Superseded/Orphaned."
-        ),
-    )
-    parser.add_argument(
-        "--yes",
-        action="store_true",
-        help=(
-            "Confirm maintenance actions that move files when used with "
-            "--quarantine-orphaned-processing."
-        ),
-    )
-    parser.add_argument("--smoke-test", action="store_true", help="Run internal smoke tests for download behavior.")
+        "--smoke-test", action="store_true", help="Run internal smoke tests for download behavior.")
     parser.add_argument("--mapping-validate", action="store_true", help="Validate mapping.json schema and report issues.")
     parser.add_argument("--doctor", action="store_true", help="Run environment and cross-platform diagnostics.")
     parser.add_argument(
@@ -275,22 +259,6 @@ def handle_cli_command(parsed_args: argparse.Namespace, run_smoke_tests: Callabl
 
     if parsed_args.move_done_to_destination:
         summary = move_done_folders_to_mapped_destinations()
-        if parsed_args.json:
-            print(json.dumps(summary, indent=2))
-        return True
-
-    if parsed_args.quarantine_orphaned_processing:
-        dry_run = not bool(parsed_args.yes)
-        if dry_run:
-            print(
-                "Running orphaned Processing cleanup in preview mode. "
-                "Add --yes to execute file moves."
-            )
-        with open_database() as connection:
-            summary = quarantine_orphaned_processing_folders(
-                connection,
-                dry_run=dry_run,
-            )
         if parsed_args.json:
             print(json.dumps(summary, indent=2))
         return True

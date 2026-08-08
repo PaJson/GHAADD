@@ -156,10 +156,6 @@ CLI options:
 - --move-done-to-destination: Retry moving repository folders from `Done` to configured mapping destinations.
 	- Useful when destination storage was unavailable earlier (for example NAS/network issues).
 	- Add --json to output a machine-readable summary.
-- --quarantine-orphaned-processing: Scan `Processing` for orphaned leaf folders not linked to any pending job `working_dir`.
-	- Default behavior is preview only (dry-run).
-	- Add `--yes` to perform real moves into `GHAADD/Superseded/Orphaned`.
-	- Add --json to output a machine-readable summary including `dry_run` and `would_move_orphaned_folders`.
 - --queue-status: Print queue counts, due-now count, next pending job, and recent jobs.
 	- --queue-remove-pending-ids ID [ID ...]: Mark specific pending jobs as SUPERSEDED (removes them from pending queue).
 		- Example: python main.py --queue-remove-pending-ids 23 27 31
@@ -287,7 +283,6 @@ Behavior:
 - When a queue job reaches a terminal state (COMPLETED or FAILED with no retries left), its release folder is moved to Done.
 - When a pending job is superseded and its file counters indicate completion, its staged folder is finalized to Done or mapped destination.
 - When a pending job is superseded and appears incomplete, its staged folder is moved to Superseded for quarantine/inspection.
-- Orphaned Processing leaf folders can be triaged via `--quarantine-orphaned-processing` (preview) and `--yes` (execute).
 
 ## Source Archive Naming
 
