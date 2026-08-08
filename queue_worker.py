@@ -25,6 +25,7 @@ from asset_downloader import (
     move_processing_folder_to_complete,
     move_processing_folder_to_partial,
 )
+from lifecycle_logger import log_completed_move, log_partial_move
 from mailbox_listener import get_pending_notifications, mark_as_read_and_delete
 from mapping_manager import get_repository_recheck_intervals_minutes, upsert_repository_mapping
 from payload_types import DownloadReleaseResult, NotificationPayload, QueuedNotificationPayload, SkippedItemPayload
@@ -37,19 +38,29 @@ _COMPLETE_LABEL = _FOLDER_SETTINGS["complete"]
 _PARTIAL_LABEL = _FOLDER_SETTINGS["partial"]
 
 
-def _finalize_staged_release_folder(working_dir: Optional[str], repo: Optional[str] = None) -> None:
+def _finalize_staged_release_folder(
+    working_dir: Optional[str],
+    repo: Optional[str] = None,
+    tag: Optional[str] = None,
+    commit: Optional[str] = None,
+    write_complete_log: bool = True,
+) -> Optional[str]:
     """Move a terminal job's staging folder from Processing to complete destination."""
     if not working_dir:
-        return
+        return None
 
     try:
         done_dir = move_processing_folder_to_complete(working_dir, repo=repo)
     except OSError as exc:
         print(f"   ⚠️ Could not move staging folder to {_COMPLETE_LABEL}: {exc}")
-        return
+        return None
 
     if done_dir:
         print(f"   📁 Finalized artifacts: {done_dir}")
+        if write_complete_log and repo and tag:
+            log_completed_move(repo, tag, commit, done_dir)
+
+    return done_dir
 
 
 def _is_terminal_skip_reason(skip_reason: Optional[str]) -> bool:
@@ -114,6 +125,7 @@ def _handle_superseded_pending_job_artifacts(
                 f"to {_PARTIAL_LABEL}: {superseded_dir} "
                 f"(files={downloaded_count}+{skipped_count}/{total_items})."
             )
+            log_partial_move(repo, tag, row["expected_commit"], superseded_dir)
             return "quarantined"
 
         print(
@@ -141,7 +153,13 @@ def _handle_superseded_pending_job_artifacts(
         )
         return "none"
 
-    _finalize_staged_release_folder(working_dir, repo=repo)
+    _finalize_staged_release_folder(
+        working_dir,
+        repo=repo,
+        tag=tag,
+        commit=row["expected_commit"],
+        write_complete_log=False,
+    )
     print(
         "   [SUPERSEDE_FINALIZE] "
         f"{reason_code}: finalized staged artifacts for superseded pending job #{job_id} "
@@ -593,7 +611,12 @@ def process_selected_pending_jobs(connection, github_token: Optional[str], job_i
                 f"at attempt={attempt_count}."
             )
             print(f"   📊 Files: downloaded={downloaded_count}, skipped={skipped_count}, total={total_items}")
-            _finalize_staged_release_folder(working_dir, repo=repo)
+            _finalize_staged_release_folder(
+                working_dir,
+                repo=repo,
+                tag=tag,
+                commit=latest_commit,
+            )
             continue
 
         if attempt_count < len(retry_intervals_minutes):
@@ -656,7 +679,12 @@ def process_selected_pending_jobs(connection, github_token: Optional[str], job_i
                     f"at attempt={attempt_count}."
                 )
             print(f"   📊 Files: downloaded={downloaded_count}, skipped={skipped_count}, total={total_items}")
-            _finalize_staged_release_folder(working_dir, repo=repo)
+            _finalize_staged_release_folder(
+                working_dir,
+                repo=repo,
+                tag=tag,
+                commit=latest_commit,
+            )
 
     return processed_count, skipped_ids, missing_ids
 
@@ -819,7 +847,12 @@ def process_queue_once(connection, github_token: Optional[str]) -> None:
                 f"at attempt={current_attempt_count}."
             )
             print(f"   📊 Files: downloaded={downloaded_count}, skipped={skipped_count}, total={total_items}")
-            _finalize_staged_release_folder(working_dir, repo=repo)
+            _finalize_staged_release_folder(
+                working_dir,
+                repo=repo,
+                tag=tag,
+                commit=latest_commit,
+            )
             continue
 
         if current_attempt_count <= len(retry_intervals_minutes):
@@ -890,7 +923,12 @@ def process_queue_once(connection, github_token: Optional[str]) -> None:
                     f"at attempt={current_attempt_count}."
                 )
             print(f"   📊 Files: downloaded={downloaded_count}, skipped={skipped_count}, total={total_items}")
-            _finalize_staged_release_folder(working_dir, repo=repo)
+            _finalize_staged_release_folder(
+                working_dir,
+                repo=repo,
+                tag=tag,
+                commit=latest_commit,
+            )
 
 
 def run_ingest_and_queue_cycle(connection, github_token: Optional[str]) -> None:
