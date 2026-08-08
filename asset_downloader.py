@@ -68,6 +68,23 @@ def _build_repo_parent_folder(repo: str) -> str:
     return f"{safe_repo_name} ({safe_owner})"
 
 
+def _sanitize_subfolder_path(subfolder: str) -> str:
+    """Return a safe nested subfolder path from slash- or backslash-delimited input."""
+    parts = re.split(r"[\\/]+", str(subfolder or "").strip())
+    sanitized_parts = []
+
+    for part in parts:
+        sanitized_part = sanitize_folder_name(part)
+        if not sanitized_part or sanitized_part in {".", ".."}:
+            continue
+        sanitized_parts.append(sanitized_part)
+
+    if not sanitized_parts:
+        return ""
+
+    return os.path.join(*sanitized_parts)
+
+
 def _resolve_finalized_base_directory(
     repo: Optional[str],
     default_done_dir: str,
@@ -104,7 +121,9 @@ def _resolve_finalized_base_directory(
 
     subfolder = str(mapping_entry.get("subfolder") or "").strip()
     if subfolder:
-        base_dir = os.path.join(base_dir, sanitize_folder_name(subfolder))
+        sanitized_subfolder_path = _sanitize_subfolder_path(subfolder)
+        if sanitized_subfolder_path:
+            base_dir = os.path.join(base_dir, sanitized_subfolder_path)
 
     return base_dir, True, None
 

@@ -80,7 +80,7 @@ Each repository entry supports these fields:
 - name: repository identity in owner/repo form
 - nicename: optional display name used for human-readable labels
 - destination: optional destination base path for custom routing
-- subfolder: optional subfolder name to append under the destination
+- subfolder: optional subfolder path to append under the destination
 - limit: optional integer warning threshold for the number of folders at the destination (`0` disables checks)
 - active: timestamp of the last activity for that repository entry
 
@@ -101,7 +101,7 @@ Example:
   "name": "example-org/example-repo",
   "nicename": "My name for this repository",
   "destination": "X:\\Path\\To\\Destination",
-  "subfolder": "@GitHub",
+	"subfolder": "@GitHub/Nightly",
   "limit": 25,
   "active": "2026-08-08_14-59"
 }
@@ -112,10 +112,17 @@ In this example, the repository is still identified by its GitHub name in the na
 The resulting folder path for this example would be:
 
 ```text
-X:\Path\To\Destination\My name for this repository\@GitHub
+X:\Path\To\Destination\My name for this repository\@GitHub\Nightly
 ```
 
 In other words, the app uses the combination of <destination> + <nicename> + <subfolder> as the effective base folder for that repository.
+
+Subfolder behavior:
+
+- `subfolder` supports nested folders using either `/` or `\` as separators.
+- The app sanitizes each path segment separately, then joins them using the current OS path separator.
+- This means `@GitHub/Nightly` works on Windows, Linux, and macOS.
+- Empty segments and unsafe relative segments like `.` and `..` are ignored.
 
 Destination behavior:
 
