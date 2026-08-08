@@ -5,7 +5,6 @@ import time
 from config_manager import get_max_emails_to_process, get_recheck_intervals_minutes
 from db_manager import (
     enqueue_job,
-    get_pending_jobs,
     get_pending_job_for_release,
     get_previous_successful_completed_job,
     get_due_jobs,
@@ -287,48 +286,6 @@ def process_queue_once(connection, github_token: Optional[str]) -> None:
         print(
             "🧹 Queue cleanup: marked "
             f"{duplicate_count} duplicate pending job(s) as SUPERSEDED."
-        )
-
-    pending_jobs = get_pending_jobs(connection)
-    stale_commit_superseded_count = 0
-    commit_lookup_cache: dict[tuple[str, str], tuple[Optional[str], Optional[str]]] = {}
-
-    for pending_job in pending_jobs:
-        expected_commit = pending_job["expected_commit"]
-        if not expected_commit:
-            continue
-
-        repo = pending_job["repo"]
-        tag = pending_job["tag"]
-        commit_lookup_key = (repo, tag)
-        if commit_lookup_key not in commit_lookup_cache:
-            commit_lookup_cache[commit_lookup_key] = get_current_commit_hash(
-                repo,
-                tag,
-                github_token,
-                include_reason=True,
-            )
-
-        current_commit, _ = commit_lookup_cache[commit_lookup_key]
-        if not current_commit or current_commit == expected_commit:
-            continue
-
-        mark_job_superseded(
-            connection,
-            int(pending_job["id"]),
-            attempt_count=int(pending_job["attempt_count"] or 0),
-            expected_commit=current_commit,
-            downloaded_count=int(pending_job["downloaded_count"] or 0),
-            skipped_count=int(pending_job["skipped_count"] or 0),
-            total_items=int(pending_job["total_items"] or 0),
-            last_result="SUPERSEDED_COMMIT_OUTDATED",
-        )
-        stale_commit_superseded_count += 1
-
-    if stale_commit_superseded_count > 0:
-        print(
-            "🧹 Queue cleanup: marked "
-            f"{stale_commit_superseded_count} stale-commit pending job(s) as SUPERSEDED."
         )
 
     retry_intervals_minutes = get_recheck_intervals_minutes()
