@@ -64,6 +64,7 @@ def open_database():
             downloaded_count INTEGER NOT NULL DEFAULT 0,
             skipped_count INTEGER NOT NULL DEFAULT 0,
             total_items INTEGER NOT NULL DEFAULT 0,
+            working_dir TEXT,
             last_result TEXT,
             created_at REAL NOT NULL DEFAULT (CAST(strftime('%s', 'now') AS REAL)),
             updated_at REAL NOT NULL DEFAULT (CAST(strftime('%s', 'now') AS REAL)),
@@ -140,6 +141,10 @@ def open_database():
     if "last_result" not in existing_columns:
         connection.execute(
             "ALTER TABLE job_queue ADD COLUMN last_result TEXT"
+        )
+    if "working_dir" not in existing_columns:
+        connection.execute(
+            "ALTER TABLE job_queue ADD COLUMN working_dir TEXT"
         )
     if "created_at" not in existing_columns:
         connection.execute(
@@ -281,12 +286,13 @@ def enqueue_job(connection, repo, tag, release_type=None, next_check_time=None, 
             downloaded_count,
             skipped_count,
             total_items,
+            working_dir,
             last_result,
             created_at,
             updated_at,
             completed_at
         )
-        VALUES (?, ?, ?, 'PENDING', 0, ?, ?, 0, 0, 0, NULL, CAST(strftime('%s', 'now') AS REAL), CAST(strftime('%s', 'now') AS REAL), NULL)
+        VALUES (?, ?, ?, 'PENDING', 0, ?, ?, 0, 0, 0, NULL, NULL, CAST(strftime('%s', 'now') AS REAL), CAST(strftime('%s', 'now') AS REAL), NULL)
         """,
         (repo, tag, release_type, float(next_check_time), expected_commit),
     )
@@ -326,6 +332,7 @@ def get_pending_job_for_release(connection, repo, tag, release_type=None, expect
             downloaded_count,
             skipped_count,
             total_items,
+            working_dir,
             last_result
         FROM job_queue
         WHERE {' AND '.join(conditions)}
@@ -334,6 +341,39 @@ def get_pending_job_for_release(connection, repo, tag, release_type=None, expect
     """
 
     return connection.execute(query, tuple(params)).fetchone()
+
+
+def get_pending_jobs_for_release(connection, repo, tag, release_type=None):
+    """Return pending jobs for one release identity ordered by creation time."""
+    return connection.execute(
+        """
+        SELECT
+            id,
+            repo,
+            tag,
+            release_type,
+            status,
+            attempt_count,
+            next_check_time,
+            created_at,
+            expected_commit,
+            downloaded_count,
+            skipped_count,
+            total_items,
+            working_dir,
+            last_result
+        FROM job_queue
+        WHERE status = 'PENDING'
+          AND repo = ?
+          AND tag = ?
+          AND (
+                release_type = ?
+                OR (release_type IS NULL AND ? IS NULL)
+              )
+        ORDER BY created_at ASC, id ASC
+        """,
+        (repo, tag, release_type, release_type),
+    ).fetchall()
 
 
 def supersede_pending_jobs_for_release(
@@ -392,6 +432,7 @@ def get_due_jobs(connection, now_timestamp, limit=None):
                 downloaded_count,
                 skipped_count,
                 total_items,
+                working_dir,
                 last_result
             FROM job_queue
             WHERE status = 'PENDING' AND next_check_time <= ?
@@ -416,6 +457,7 @@ def get_due_jobs(connection, now_timestamp, limit=None):
             downloaded_count,
             skipped_count,
             total_items,
+            working_dir,
             last_result
         FROM job_queue
         WHERE status = 'PENDING' AND next_check_time <= ?
@@ -442,12 +484,35 @@ def get_pending_jobs(connection):
             downloaded_count,
             skipped_count,
             total_items,
+            working_dir,
             last_result
         FROM job_queue
         WHERE status = 'PENDING'
         ORDER BY created_at ASC, id ASC
         """
     ).fetchall()
+
+
+def get_pending_working_dirs(connection):
+    """Return normalized non-empty working_dir paths for pending jobs."""
+    rows = connection.execute(
+        """
+        SELECT working_dir
+        FROM job_queue
+        WHERE status = 'PENDING'
+          AND working_dir IS NOT NULL
+          AND TRIM(working_dir) <> ''
+        """
+    ).fetchall()
+
+    normalized_paths = set()
+    for row in rows:
+        working_dir = row["working_dir"]
+        if not working_dir:
+            continue
+        normalized_paths.add(os.path.normcase(os.path.normpath(str(working_dir))))
+
+    return normalized_paths
 
 
 def get_jobs_by_ids(connection, job_ids: Iterable[int]):
@@ -472,6 +537,7 @@ def get_jobs_by_ids(connection, job_ids: Iterable[int]):
             downloaded_count,
             skipped_count,
             total_items,
+            working_dir,
             last_result
         FROM job_queue
         WHERE id IN ({placeholders})
@@ -502,6 +568,10 @@ def supersede_pending_jobs_by_ids(
             status,
             attempt_count,
             expected_commit,
+                        downloaded_count,
+                        skipped_count,
+                        total_items,
+                        working_dir,
             last_result,
             next_check_time
         FROM job_queue
@@ -784,6 +854,7 @@ def reschedule_job(
     downloaded_count=0,
     skipped_count=0,
     total_items=0,
+    working_dir=None,
     last_result="RETRY",
 ):
     """Update a queued job with a new schedule and attempt counter."""
@@ -797,6 +868,7 @@ def reschedule_job(
             downloaded_count = ?,
             skipped_count = ?,
             total_items = ?,
+            working_dir = COALESCE(?, working_dir),
             last_result = ?,
             updated_at = CAST(strftime('%s', 'now') AS REAL),
             completed_at = NULL
@@ -809,6 +881,7 @@ def reschedule_job(
             int(downloaded_count),
             int(skipped_count),
             int(total_items),
+            working_dir,
             last_result,
             job_id,
         ),
@@ -823,6 +896,7 @@ def update_job_for_manual_check(
     downloaded_count=0,
     skipped_count=0,
     total_items=0,
+    working_dir=None,
     last_result="MANUAL_CHECK",
 ):
     """Update a pending job's counters and result without changing its retry schedule."""
@@ -834,6 +908,7 @@ def update_job_for_manual_check(
             downloaded_count = ?,
             skipped_count = ?,
             total_items = ?,
+            working_dir = COALESCE(?, working_dir),
             last_result = ?,
             updated_at = CAST(strftime('%s', 'now') AS REAL),
             completed_at = NULL
@@ -844,6 +919,7 @@ def update_job_for_manual_check(
             int(downloaded_count),
             int(skipped_count),
             int(total_items),
+            working_dir,
             last_result,
             job_id,
         ),

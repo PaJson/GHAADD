@@ -112,6 +112,8 @@ class QueueReportPayload(TypedDict):
     skip_jobs: int
     failed_jobs: int
     retry_pending_jobs: int
+    supersede_finalized_jobs: int
+    supersede_incomplete_moved_jobs: int
     success_rate_percent: Optional[float]
     hard_failure_rate_percent: Optional[float]
     top_failed_repos: list[TopFailedRepoPayload]

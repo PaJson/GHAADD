@@ -152,6 +152,8 @@ def _build_queue_report_payload(
     skip_jobs: int,
     failed_jobs: int,
     retry_pending_jobs: int,
+    supersede_finalized_jobs: int,
+    supersede_incomplete_moved_jobs: int,
     failed_repo_rows,
     successful_repo_rows,
     top_skipped_items,
@@ -174,6 +176,8 @@ def _build_queue_report_payload(
         "skip_jobs": skip_jobs,
         "failed_jobs": failed_jobs,
         "retry_pending_jobs": retry_pending_jobs,
+        "supersede_finalized_jobs": supersede_finalized_jobs,
+        "supersede_incomplete_moved_jobs": supersede_incomplete_moved_jobs,
         "success_rate_percent": success_rate,
         "hard_failure_rate_percent": hard_failure_rate,
         "top_failed_repos": [_build_top_failed_repo_payload(row) for row in failed_repo_rows],
@@ -297,6 +301,20 @@ def _write_queue_report_csv(report_data: QueueReportPayload, output_path: str) -
         writer.writerow({"section": "summary", "metric": "skip_jobs", "value": report_data["skip_jobs"]})
         writer.writerow({"section": "summary", "metric": "failed_jobs", "value": report_data["failed_jobs"]})
         writer.writerow({"section": "summary", "metric": "retry_pending_jobs", "value": report_data["retry_pending_jobs"]})
+        writer.writerow(
+            {
+                "section": "summary",
+                "metric": "supersede_finalized_jobs",
+                "value": report_data["supersede_finalized_jobs"],
+            }
+        )
+        writer.writerow(
+            {
+                "section": "summary",
+                "metric": "supersede_incomplete_moved_jobs",
+                "value": report_data["supersede_incomplete_moved_jobs"],
+            }
+        )
         writer.writerow(
             {
                 "section": "summary",
@@ -641,7 +659,27 @@ def _collect_queue_status_data(
                     SUM(CASE WHEN last_result = 'SUCCESS' THEN 1 ELSE 0 END) AS success_jobs,
                     SUM(CASE WHEN last_result = 'SKIP' THEN 1 ELSE 0 END) AS skip_jobs,
                     SUM(CASE WHEN status = 'FAILED' OR last_result = 'FAILED' THEN 1 ELSE 0 END) AS failed_jobs,
-                    SUM(CASE WHEN status = 'PENDING' AND last_result = 'RETRY' THEN 1 ELSE 0 END) AS retry_pending_jobs
+                    SUM(CASE WHEN status = 'PENDING' AND last_result = 'RETRY' THEN 1 ELSE 0 END) AS retry_pending_jobs,
+                    SUM(
+                        CASE
+                            WHEN last_result IN (
+                                'SUPERSEDED_REPLACED_BY_NEW_NOTIFICATION_FINALIZED',
+                                'SUPERSEDED_COMMIT_CHANGED_FINALIZED'
+                            )
+                            THEN 1
+                            ELSE 0
+                        END
+                    ) AS supersede_finalized_jobs,
+                    SUM(
+                        CASE
+                            WHEN last_result IN (
+                                'SUPERSEDED_REPLACED_BY_NEW_NOTIFICATION_INCOMPLETE_MOVED',
+                                'SUPERSEDED_COMMIT_CHANGED_INCOMPLETE_MOVED'
+                            )
+                            THEN 1
+                            ELSE 0
+                        END
+                    ) AS supersede_incomplete_moved_jobs
                 FROM job_queue
                 {scope_where}
                 """,
@@ -690,6 +728,8 @@ def _collect_queue_status_data(
             skip_jobs = int(terminal_counts["skip_jobs"] or 0)
             failed_jobs = int(terminal_counts["failed_jobs"] or 0)
             retry_pending_jobs = int(terminal_counts["retry_pending_jobs"] or 0)
+            supersede_finalized_jobs = int(terminal_counts["supersede_finalized_jobs"] or 0)
+            supersede_incomplete_moved_jobs = int(terminal_counts["supersede_incomplete_moved_jobs"] or 0)
 
             report_payload = _build_queue_report_payload(
                 total_jobs=total_jobs,
@@ -699,6 +739,8 @@ def _collect_queue_status_data(
                 skip_jobs=skip_jobs,
                 failed_jobs=failed_jobs,
                 retry_pending_jobs=retry_pending_jobs,
+                supersede_finalized_jobs=supersede_finalized_jobs,
+                supersede_incomplete_moved_jobs=supersede_incomplete_moved_jobs,
                 failed_repo_rows=failed_repo_rows,
                 successful_repo_rows=successful_repo_rows,
                 top_skipped_items=top_skipped_items,
@@ -842,6 +884,11 @@ def print_queue_status(
             f"failed={report_data['failed_jobs']}"
         )
         print(f"Pending retries: {report_data['retry_pending_jobs']}")
+        print(f"Supersede-finalized jobs: {report_data['supersede_finalized_jobs']}")
+        print(
+            "Supersede-incomplete moved jobs: "
+            f"{report_data['supersede_incomplete_moved_jobs']}"
+        )
 
         if report_data["success_rate_percent"] is None:
             print("Success rate: -")

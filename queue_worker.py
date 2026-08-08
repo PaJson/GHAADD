@@ -1,24 +1,29 @@
 import requests
 import sys
 import time
+import os
 
 from config_manager import get_max_emails_to_process, get_recheck_intervals_minutes
 from db_manager import (
     enqueue_job,
     get_jobs_by_ids,
+    get_pending_jobs_for_release,
     get_pending_job_for_release,
     get_previous_successful_completed_job,
     get_due_jobs,
     mark_job_completed,
     mark_job_failed,
     mark_job_superseded,
-    supersede_pending_jobs_for_release,
     supersede_duplicate_pending_jobs,
     reschedule_job,
     save_job_skip_details,
     update_job_for_manual_check,
 )
-from asset_downloader import download_release, move_processing_folder_to_done
+from asset_downloader import (
+    download_release,
+    move_processing_folder_to_done,
+    move_processing_folder_to_superseded,
+)
 from mailbox_listener import get_pending_notifications, mark_as_read_and_delete
 from mapping_manager import upsert_repository_mapping
 from payload_types import DownloadReleaseResult, NotificationPayload, QueuedNotificationPayload, SkippedItemPayload
@@ -46,6 +51,99 @@ def _finalize_staged_release_folder(working_dir: Optional[str], repo: Optional[s
 def _is_terminal_skip_reason(skip_reason: Optional[str]) -> bool:
     """Return True when a SKIP result should end the re-check plan immediately."""
     return skip_reason in {"release_not_found"}
+
+
+def _has_all_release_items_accounted(
+    downloaded_count: int,
+    skipped_count: int,
+    total_items: int,
+) -> bool:
+    """Return True when queued counters indicate all release items were handled."""
+    if total_items <= 0:
+        return False
+    return (downloaded_count + skipped_count) >= total_items
+
+
+def _handle_superseded_pending_job_artifacts(
+    row,
+    repo: str,
+    tag: str,
+    reason_code: str,
+) -> str:
+    """Return artifact handling outcome: finalized, quarantined, or none."""
+    job_id = int(row["id"])
+    downloaded_count = int(row["downloaded_count"] or 0)
+    skipped_count = int(row["skipped_count"] or 0)
+    total_items = int(row["total_items"] or 0)
+
+    working_dir = str(row["working_dir"] or "").strip()
+
+    if not _has_all_release_items_accounted(downloaded_count, skipped_count, total_items):
+        if not working_dir:
+            print(
+                "   [SUPERSEDE_FINALIZE] "
+                f"{reason_code}: pending job #{job_id} not finalized "
+                f"because it is incomplete ({downloaded_count}+{skipped_count}/{total_items}) "
+                "and has no working_dir to quarantine."
+            )
+            return "none"
+
+        if not os.path.isdir(working_dir):
+            print(
+                "   [SUPERSEDE_FINALIZE] "
+                f"{reason_code}: pending job #{job_id} not finalized "
+                f"because it is incomplete ({downloaded_count}+{skipped_count}/{total_items}) "
+                f"and working_dir is missing: {working_dir}"
+            )
+            return "none"
+
+        try:
+            superseded_dir = move_processing_folder_to_superseded(working_dir)
+        except OSError as exc:
+            print(f"   ⚠️ Could not move incomplete superseded staging folder: {exc}")
+            return "none"
+
+        if superseded_dir:
+            print(
+                "   [SUPERSEDE_FINALIZE] "
+                f"{reason_code}: moved incomplete superseded job #{job_id} "
+                f"to Superseded: {superseded_dir} "
+                f"(files={downloaded_count}+{skipped_count}/{total_items})."
+            )
+            return "quarantined"
+
+        print(
+            "   [SUPERSEDE_FINALIZE] "
+            f"{reason_code}: pending job #{job_id} not finalized "
+            f"because it is incomplete ({downloaded_count}+{skipped_count}/{total_items}) "
+            "and could not be moved to Superseded."
+        )
+        return "none"
+
+    if not working_dir:
+        print(
+            "   [SUPERSEDE_FINALIZE] "
+            f"{reason_code}: pending job #{job_id} appears complete "
+            f"({downloaded_count}+{skipped_count}/{total_items}) but has no working_dir; "
+            "cannot finalize staged artifacts."
+        )
+        return "none"
+
+    if not os.path.isdir(working_dir):
+        print(
+            "   [SUPERSEDE_FINALIZE] "
+            f"{reason_code}: pending job #{job_id} appears complete "
+            f"({downloaded_count}+{skipped_count}/{total_items}) but working_dir is missing: {working_dir}"
+        )
+        return "none"
+
+    _finalize_staged_release_folder(working_dir, repo=repo)
+    print(
+        "   [SUPERSEDE_FINALIZE] "
+        f"{reason_code}: finalized staged artifacts for superseded pending job #{job_id} "
+        f"({repo} {tag}, files={downloaded_count}+{skipped_count}/{total_items})."
+    )
+    return "finalized"
 
 
 def _warn_if_file_count_changed_from_previous_success(
@@ -236,18 +334,63 @@ def ingest_notifications_once(connection, github_token: Optional[str]) -> int:
                     include_reason=True,
                 )
 
-                superseded_count = supersede_pending_jobs_for_release(
+                pending_rows = get_pending_jobs_for_release(
                     connection,
                     repo,
                     tag,
                     release_type=release_type,
-                    replacement_expected_commit=expected_commit,
                 )
+                finalized_superseded_count = 0
+                quarantined_superseded_count = 0
+                superseded_count = 0
+                for pending_row in pending_rows:
+                    superseded_count += 1
+                    artifact_outcome = _handle_superseded_pending_job_artifacts(
+                        pending_row,
+                        repo,
+                        tag,
+                        reason_code="NEW_NOTIFICATION",
+                    )
+                    if artifact_outcome == "finalized":
+                        finalized_superseded_count += 1
+                    elif artifact_outcome == "quarantined":
+                        quarantined_superseded_count += 1
+
+                    mark_job_superseded(
+                        connection,
+                        int(pending_row["id"]),
+                        attempt_count=int(pending_row["attempt_count"] or 0),
+                        expected_commit=expected_commit or pending_row["expected_commit"],
+                        downloaded_count=int(pending_row["downloaded_count"] or 0),
+                        skipped_count=int(pending_row["skipped_count"] or 0),
+                        total_items=int(pending_row["total_items"] or 0),
+                        last_result=(
+                            "SUPERSEDED_REPLACED_BY_NEW_NOTIFICATION_FINALIZED"
+                            if artifact_outcome == "finalized"
+                            else (
+                                "SUPERSEDED_REPLACED_BY_NEW_NOTIFICATION_INCOMPLETE_MOVED"
+                                if artifact_outcome == "quarantined"
+                                else "SUPERSEDED_REPLACED_BY_NEW_NOTIFICATION"
+                            )
+                        ),
+                    )
+
                 if superseded_count > 0:
                     print(
                         "🔁 Replaced older pending job(s) for this release identity "
                         f"before queueing new notification (superseded={superseded_count})."
                     )
+                    if finalized_superseded_count > 0:
+                        print(
+                            "   [SUPERSEDE_FINALIZE] NEW_NOTIFICATION: "
+                            f"finalized {finalized_superseded_count} superseded pending job folder(s)."
+                        )
+                    if quarantined_superseded_count > 0:
+                        print(
+                            "   [SUPERSEDE_FINALIZE] NEW_NOTIFICATION: "
+                            f"moved {quarantined_superseded_count} incomplete superseded job folder(s) "
+                            "to Superseded."
+                        )
 
                 enqueue_job(
                     connection,
@@ -359,6 +502,12 @@ def process_selected_pending_jobs(connection, github_token: Optional[str], job_i
                     f"(job_id={int(existing_new_commit_job['id'])}, commit={current_commit})."
                 )
 
+            artifact_outcome = _handle_superseded_pending_job_artifacts(
+                row,
+                repo,
+                tag,
+                reason_code="COMMIT_CHANGED_MANUAL",
+            )
             mark_job_superseded(
                 connection,
                 job_id,
@@ -367,7 +516,15 @@ def process_selected_pending_jobs(connection, github_token: Optional[str], job_i
                 downloaded_count=int(row["downloaded_count"] or 0),
                 skipped_count=int(row["skipped_count"] or 0),
                 total_items=int(row["total_items"] or 0),
-                last_result="SUPERSEDED_COMMIT_CHANGED",
+                last_result=(
+                    "SUPERSEDED_COMMIT_CHANGED_FINALIZED"
+                    if artifact_outcome == "finalized"
+                    else (
+                        "SUPERSEDED_COMMIT_CHANGED_INCOMPLETE_MOVED"
+                        if artifact_outcome == "quarantined"
+                        else "SUPERSEDED_COMMIT_CHANGED"
+                    )
+                ),
             )
             print("   ⏭️ Marked current job as SUPERSEDED; skipping download for this older commit baseline.")
             continue
@@ -442,6 +599,7 @@ def process_selected_pending_jobs(connection, github_token: Optional[str], job_i
                 downloaded_count=downloaded_count,
                 skipped_count=skipped_count,
                 total_items=total_items,
+                working_dir=working_dir,
                 last_result="MANUAL_CHECK",
             )
             save_job_skip_details(connection, job_id, attempt_count, skipped_items)
@@ -568,6 +726,12 @@ def process_queue_once(connection, github_token: Optional[str]) -> None:
                     f"(job_id={int(existing_new_commit_job['id'])}, commit={current_commit})."
                 )
 
+            artifact_outcome = _handle_superseded_pending_job_artifacts(
+                job,
+                repo,
+                tag,
+                reason_code="COMMIT_CHANGED_AUTO",
+            )
             mark_job_superseded(
                 connection,
                 job_id,
@@ -576,7 +740,15 @@ def process_queue_once(connection, github_token: Optional[str]) -> None:
                 downloaded_count=int(job["downloaded_count"] or 0),
                 skipped_count=int(job["skipped_count"] or 0),
                 total_items=int(job["total_items"] or 0),
-                last_result="SUPERSEDED_COMMIT_CHANGED",
+                last_result=(
+                    "SUPERSEDED_COMMIT_CHANGED_FINALIZED"
+                    if artifact_outcome == "finalized"
+                    else (
+                        "SUPERSEDED_COMMIT_CHANGED_INCOMPLETE_MOVED"
+                        if artifact_outcome == "quarantined"
+                        else "SUPERSEDED_COMMIT_CHANGED"
+                    )
+                ),
             )
             print("   ⏭️ Marked current job as SUPERSEDED; skipping download for this older commit baseline.")
             continue
@@ -660,6 +832,7 @@ def process_queue_once(connection, github_token: Optional[str]) -> None:
                 downloaded_count=downloaded_count,
                 skipped_count=skipped_count,
                 total_items=total_items,
+                working_dir=working_dir,
                 last_result="RETRY",
             )
             save_job_skip_details(connection, job_id, current_attempt_count, skipped_items)
