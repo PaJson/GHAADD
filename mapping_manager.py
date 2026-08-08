@@ -235,7 +235,16 @@ def validate_mapping_schema() -> MappingValidationResult:
         unknown_keys = sorted(
             key
             for key in entry.keys()
-            if key not in {"name", "nicename", "destination", "subfolder", "limit", "active"}
+            if key
+            not in {
+                "name",
+                "nicename",
+                "destination",
+                "subfolder",
+                "limit",
+                "recheck_intervals_minutes",
+                "active",
+            }
         )
         for key in unknown_keys:
             warnings.append(f"{display_location} has unknown key '{key}'.{display_suffix}")
@@ -284,6 +293,35 @@ def validate_mapping_schema() -> MappingValidationResult:
             warnings.append(
                 f"{display_location}.nicename is empty; default display name will be used.{display_suffix}"
             )
+
+        intervals_value = entry.get("recheck_intervals_minutes")
+        if intervals_value is not None:
+            if not isinstance(intervals_value, list):
+                errors.append(
+                    f"{display_location}.recheck_intervals_minutes must be an array when provided.{display_suffix}"
+                )
+            else:
+                normalized_intervals: list[int] = []
+                invalid_item_detected = False
+                for interval_item in intervals_value:
+                    if isinstance(interval_item, bool):
+                        invalid_item_detected = True
+                        continue
+                    try:
+                        minutes = int(interval_item)
+                    except (TypeError, ValueError):
+                        invalid_item_detected = True
+                        continue
+                    if minutes <= 0:
+                        invalid_item_detected = True
+                        continue
+                    if minutes not in normalized_intervals:
+                        normalized_intervals.append(minutes)
+
+                if invalid_item_detected:
+                    warnings.append(
+                        f"{display_location}.recheck_intervals_minutes contains invalid values; global processing.recheck_intervals_minutes may be used.{display_suffix}"
+                    )
 
     return {
         "ok": len(errors) == 0,
