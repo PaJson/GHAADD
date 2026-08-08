@@ -99,6 +99,23 @@ def _is_same_repository_identity(
     return entry_name.lower() == repo.lower()
 
 
+def get_repository_mapping(repo: str) -> Optional[dict[str, Any]]:
+    """Return the matching repository mapping entry, or None when missing."""
+    normalized_repo = str(repo or "").strip()
+    if not normalized_repo:
+        return None
+
+    mapping_payload = load_mapping()
+    repositories = mapping_payload.get("repositories", [])
+    for entry in repositories:
+        if not isinstance(entry, dict):
+            continue
+        if _is_same_repository_identity(entry, normalized_repo):
+            return entry
+
+    return None
+
+
 def _current_active_stamp() -> str:
     """Return activity timestamp in YYYY-MM-DD_HH-MM format."""
     return datetime.now().strftime("%Y-%m-%d_%H-%M")

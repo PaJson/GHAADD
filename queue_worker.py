@@ -26,13 +26,13 @@ from typing import Literal, Optional, Tuple, Union, cast, overload
 GITHUB_API_VERSION = "2022-11-28"
 
 
-def _finalize_staged_release_folder(working_dir: Optional[str]) -> None:
+def _finalize_staged_release_folder(working_dir: Optional[str], repo: Optional[str] = None) -> None:
     """Move a terminal job's staging folder from Processing to Done."""
     if not working_dir:
         return
 
     try:
-        done_dir = move_processing_folder_to_done(working_dir)
+        done_dir = move_processing_folder_to_done(working_dir, repo=repo)
     except OSError as exc:
         print(f"   ⚠️ Could not move staging folder to Done: {exc}")
         return
@@ -424,7 +424,7 @@ def process_queue_once(connection, github_token: Optional[str]) -> None:
                 f"at attempt={current_attempt_count}."
             )
             print(f"   📊 Files: downloaded={downloaded_count}, skipped={skipped_count}, total={total_items}")
-            _finalize_staged_release_folder(working_dir)
+            _finalize_staged_release_folder(working_dir, repo=repo)
             continue
 
         if current_attempt_count <= len(retry_intervals_minutes):
@@ -494,7 +494,7 @@ def process_queue_once(connection, github_token: Optional[str]) -> None:
                     f"at attempt={current_attempt_count}."
                 )
             print(f"   📊 Files: downloaded={downloaded_count}, skipped={skipped_count}, total={total_items}")
-            _finalize_staged_release_folder(working_dir)
+            _finalize_staged_release_folder(working_dir, repo=repo)
 
 
 def run_ingest_and_queue_cycle(connection, github_token: Optional[str]) -> None:

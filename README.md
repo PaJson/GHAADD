@@ -118,7 +118,7 @@ X:\Path\To\Destination\My name for this repository\@GitHub
 In other words, the app uses the combination of <destination> + <nicename> + <subfolder> as the effective base folder for that repository.
 
 If `limit` is `0`, no folder-count warning is applied for that repository.
-If `limit` is greater than `0`, the app can later warn when the destination appears to contain too many folders.
+If `limit` is greater than `0`, the app warns when the repository destination appears to contain too many folders.
 
 The doctor check validates the mapping schema and warns when destination values are empty or when path styles do not match the current OS.
 

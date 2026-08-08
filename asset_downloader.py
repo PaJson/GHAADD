@@ -8,6 +8,7 @@ from db_manager import open_database, load_release_state, save_state_entry, prun
 from dotenv import load_dotenv
 from config_manager import get_download_dir_for_release, is_state_persistence_disabled
 from email.utils import parsedate_tz, mktime_tz
+from mapping_manager import build_default_nicename, get_repository_mapping
 from payload_types import DownloadReleaseResult, DownloadResultPayload, ReleaseAssetQueueItem, SkippedItemPayload
 from requests.exceptions import ChunkedEncodingError, ConnectionError, Timeout
 from typing import Literal, Optional, cast
@@ -65,8 +66,108 @@ def _build_repo_parent_folder(repo: str) -> str:
     return f"{safe_repo_name} ({safe_owner})"
 
 
-def move_processing_folder_to_done(working_dir: str) -> Optional[str]:
-    """Move a finished release folder from .../GHAADD/Processing to .../GHAADD/Done."""
+def _resolve_finalized_base_directory(
+    repo: Optional[str],
+    default_done_dir: str,
+) -> tuple[str, bool]:
+    """Return the finalization base directory and whether mapping destination is used."""
+    normalized_repo = str(repo or "").strip()
+    if not normalized_repo:
+        return default_done_dir, False
+
+    mapping_entry = get_repository_mapping(normalized_repo)
+    if not isinstance(mapping_entry, dict):
+        return default_done_dir, False
+
+    destination = str(mapping_entry.get("destination") or "").strip()
+    if not destination:
+        return default_done_dir, False
+
+    destination_root = os.path.expanduser(os.path.expandvars(destination))
+
+    nicename = str(mapping_entry.get("nicename") or "").strip()
+    if not nicename:
+        nicename = build_default_nicename(normalized_repo)
+    nicename_folder = sanitize_folder_name(nicename) or _build_repo_parent_folder(normalized_repo)
+
+    base_dir = os.path.join(destination_root, nicename_folder)
+
+    subfolder = str(mapping_entry.get("subfolder") or "").strip()
+    if subfolder:
+        base_dir = os.path.join(base_dir, sanitize_folder_name(subfolder))
+
+    return base_dir, True
+
+
+def _resolve_repository_limit(repo: Optional[str]) -> int:
+    """Return repository folder-limit threshold (0 disables warning checks)."""
+    normalized_repo = str(repo or "").strip()
+    if not normalized_repo:
+        return 0
+
+    mapping_entry = get_repository_mapping(normalized_repo)
+    if not isinstance(mapping_entry, dict):
+        return 0
+
+    limit_value = mapping_entry.get("limit")
+    if isinstance(limit_value, int) and limit_value > 0:
+        return limit_value
+
+    return 0
+
+
+def _count_direct_subdirectories(path: str) -> int:
+    """Return count of direct child directories for path."""
+    try:
+        with os.scandir(path) as entries:
+            return sum(1 for entry in entries if entry.is_dir())
+    except OSError:
+        return 0
+
+
+def _count_repository_release_folders(repo_destination_root: str) -> int:
+    """Return count of release folders kept under one repository destination root."""
+    if not os.path.isdir(repo_destination_root):
+        return 0
+
+    release_type_dirs: list[str] = []
+    try:
+        with os.scandir(repo_destination_root) as entries:
+            release_type_dirs = [entry.path for entry in entries if entry.is_dir()]
+    except OSError:
+        return 0
+
+    if not release_type_dirs:
+        return 0
+
+    total = 0
+    for release_type_dir in release_type_dirs:
+        release_count = _count_direct_subdirectories(release_type_dir)
+        total += release_count if release_count > 0 else 1
+
+    return total
+
+
+def _warn_if_destination_limit_exceeded(repo: Optional[str], repo_destination_root: str) -> None:
+    """Emit warning when repository destination exceeds configured folder limit."""
+    folder_limit = _resolve_repository_limit(repo)
+    if folder_limit <= 0:
+        return
+
+    release_folder_count = _count_repository_release_folders(repo_destination_root)
+    if release_folder_count <= folder_limit:
+        return
+
+    repo_label = str(repo or "unknown")
+    print(
+        "   ⚠️ Folder limit warning: "
+        f"{repo_label} currently has {release_folder_count} folder(s) "
+        f"in '{repo_destination_root}' (limit={folder_limit})."
+    )
+
+
+def move_processing_folder_to_done(working_dir: str, repo: Optional[str] = None) -> Optional[str]:
+    """Move a finished release folder from Processing to final destination."""
     if not working_dir:
         return None
 
@@ -90,13 +191,31 @@ def move_processing_folder_to_done(working_dir: str) -> Optional[str]:
 
     ghaadd_root = os.path.dirname(processing_root)
     done_dir = os.path.join(ghaadd_root, "Done")
-    os.makedirs(done_dir, exist_ok=True)
-
     relative_path = os.path.relpath(normalized_working_dir, processing_root)
-    target_dir = os.path.normpath(os.path.join(done_dir, relative_path))
+
+    base_destination, uses_mapping_destination = _resolve_finalized_base_directory(
+        repo,
+        done_dir,
+    )
+    os.makedirs(base_destination, exist_ok=True)
+
+    target_relative_path = relative_path
+    relative_parts = [part for part in os.path.normpath(relative_path).split(os.sep) if part and part != "."]
+    if uses_mapping_destination:
+        if len(relative_parts) > 1:
+            target_relative_path = os.path.join(*relative_parts[1:])
+
+    target_dir = os.path.normpath(os.path.join(base_destination, target_relative_path))
     os.makedirs(os.path.dirname(target_dir), exist_ok=True)
     target_dir = _resolve_directory_name_collision(target_dir)
     shutil.move(normalized_working_dir, target_dir)
+
+    repo_destination_root = base_destination
+    if not uses_mapping_destination and relative_parts:
+        repo_destination_root = os.path.join(base_destination, relative_parts[0])
+
+    _warn_if_destination_limit_exceeded(repo, repo_destination_root)
+
     _remove_empty_processing_parents(
         start_dir=os.path.dirname(normalized_working_dir),
         processing_root=processing_root,
