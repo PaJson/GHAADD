@@ -117,6 +117,12 @@ X:\Path\To\Destination\My name for this repository\@GitHub
 
 In other words, the app uses the combination of <destination> + <nicename> + <subfolder> as the effective base folder for that repository.
 
+Destination behavior:
+
+- If `destination` is empty, the app falls back to the default `GHAADD/Done` location.
+- If `destination` is set but the destination root folder does not exist, the app prints a warning and falls back to `GHAADD/Done`.
+- When destination exists, `nicename` and `subfolder` folders are created automatically when needed.
+
 If `limit` is `0`, no folder-count warning is applied for that repository.
 If `limit` is greater than `0`, the app warns when the repository destination appears to contain too many folders.
 
@@ -146,6 +152,9 @@ CLI options:
 	- Add --json to output the diagnostics report as JSON.
 - --mapping-validate: Validate mapping.json schema and print errors/warnings.
 	- Add --json to output the validation result as JSON.
+- --move-done-to-destination: Retry moving repository folders from `Done` to configured mapping destinations.
+	- Useful when destination storage was unavailable earlier (for example NAS/network issues).
+	- Add --json to output a machine-readable summary.
 - --queue-status: Print queue counts, due-now count, next pending job, and recent jobs.
 	- --queue-remove-pending-ids ID [ID ...]: Mark specific pending jobs as SUPERSEDED (removes them from pending queue).
 		- Example: python main.py --queue-remove-pending-ids 23 27 31

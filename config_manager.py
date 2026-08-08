@@ -116,6 +116,44 @@ def get_default_download_dir(config: Optional[Dict[str, Any]] = None) -> str:
     return os.path.join(os.path.expanduser("~"), "Downloads")
 
 
+def get_all_download_dirs(config: Optional[Dict[str, Any]] = None) -> list[str]:
+    """Return all configured download roots used for staging/Done folders."""
+    config = config if config is not None else load_config()
+
+    unique_dirs: list[str] = []
+
+    def add_path(candidate: Any) -> None:
+        if not isinstance(candidate, str):
+            return
+        normalized = candidate.strip()
+        if not normalized:
+            return
+        if normalized not in unique_dirs:
+            unique_dirs.append(normalized)
+
+    add_path(get_default_download_dir(config))
+
+    repo_paths = _get_nested(config, "paths", "repo_paths")
+    if isinstance(repo_paths, dict):
+        for value in repo_paths.values():
+            add_path(value)
+
+    release_type_paths = _get_nested(config, "paths", "release_type_paths")
+    if isinstance(release_type_paths, dict):
+        for value in release_type_paths.values():
+            add_path(value)
+
+    combo_paths = _get_nested(config, "paths", "repo_release_type_paths")
+    if isinstance(combo_paths, dict):
+        for repo_map in combo_paths.values():
+            if not isinstance(repo_map, dict):
+                continue
+            for value in repo_map.values():
+                add_path(value)
+
+    return unique_dirs
+
+
 def get_gmail_folder(config=None):
     """Return the Gmail folder used for GitHub notification processing."""
     config = config if config is not None else load_config()

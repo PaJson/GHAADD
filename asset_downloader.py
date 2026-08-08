@@ -6,9 +6,9 @@ import shutil
 import time
 from db_manager import open_database, load_release_state, save_state_entry, prune_release_state
 from dotenv import load_dotenv
-from config_manager import get_download_dir_for_release, is_state_persistence_disabled
+from config_manager import get_all_download_dirs, get_default_download_dir, get_download_dir_for_release, is_state_persistence_disabled, load_config
 from email.utils import parsedate_tz, mktime_tz
-from mapping_manager import build_default_nicename, get_repository_mapping
+from mapping_manager import build_default_nicename, get_repository_mapping, load_mapping
 from payload_types import DownloadReleaseResult, DownloadResultPayload, ReleaseAssetQueueItem, SkippedItemPayload
 from requests.exceptions import ChunkedEncodingError, ConnectionError, Timeout
 from typing import Literal, Optional, cast
@@ -69,21 +69,29 @@ def _build_repo_parent_folder(repo: str) -> str:
 def _resolve_finalized_base_directory(
     repo: Optional[str],
     default_done_dir: str,
-) -> tuple[str, bool]:
-    """Return the finalization base directory and whether mapping destination is used."""
+) -> tuple[str, bool, Optional[str]]:
+    """Return finalization base directory, mapping usage, and optional fallback warning."""
     normalized_repo = str(repo or "").strip()
     if not normalized_repo:
-        return default_done_dir, False
+        return default_done_dir, False, None
 
     mapping_entry = get_repository_mapping(normalized_repo)
     if not isinstance(mapping_entry, dict):
-        return default_done_dir, False
+        return default_done_dir, False, None
 
     destination = str(mapping_entry.get("destination") or "").strip()
     if not destination:
-        return default_done_dir, False
+        return default_done_dir, False, None
 
-    destination_root = os.path.expanduser(os.path.expandvars(destination))
+    destination_root = os.path.normpath(
+        os.path.expanduser(os.path.expandvars(destination))
+    )
+    if not os.path.isdir(destination_root):
+        warning_text = (
+            "Mapped destination root does not exist; "
+            f"falling back to Done for {normalized_repo}: {destination_root}"
+        )
+        return default_done_dir, False, warning_text
 
     nicename = str(mapping_entry.get("nicename") or "").strip()
     if not nicename:
@@ -96,7 +104,7 @@ def _resolve_finalized_base_directory(
     if subfolder:
         base_dir = os.path.join(base_dir, sanitize_folder_name(subfolder))
 
-    return base_dir, True
+    return base_dir, True, None
 
 
 def _resolve_repository_limit(repo: Optional[str]) -> int:
@@ -166,6 +174,137 @@ def _warn_if_destination_limit_exceeded(repo: Optional[str], repo_destination_ro
     )
 
 
+def _move_done_repo_tree(source_repo_dir: str, target_repo_root: str) -> int:
+    """Move one repository subtree from Done into mapped destination root."""
+    moved_release_folders = 0
+    os.makedirs(target_repo_root, exist_ok=True)
+
+    try:
+        with os.scandir(source_repo_dir) as entries:
+            top_level_entries = list(entries)
+    except OSError:
+        return 0
+
+    for entry in top_level_entries:
+        source_path = entry.path
+
+        if entry.is_dir():
+            target_release_type_dir = os.path.join(target_repo_root, entry.name)
+            os.makedirs(target_release_type_dir, exist_ok=True)
+
+            try:
+                with os.scandir(source_path) as release_entries:
+                    for release_entry in release_entries:
+                        target_path = os.path.join(target_release_type_dir, release_entry.name)
+                        target_path = _resolve_directory_name_collision(target_path)
+                        shutil.move(release_entry.path, target_path)
+                        moved_release_folders += 1
+            except OSError:
+                continue
+
+            try:
+                os.rmdir(source_path)
+            except OSError:
+                pass
+            continue
+
+        target_path = os.path.join(target_repo_root, entry.name)
+        target_path = _resolve_directory_name_collision(target_path)
+        shutil.move(source_path, target_path)
+        moved_release_folders += 1
+
+    try:
+        os.rmdir(source_repo_dir)
+    except OSError:
+        pass
+
+    return moved_release_folders
+
+
+def move_done_folders_to_mapped_destinations() -> dict[str, int]:
+    """Move eligible repository folders from Done to configured mapping destinations."""
+    config = load_config()
+    download_roots = get_all_download_dirs(config)
+    mapping_payload = load_mapping()
+    repositories = mapping_payload.get("repositories", [])
+
+    scanned_repo_roots = 0
+    moved_release_folders = 0
+    missing_destination_warnings = 0
+    skipped_without_destination = 0
+
+    if not download_roots:
+        print("No configured download roots found; nothing to migrate.")
+        return {
+            "scanned_repo_roots": scanned_repo_roots,
+            "moved_release_folders": moved_release_folders,
+            "missing_destination_warnings": missing_destination_warnings,
+            "skipped_without_destination": skipped_without_destination,
+        }
+
+    for download_root in download_roots:
+        done_root = os.path.join(download_root, "GHAADD", "Done")
+        if not os.path.isdir(done_root):
+            continue
+
+        for entry in repositories:
+            if not isinstance(entry, dict):
+                continue
+
+            repo_name = str(entry.get("name") or "").strip()
+            if not repo_name:
+                continue
+
+            repo_parent_folder = _build_repo_parent_folder(repo_name)
+            source_repo_dir = os.path.join(done_root, repo_parent_folder)
+            if not os.path.isdir(source_repo_dir):
+                continue
+
+            scanned_repo_roots += 1
+
+            destination_value = str(entry.get("destination") or "").strip()
+            if not destination_value:
+                skipped_without_destination += 1
+                continue
+
+            target_repo_root, uses_mapping_destination, fallback_warning = _resolve_finalized_base_directory(
+                repo_name,
+                done_root,
+            )
+            if fallback_warning:
+                missing_destination_warnings += 1
+                print(f"⚠️ {fallback_warning}")
+                continue
+
+            if not uses_mapping_destination:
+                skipped_without_destination += 1
+                continue
+
+            moved_now = _move_done_repo_tree(source_repo_dir, target_repo_root)
+            if moved_now > 0:
+                moved_release_folders += moved_now
+                print(
+                    "✅ Deferred move completed for "
+                    f"{repo_name}: moved {moved_now} item(s) to '{target_repo_root}'."
+                )
+                _warn_if_destination_limit_exceeded(repo_name, target_repo_root)
+
+    print(
+        "Deferred Done->Destination move summary: "
+        f"scanned_repo_roots={scanned_repo_roots}, "
+        f"moved_release_folders={moved_release_folders}, "
+        f"missing_destination_warnings={missing_destination_warnings}, "
+        f"skipped_without_destination={skipped_without_destination}"
+    )
+
+    return {
+        "scanned_repo_roots": scanned_repo_roots,
+        "moved_release_folders": moved_release_folders,
+        "missing_destination_warnings": missing_destination_warnings,
+        "skipped_without_destination": skipped_without_destination,
+    }
+
+
 def move_processing_folder_to_done(working_dir: str, repo: Optional[str] = None) -> Optional[str]:
     """Move a finished release folder from Processing to final destination."""
     if not working_dir:
@@ -193,10 +332,12 @@ def move_processing_folder_to_done(working_dir: str, repo: Optional[str] = None)
     done_dir = os.path.join(ghaadd_root, "Done")
     relative_path = os.path.relpath(normalized_working_dir, processing_root)
 
-    base_destination, uses_mapping_destination = _resolve_finalized_base_directory(
+    base_destination, uses_mapping_destination, fallback_warning = _resolve_finalized_base_directory(
         repo,
         done_dir,
     )
+    if fallback_warning:
+        print(f"   ⚠️ {fallback_warning}")
     os.makedirs(base_destination, exist_ok=True)
 
     target_relative_path = relative_path
@@ -423,7 +564,14 @@ def download_release(
     include_stats: bool = False,
 ) -> DownloadReleaseResult:
     """Download a GitHub release and all assets using config-driven routing."""
-    download_dir = cast(str, get_download_dir_for_release(repo, release_type))
+    config = load_config()
+
+    # Always ensure default staging roots exist at download start.
+    # This recovers from accidental folder deletion.
+    default_download_dir = get_default_download_dir(config)
+    _build_staging_directories(default_download_dir)
+
+    download_dir = cast(str, get_download_dir_for_release(repo, release_type, config=config))
     return download_all_assets(repo, tag, download_dir, include_stats=include_stats, release_type=release_type)
 
 

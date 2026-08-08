@@ -9,6 +9,7 @@ from db_manager import (
     purge_state_database,
     supersede_pending_jobs_by_ids,
 )
+from asset_downloader import move_done_folders_to_mapped_destinations
 from doctor_checks import run_doctor
 from mapping_manager import validate_mapping_schema
 from queue_reports import build_queue_status_options, print_queue_status
@@ -25,6 +26,11 @@ def parse_cli_args(args: list[str], version: str) -> argparse.Namespace:
     parser.add_argument("--once", action="store_true", help="Run a single ingest-and-process cycle, then exit.")
     parser.add_argument("--poll", action="store_true", help="Force polling mode even if disabled in config.")
     parser.add_argument("--purge-state", action="store_true", help="Delete the local state database (state.db).")
+    parser.add_argument(
+        "--move-done-to-destination",
+        action="store_true",
+        help="Retry moving repository folders from Done to configured mapping destinations.",
+    )
     parser.add_argument("--smoke-test", action="store_true", help="Run internal smoke tests for download behavior.")
     parser.add_argument("--mapping-validate", action="store_true", help="Validate mapping.json schema and report issues.")
     parser.add_argument("--doctor", action="store_true", help="Run environment and cross-platform diagnostics.")
@@ -214,6 +220,12 @@ def handle_cli_command(parsed_args: argparse.Namespace, run_smoke_tests: Callabl
             print("Deleted local state database: state.db")
         else:
             print("No local state database found to delete.")
+        return True
+
+    if parsed_args.move_done_to_destination:
+        summary = move_done_folders_to_mapped_destinations()
+        if parsed_args.json:
+            print(json.dumps(summary, indent=2))
         return True
 
     if parsed_args.smoke_test:
