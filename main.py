@@ -151,10 +151,10 @@ def run_polling_loop(interval_seconds, jitter_min_seconds, jitter_max_seconds):
 
 def main():
     """Run the main orchestration flow for ingest and queue processing."""
+    print(f"GHAADD {__version__} is starting...")
     config = load_config()
     log_stream = setup_terminal_logging(config)
     try:
-        print(f"GHAADD {__version__} is starting...")
         parsed_args = parse_cli_args(sys.argv[1:], __version__)
         if handle_cli_command(parsed_args, run_internal_smoke_tests):
             return
