@@ -69,7 +69,58 @@ First-time setup:
 
 1. Copy config.example.json to config.json.
 2. Update paths and other values in config.json for your machine.
-3. Optional: create or edit mapping.json for repository destination mapping.
+3. Optional: create or edit mapping.json for repository metadata and routing overrides.
+
+### Repository mapping file (mapping.json)
+
+The app auto-creates and updates repository entries in mapping.json as notifications are ingested.
+
+Each repository entry supports these fields:
+
+- name: repository identity in owner/repo form
+- nicename: optional display name used for human-readable labels
+- destination: optional destination base path for custom routing
+- subfolder: optional subfolder name to append under the destination
+- limit: optional integer warning threshold for the number of folders at the destination (`0` disables checks)
+- active: timestamp of the last activity for that repository entry
+
+When a new repository is seen, the app fills in a default skeleton entry with:
+
+- the repository name
+- a generated nicename (for example, repo (owner))
+- empty destination/subfolder values
+- a default `limit` value of `0` (disabled until you configure a threshold)
+- an active timestamp
+
+If you want to customize the display name or routing, you can edit these fields manually in mapping.json.
+
+Example:
+
+```json
+{
+  "name": "example-org/example-repo",
+  "nicename": "My name for this repository",
+  "destination": "X:\\Path\\To\\Destination",
+  "subfolder": "@GitHub",
+  "limit": 25,
+  "active": "2026-08-08_14-59"
+}
+```
+
+In this example, the repository is still identified by its GitHub name in the name field, but the visible label becomes "My name for this repository" and the files are routed under the destination path plus the subfolder.
+
+The resulting folder path for this example would be:
+
+```text
+X:\Path\To\Destination\My name for this repository\@GitHub
+```
+
+In other words, the app uses the combination of <destination> + <nicename> + <subfolder> as the effective base folder for that repository.
+
+If `limit` is `0`, no folder-count warning is applied for that repository.
+If `limit` is greater than `0`, the app can later warn when the destination appears to contain too many folders.
+
+The doctor check validates the mapping schema and warns when destination values are empty or when path styles do not match the current OS.
 
 Path note:
 
@@ -133,7 +184,7 @@ Example:
 {
 	"processing": {
 		"max_emails_to_process": 0,
-		"recheck_intervals_minutes": [5, 15, 60, 1440]
+		"recheck_intervals_minutes": [5, 15, 60, 360, 720, 1440]
 	},
 	"mailbox": {
 		"folder": "GitHubNotifications"

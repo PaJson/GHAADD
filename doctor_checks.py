@@ -1,5 +1,6 @@
 import os
 import re
+import sys
 from typing import TypedDict
 
 from mapping_manager import validate_mapping_schema
@@ -103,7 +104,7 @@ def run_doctor() -> DoctorReport:
     warnings: list[str] = []
     checks: list[str] = []
 
-    platform_name = os.sys.platform
+    platform_name = sys.platform
     checks.append(f"Detected platform: {platform_name}")
 
     gmail_user = os.getenv("GMAIL_USER")

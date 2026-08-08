@@ -131,6 +131,7 @@ def upsert_repository_mapping(
         "nicename": build_default_nicename(repo),
         "destination": "",
         "subfolder": "",
+        "limit": 0,
         "active": effective_active_stamp,
     }
     repositories.append(skeleton_entry)
@@ -180,7 +181,7 @@ def validate_mapping_schema() -> MappingValidationResult:
         unknown_keys = sorted(
             key
             for key in entry.keys()
-            if key not in {"name", "nicename", "destination", "subfolder", "active"}
+            if key not in {"name", "nicename", "destination", "subfolder", "limit", "active"}
         )
         for key in unknown_keys:
             warnings.append(f"{location} has unknown key '{key}'.")
@@ -198,8 +199,18 @@ def validate_mapping_schema() -> MappingValidationResult:
             else:
                 seen_names[normalized_name] = index
 
-        for field_name in ("nicename", "destination", "subfolder", "active"):
+        for field_name in ("nicename", "destination", "subfolder", "limit", "active"):
             field_value = entry.get(field_name)
+            if field_name == "limit":
+                if field_value is None:
+                    continue
+                if isinstance(field_value, int):
+                    if field_value < 0:
+                        errors.append(f"{location}.limit must be an integer greater than or equal to 0.")
+                    continue
+                errors.append(f"{location}.limit must be an integer greater than or equal to 0.")
+                continue
+
             if field_value is not None and not isinstance(field_value, str):
                 errors.append(f"{location}.{field_name} must be a string when provided.")
 
