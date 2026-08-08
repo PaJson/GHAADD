@@ -235,10 +235,7 @@ Example:
 		"enabled": false
 	},
 	"paths": {
-		"default_download_dir": "<set-local-download-path>",
-		"repo_paths": {},
-		"release_type_paths": {},
-		"repo_release_type_paths": {}
+		"default_download_dir": "D:"
 	}
 }
 ```
@@ -281,10 +278,7 @@ Key behavior:
 
 Destination directory resolution order (most specific first):
 
-1. paths.repo_release_type_paths[repo][release-type]
-2. paths.repo_paths[repo]
-3. paths.release_type_paths[release-type]
-4. paths.default_download_dir
+1. paths.default_download_dir
 
 Release-type keys are normalized to lowercase with hyphens (for example: release, pre-release).
 

@@ -60,15 +60,6 @@ def _get_nested(config, *keys):
     return current
 
 
-def _normalize_release_type(release_type):
-    """Normalize a release-type label for config key lookups."""
-    if release_type is None:
-        return ""
-    normalized = str(release_type).strip().lower()
-    normalized = normalized.replace("_", "-")
-    return normalized
-
-
 def _normalize_configured_path(path_value: str) -> str:
     """Normalize configured path values and fix Windows drive-root shorthand."""
     normalized = path_value.strip()
@@ -160,25 +151,6 @@ def get_all_download_dirs(config: Optional[Dict[str, Any]] = None) -> list[str]:
             unique_dirs.append(normalized)
 
     add_path(get_default_download_dir(config))
-
-    repo_paths = _get_nested(config, "paths", "repo_paths")
-    if isinstance(repo_paths, dict):
-        for value in repo_paths.values():
-            add_path(value)
-
-    release_type_paths = _get_nested(config, "paths", "release_type_paths")
-    if isinstance(release_type_paths, dict):
-        for value in release_type_paths.values():
-            add_path(value)
-
-    combo_paths = _get_nested(config, "paths", "repo_release_type_paths")
-    if isinstance(combo_paths, dict):
-        for repo_map in combo_paths.values():
-            if not isinstance(repo_map, dict):
-                continue
-            for value in repo_map.values():
-                add_path(value)
-
     return unique_dirs
 
 
@@ -236,37 +208,7 @@ def get_folder_settings(config: Optional[Dict[str, Any]] = None) -> FolderSettin
 
 
 def get_download_dir_for_release(repo, release_type=None, config=None):
-    """Return the destination directory using repo and release-type overrides.
-
-    Resolution order:
-    1) paths.repo_release_type_paths[repo][release_type]
-    2) paths.repo_paths[repo]
-    3) paths.release_type_paths[release_type]
-    4) paths.default_download_dir
-    """
-    config = config if config is not None else load_config()
-    normalized_release_type = _normalize_release_type(release_type)
-
-    repo_release_type_paths = _get_nested(config, "paths", "repo_release_type_paths")
-    if isinstance(repo_release_type_paths, dict):
-        repo_map = repo_release_type_paths.get(repo)
-        if isinstance(repo_map, dict) and normalized_release_type:
-            value = repo_map.get(normalized_release_type)
-            if isinstance(value, str) and value.strip():
-                return _normalize_configured_path(value)
-
-    repo_paths = _get_nested(config, "paths", "repo_paths")
-    if isinstance(repo_paths, dict):
-        value = repo_paths.get(repo)
-        if isinstance(value, str) and value.strip():
-            return _normalize_configured_path(value)
-
-    release_type_paths = _get_nested(config, "paths", "release_type_paths")
-    if isinstance(release_type_paths, dict) and normalized_release_type:
-        value = release_type_paths.get(normalized_release_type)
-        if isinstance(value, str) and value.strip():
-            return _normalize_configured_path(value)
-
+    """Return the configured default download directory for a release."""
     return get_default_download_dir(config)
 
 

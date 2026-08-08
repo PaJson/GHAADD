@@ -26,9 +26,6 @@
     "enabled": false
   },
   "paths": {
-    "default_download_dir": "<set-local-download-path>",
-    "repo_paths": {},
-    "release_type_paths": {},
-    "repo_release_type_paths": {}
+    "default_download_dir": "<set-local-download-path>"
   }
 }

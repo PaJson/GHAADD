@@ -65,27 +65,6 @@ def _iter_config_paths(config_payload: dict) -> list[tuple[str, str]]:
     if isinstance(default_download_dir, str):
         paths.append(("paths.default_download_dir", default_download_dir))
 
-    repo_paths = paths_section.get("repo_paths")
-    if isinstance(repo_paths, dict):
-        for repo, target in repo_paths.items():
-            if isinstance(target, str):
-                paths.append((f"paths.repo_paths[{repo}]", target))
-
-    release_type_paths = paths_section.get("release_type_paths")
-    if isinstance(release_type_paths, dict):
-        for release_type, target in release_type_paths.items():
-            if isinstance(target, str):
-                paths.append((f"paths.release_type_paths[{release_type}]", target))
-
-    combo_paths = paths_section.get("repo_release_type_paths")
-    if isinstance(combo_paths, dict):
-        for repo, repo_map in combo_paths.items():
-            if not isinstance(repo_map, dict):
-                continue
-            for release_type, target in repo_map.items():
-                if isinstance(target, str):
-                    paths.append((f"paths.repo_release_type_paths[{repo}][{release_type}]", target))
-
     return paths
 
 
