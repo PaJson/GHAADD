@@ -13,6 +13,7 @@ from asset_downloader import move_done_folders_to_mapped_destinations
 from doctor_checks import run_doctor
 from mapping_manager import validate_mapping_schema
 from queue_reports import build_queue_status_options, print_queue_status
+from queue_worker import process_selected_pending_jobs
 
 
 def parse_cli_args(args: list[str], version: str) -> argparse.Namespace:
@@ -34,6 +35,13 @@ def parse_cli_args(args: list[str], version: str) -> argparse.Namespace:
     parser.add_argument("--smoke-test", action="store_true", help="Run internal smoke tests for download behavior.")
     parser.add_argument("--mapping-validate", action="store_true", help="Validate mapping.json schema and report issues.")
     parser.add_argument("--doctor", action="store_true", help="Run environment and cross-platform diagnostics.")
+    parser.add_argument(
+        "--run-pending",
+        nargs="+",
+        type=int,
+        metavar="JOB",
+        help="Run the selected pending jobs immediately without changing their retry schedule.",
+    )
 
     queue_group = parser.add_argument_group("queue status/reporting options")
     queue_group.add_argument("--queue-status", action="store_true", help="Print current queue counts and scheduling details.")
@@ -131,6 +139,30 @@ def handle_cli_command(parsed_args: argparse.Namespace, run_smoke_tests: Callabl
             for warning_text in validation_result["warnings"]:
                 print(f"- {warning_text}")
 
+        return True
+
+    if parsed_args.run_pending:
+        requested_ids = sorted({int(job_id) for job_id in parsed_args.run_pending})
+        invalid_ids = [job_id for job_id in requested_ids if job_id <= 0]
+        if invalid_ids:
+            print(
+                "Run-pending option error: invalid job ID(s). Expected positive integers only.",
+                file=sys.stderr,
+            )
+            return True
+
+        with open_database() as connection:
+            processed_count, skipped_ids, missing_ids = process_selected_pending_jobs(connection, None, requested_ids)
+
+        print(f"Manual pending-job run complete. Processed {processed_count} job(s).")
+        if skipped_ids:
+            print("Skipped (not pending):")
+            for job_id in skipped_ids:
+                print(f"- #{job_id}")
+        if missing_ids:
+            print("Skipped (not found):")
+            for job_id in missing_ids:
+                print(f"- #{job_id}")
         return True
 
     if parsed_args.queue_remove_pending_ids:

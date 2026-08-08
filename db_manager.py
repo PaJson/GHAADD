@@ -466,9 +466,13 @@ def get_jobs_by_ids(connection, job_ids: Iterable[int]):
             release_type,
             status,
             attempt_count,
+            next_check_time,
+            created_at,
             expected_commit,
-            last_result,
-            next_check_time
+            downloaded_count,
+            skipped_count,
+            total_items,
+            last_result
         FROM job_queue
         WHERE id IN ({placeholders})
         ORDER BY id ASC
@@ -801,6 +805,41 @@ def reschedule_job(
         (
             float(next_check_time),
             int(attempt_count),
+            expected_commit,
+            int(downloaded_count),
+            int(skipped_count),
+            int(total_items),
+            last_result,
+            job_id,
+        ),
+    )
+    connection.commit()
+
+
+def update_job_for_manual_check(
+    connection,
+    job_id,
+    expected_commit=None,
+    downloaded_count=0,
+    skipped_count=0,
+    total_items=0,
+    last_result="MANUAL_CHECK",
+):
+    """Update a pending job's counters and result without changing its retry schedule."""
+    connection.execute(
+        """
+        UPDATE job_queue
+        SET status = 'PENDING',
+            expected_commit = ?,
+            downloaded_count = ?,
+            skipped_count = ?,
+            total_items = ?,
+            last_result = ?,
+            updated_at = CAST(strftime('%s', 'now') AS REAL),
+            completed_at = NULL
+        WHERE id = ?
+        """,
+        (
             expected_commit,
             int(downloaded_count),
             int(skipped_count),

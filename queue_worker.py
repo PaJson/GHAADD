@@ -5,6 +5,7 @@ import time
 from config_manager import get_max_emails_to_process, get_recheck_intervals_minutes
 from db_manager import (
     enqueue_job,
+    get_jobs_by_ids,
     get_pending_job_for_release,
     get_previous_successful_completed_job,
     get_due_jobs,
@@ -15,6 +16,7 @@ from db_manager import (
     supersede_duplicate_pending_jobs,
     reschedule_job,
     save_job_skip_details,
+    update_job_for_manual_check,
 )
 from asset_downloader import download_release, move_processing_folder_to_done
 from mailbox_listener import get_pending_notifications, mark_as_read_and_delete
@@ -279,6 +281,221 @@ def ingest_notifications_once(connection, github_token: Optional[str]) -> int:
     except Exception as exc:
         print(f"Fatal error: {str(exc)}", file=sys.stderr)
         return 0
+
+
+def process_selected_pending_jobs(connection, github_token: Optional[str], job_ids) -> tuple[int, list[int], list[int]]:
+    """Run selected pending jobs immediately without changing their retry schedule."""
+    normalized_ids = sorted({int(job_id) for job_id in (job_ids or [])})
+    if not normalized_ids:
+        print("No pending job IDs were supplied.")
+        return 0, [], []
+
+    rows = get_jobs_by_ids(connection, normalized_ids)
+    if not rows:
+        print("No matching queue jobs found for the requested IDs.")
+        return 0, [], normalized_ids
+
+    rows_by_id = {int(row["id"]): row for row in rows}
+    missing_ids = [job_id for job_id in normalized_ids if job_id not in rows_by_id]
+    skipped_ids = [job_id for job_id in normalized_ids if job_id in rows_by_id and rows_by_id[job_id]["status"] != "PENDING"]
+
+    print(f"Running manual check for {len(rows)} matching job(s)...")
+    retry_intervals_minutes = get_recheck_intervals_minutes()
+    now_timestamp = time.time()
+
+    processed_count = 0
+    for row in rows:
+        job_id = int(row["id"])
+        if row["status"] != "PENDING":
+            print(f"Skipping job #{job_id}: status={row['status']}")
+            continue
+
+        processed_count += 1
+        repo = row["repo"]
+        tag = row["tag"]
+        release_type = row["release_type"]
+        attempt_count = int(row["attempt_count"] or 0)
+        expected_commit = row["expected_commit"]
+
+        print(
+            f"[{processed_count}/{len(rows)}] Manual check for job #{job_id}: {repo} {tag} "
+            f"(attempt={attempt_count}, expected_commit={expected_commit or 'unknown'})"
+        )
+
+        current_commit, current_commit_reason = get_current_commit_hash(
+            repo,
+            tag,
+            github_token,
+            include_reason=True,
+        )
+        if expected_commit and current_commit and expected_commit != current_commit:
+            print(f"   🔁 Commit changed: {expected_commit} -> {current_commit}")
+
+            existing_new_commit_job = get_pending_job_for_release(
+                connection,
+                repo,
+                tag,
+                release_type=release_type,
+                expected_commit=current_commit,
+                exclude_job_id=job_id,
+            )
+
+            if existing_new_commit_job is None:
+                enqueue_job(
+                    connection,
+                    repo,
+                    tag,
+                    release_type=release_type,
+                    next_check_time=now_timestamp,
+                    expected_commit=current_commit,
+                )
+                print(
+                    "   🆕 Created a new PENDING job for the updated commit "
+                    f"({current_commit})."
+                )
+            else:
+                print(
+                    "   ℹ️ A PENDING job for the updated commit already exists "
+                    f"(job_id={int(existing_new_commit_job['id'])}, commit={current_commit})."
+                )
+
+            mark_job_superseded(
+                connection,
+                job_id,
+                attempt_count=attempt_count,
+                expected_commit=current_commit,
+                downloaded_count=int(row["downloaded_count"] or 0),
+                skipped_count=int(row["skipped_count"] or 0),
+                total_items=int(row["total_items"] or 0),
+                last_result="SUPERSEDED_COMMIT_CHANGED",
+            )
+            print("   ⏭️ Marked current job as SUPERSEDED; skipping download for this older commit baseline.")
+            continue
+        elif expected_commit and current_commit and expected_commit == current_commit:
+            print(f"   ✅ Commit unchanged: {current_commit}")
+        elif current_commit:
+            print(f"   ℹ️ Commit baseline discovered: {current_commit}")
+        else:
+            print(
+                "   ⚠️ Could not resolve current commit hash from GitHub API "
+                f"(reason={current_commit_reason or 'unavailable'})."
+            )
+
+        result: DownloadReleaseResult
+        try:
+            result = download_release(repo, tag, release_type, include_stats=True)
+        except Exception as exc:
+            print(f"   ❌ Processor error while downloading: {exc}")
+            result = {
+                "status": "FAILED",
+                "downloaded_count": 0,
+                "skipped_count": 0,
+                "total_items": 0,
+                "skipped_items": [],
+                "working_dir": None,
+                "skip_reason": None,
+            }
+
+        if isinstance(result, dict):
+            result_status = result.get("status", "FAILED")
+            downloaded_count = int(result.get("downloaded_count", 0) or 0)
+            skipped_count = int(result.get("skipped_count", 0) or 0)
+            total_items = int(result.get("total_items", 0) or 0)
+            skipped_items: list[SkippedItemPayload] = result.get("skipped_items") or []
+            working_dir = result.get("working_dir")
+            skip_reason = result.get("skip_reason")
+        else:
+            result_status = "SUCCESS" if result is True else ("SKIP" if result == "SKIP" else "FAILED")
+            downloaded_count = 0
+            skipped_count = 0
+            total_items = 0
+            skipped_items: list[SkippedItemPayload] = []
+            working_dir = None
+            skip_reason = None
+
+        latest_commit = current_commit or expected_commit
+
+        if result_status == "SKIP" and _is_terminal_skip_reason(skip_reason):
+            mark_job_completed(
+                connection,
+                job_id,
+                attempt_count=attempt_count,
+                downloaded_count=downloaded_count,
+                skipped_count=skipped_count,
+                total_items=total_items,
+                last_result=result_status,
+            )
+            save_job_skip_details(connection, job_id, attempt_count, skipped_items)
+            print(
+                "   ⏹️ Release/tag not found; marked COMPLETED immediately "
+                f"at attempt={attempt_count}."
+            )
+            print(f"   📊 Files: downloaded={downloaded_count}, skipped={skipped_count}, total={total_items}")
+            _finalize_staged_release_folder(working_dir, repo=repo)
+            continue
+
+        if attempt_count < len(retry_intervals_minutes):
+            update_job_for_manual_check(
+                connection,
+                job_id,
+                expected_commit=latest_commit,
+                downloaded_count=downloaded_count,
+                skipped_count=skipped_count,
+                total_items=total_items,
+                last_result="MANUAL_CHECK",
+            )
+            save_job_skip_details(connection, job_id, attempt_count, skipped_items)
+            print(
+                f"   🔎 Manual check completed; job remains PENDING without changing retry schedule "
+                f"(attempt={attempt_count}, last_status={result_status})."
+            )
+            print(f"   📊 Files: downloaded={downloaded_count}, skipped={skipped_count}, total={total_items}")
+        else:
+            if result_status in ("SUCCESS", "SKIP"):
+                mark_job_completed(
+                    connection,
+                    job_id,
+                    attempt_count=attempt_count,
+                    downloaded_count=downloaded_count,
+                    skipped_count=skipped_count,
+                    total_items=total_items,
+                    last_result=result_status,
+                )
+                if result_status == "SUCCESS":
+                    _warn_if_file_count_changed_from_previous_success(
+                        connection,
+                        job_id=job_id,
+                        repo=repo,
+                        tag=tag,
+                        release_type=release_type,
+                        current_total_items=total_items,
+                    )
+            else:
+                mark_job_failed(
+                    connection,
+                    job_id,
+                    attempt_count=attempt_count,
+                    expected_commit=latest_commit,
+                    downloaded_count=downloaded_count,
+                    skipped_count=skipped_count,
+                    total_items=total_items,
+                    last_result="FAILED",
+                )
+            save_job_skip_details(connection, job_id, attempt_count, skipped_items)
+            if result_status in ("SUCCESS", "SKIP"):
+                print(
+                    "   ✅ Re-check plan complete; marked COMPLETED "
+                    f"at attempt={attempt_count} (last_status={result_status})."
+                )
+            else:
+                print(
+                    "   ❌ Re-check plan complete; marked FAILED "
+                    f"at attempt={attempt_count}."
+                )
+            print(f"   📊 Files: downloaded={downloaded_count}, skipped={skipped_count}, total={total_items}")
+            _finalize_staged_release_folder(working_dir, repo=repo)
+
+    return processed_count, skipped_ids, missing_ids
 
 
 def process_queue_once(connection, github_token: Optional[str]) -> None:
