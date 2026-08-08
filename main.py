@@ -154,6 +154,7 @@ def main():
     config = load_config()
     log_stream = setup_terminal_logging(config)
     try:
+        print(f"GHAADD {__version__} is starting...")
         parsed_args = parse_cli_args(sys.argv[1:], __version__)
         if handle_cli_command(parsed_args, run_internal_smoke_tests):
             return
