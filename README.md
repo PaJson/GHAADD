@@ -126,8 +126,8 @@ Subfolder behavior:
 
 Destination behavior:
 
-- If `destination` is empty, the app falls back to the default `GHAADD/Done` location.
-- If `destination` is set but the destination root folder does not exist, the app prints a warning and falls back to `GHAADD/Done`.
+- If `destination` is empty, the app falls back to the default `GHAADD/Complete` location.
+- If `destination` is set but the destination root folder does not exist, the app prints a warning and falls back to `GHAADD/Complete`.
 - When destination exists, `nicename` and `subfolder` folders are created automatically when needed.
 
 If `limit` is `0`, no folder-count warning is applied for that repository.
@@ -160,7 +160,7 @@ CLI options:
 	- Add --json to output the diagnostics report as JSON.
 - --mapping-validate: Validate mapping.json schema and print errors/warnings.
 	- Add --json to output the validation result as JSON.
-- --move-done-to-destination: Retry moving repository folders from `Done` to configured mapping destinations.
+- --move-complete-to-destination: Retry moving repository folders from `Complete` to configured mapping destinations.
 	- Useful when destination storage was unavailable earlier (for example NAS/network issues).
 	- Add --json to output a machine-readable summary.
 - --queue-status: Print queue counts, due-now count, next pending job, and recent jobs.
@@ -215,9 +215,15 @@ Example:
 		"jitter_min_seconds": 5,
 		"jitter_max_seconds": 30
 	},
+	"folders": {
+		"ghaadd_root": "GHAADD",
+		"processing": "Processing",
+		"complete": "Complete",
+		"partial": "Partial",
+		"logs": "Logs"
+	},
 	"logging": {
-		"enabled": false,
-		"path": ""
+		"enabled": false
 	},
 	"paths": {
 		"default_download_dir": "<set-local-download-path>",
@@ -248,12 +254,13 @@ Key behavior:
 	- true disables persistent duplicate state for the run.
 - polling.interval_seconds, polling.jitter_min_seconds, polling.jitter_max_seconds
 	- Next run delay is interval_seconds + random jitter.
+- folders.ghaadd_root, folders.processing, folders.complete, folders.partial, folders.logs
+	- Folder names used under each resolved base download path.
+	- Defaults are GHAADD, Processing, Complete, Partial, and Logs.
 - logging.enabled
 	- false disables terminal output logging.
 	- true writes all terminal output (stdout and stderr) to a .log file for this run.
-- logging.path
-	- Optional folder path where log files should be created.
-	- When empty or missing, log files are created in paths.default_download_dir.
+	- Log files are written under: paths.default_download_dir/folders.ghaadd_root/folders.logs.
 	- Each run creates a new log file named with app start time (format: YYYYMMDD_HHMMSS.log).
 
 ## Download Path Routing
@@ -269,16 +276,18 @@ Release-type keys are normalized to lowercase with hyphens (for example: release
 
 ## Staging Folders
 
-Downloads are staged under the resolved base path in a GHAADD working area:
+Downloads are staged under the resolved base path in a working area folder (default: GHAADD):
 
 - <resolved-base-path>/GHAADD/Processing
-- <resolved-base-path>/GHAADD/Done
-- <resolved-base-path>/GHAADD/Superseded
+- <resolved-base-path>/GHAADD/Complete
+- <resolved-base-path>/GHAADD/Partial
+
+These names are configurable via folders.ghaadd_root, folders.processing, folders.complete, and folders.partial.
 
 Each release is stored under a repository parent folder:
 
 - <resolved-base-path>/GHAADD/Processing/<repo> (<owner>)/<type of release>/<release-folder>
-- <resolved-base-path>/GHAADD/Done/<repo> (<owner>)/<type of release>/<release-folder>
+- <resolved-base-path>/GHAADD/Complete/<repo> (<owner>)/<type of release>/<release-folder>
 
 Behavior:
 
@@ -287,9 +296,9 @@ Behavior:
 - When a new notification is ingested for the same repo/tag/release type, existing pending jobs for that identity are marked SUPERSEDED and replaced by a fresh pending job.
 - When a commit hash changes for the same repo/tag during rechecks, the old PENDING job is marked SUPERSEDED and a new PENDING job is created for the updated commit.
 - When a release/tag is not found on GitHub (SKIP: release_not_found), the job is completed immediately and not rechecked.
-- When a queue job reaches a terminal state (COMPLETED or FAILED with no retries left), its release folder is moved to Done.
-- When a pending job is superseded and its file counters indicate completion, its staged folder is finalized to Done or mapped destination.
-- When a pending job is superseded and appears incomplete, its staged folder is moved to Superseded for quarantine/inspection.
+- When a queue job reaches a terminal state (COMPLETED or FAILED with no retries left), its release folder is moved to Complete.
+- When a pending job is superseded and its file counters indicate completion, its staged folder is finalized to Complete or mapped destination.
+- When a pending job is superseded and appears incomplete, its staged folder is moved to Partial for quarantine/inspection.
 
 ## Source Archive Naming
 

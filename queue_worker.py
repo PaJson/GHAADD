@@ -3,7 +3,7 @@ import sys
 import time
 import os
 
-from config_manager import get_max_emails_to_process, get_recheck_intervals_minutes
+from config_manager import get_folder_settings, get_max_emails_to_process, get_recheck_intervals_minutes
 from db_manager import (
     enqueue_job,
     get_jobs_by_ids,
@@ -21,8 +21,8 @@ from db_manager import (
 )
 from asset_downloader import (
     download_release,
-    move_processing_folder_to_done,
-    move_processing_folder_to_superseded,
+    move_processing_folder_to_complete,
+    move_processing_folder_to_partial,
 )
 from mailbox_listener import get_pending_notifications, mark_as_read_and_delete
 from mapping_manager import upsert_repository_mapping
@@ -31,17 +31,20 @@ from typing import Literal, Optional, Tuple, Union, cast, overload
 
 
 GITHUB_API_VERSION = "2022-11-28"
+_FOLDER_SETTINGS = get_folder_settings()
+_COMPLETE_LABEL = _FOLDER_SETTINGS["complete"]
+_PARTIAL_LABEL = _FOLDER_SETTINGS["partial"]
 
 
 def _finalize_staged_release_folder(working_dir: Optional[str], repo: Optional[str] = None) -> None:
-    """Move a terminal job's staging folder from Processing to Done."""
+    """Move a terminal job's staging folder from Processing to complete destination."""
     if not working_dir:
         return
 
     try:
-        done_dir = move_processing_folder_to_done(working_dir, repo=repo)
+        done_dir = move_processing_folder_to_complete(working_dir, repo=repo)
     except OSError as exc:
-        print(f"   ⚠️ Could not move staging folder to Done: {exc}")
+        print(f"   ⚠️ Could not move staging folder to {_COMPLETE_LABEL}: {exc}")
         return
 
     if done_dir:
@@ -98,7 +101,7 @@ def _handle_superseded_pending_job_artifacts(
             return "none"
 
         try:
-            superseded_dir = move_processing_folder_to_superseded(working_dir)
+            superseded_dir = move_processing_folder_to_partial(working_dir)
         except OSError as exc:
             print(f"   ⚠️ Could not move incomplete superseded staging folder: {exc}")
             return "none"
@@ -107,7 +110,7 @@ def _handle_superseded_pending_job_artifacts(
             print(
                 "   [SUPERSEDE_FINALIZE] "
                 f"{reason_code}: moved incomplete superseded job #{job_id} "
-                f"to Superseded: {superseded_dir} "
+                f"to {_PARTIAL_LABEL}: {superseded_dir} "
                 f"(files={downloaded_count}+{skipped_count}/{total_items})."
             )
             return "quarantined"
@@ -116,7 +119,7 @@ def _handle_superseded_pending_job_artifacts(
             "   [SUPERSEDE_FINALIZE] "
             f"{reason_code}: pending job #{job_id} not finalized "
             f"because it is incomplete ({downloaded_count}+{skipped_count}/{total_items}) "
-            "and could not be moved to Superseded."
+            f"and could not be moved to {_PARTIAL_LABEL}."
         )
         return "none"
 
@@ -389,7 +392,7 @@ def ingest_notifications_once(connection, github_token: Optional[str]) -> int:
                         print(
                             "   [SUPERSEDE_FINALIZE] NEW_NOTIFICATION: "
                             f"moved {quarantined_superseded_count} incomplete superseded job folder(s) "
-                            "to Superseded."
+                            f"to {_PARTIAL_LABEL}."
                         )
 
                 enqueue_job(

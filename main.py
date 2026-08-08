@@ -83,7 +83,7 @@ def setup_terminal_logging(config):
     if not settings["enabled"]:
         return None
 
-    log_dir = settings["path"] or get_default_download_dir(config)
+    log_dir = settings["directory"] or get_default_download_dir(config)
     log_dir = os.path.expandvars(os.path.expanduser(log_dir))
 
     try:

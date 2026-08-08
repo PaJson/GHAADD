@@ -15,9 +15,15 @@
     "jitter_min_seconds": 5,
     "jitter_max_seconds": 30
   },
+  "folders": {
+    "ghaadd_root": "GHAADD",
+    "processing": "Processing",
+    "complete": "Complete",
+    "partial": "Partial",
+    "logs": "Logs"
+  },
   "logging": {
-    "enabled": false,
-    "path": ""
+    "enabled": false
   },
   "paths": {
     "default_download_dir": "<set-local-download-path>",

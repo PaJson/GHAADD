@@ -11,11 +11,24 @@ DEFAULT_RECHECK_INTERVALS_MINUTES = [5, 15, 60, 1440]
 DEFAULT_DISABLE_STATE_PERSISTENCE = False
 DEFAULT_GMAIL_FOLDER = "GitHubNotifications"
 DEFAULT_ENABLE_LOGGING = False
+DEFAULT_GHAADD_ROOT_FOLDER = "GHAADD"
+DEFAULT_PROCESSING_FOLDER = "Processing"
+DEFAULT_COMPLETE_FOLDER = "Complete"
+DEFAULT_PARTIAL_FOLDER = "Partial"
+DEFAULT_LOGS_FOLDER = "Logs"
+
+
+class FolderSettings(TypedDict):
+    ghaadd_root: str
+    processing: str
+    complete: str
+    partial: str
+    logs: str
 
 
 class LoggingSettings(TypedDict):
     enabled: bool
-    path: str
+    directory: str
 
 
 def _as_bool(value, default=False):
@@ -132,7 +145,7 @@ def get_default_download_dir(config: Optional[Dict[str, Any]] = None) -> str:
 
 
 def get_all_download_dirs(config: Optional[Dict[str, Any]] = None) -> list[str]:
-    """Return all configured download roots used for staging/Done folders."""
+    """Return all configured download roots used for staging/Complete folders."""
     config = config if config is not None else load_config()
 
     unique_dirs: list[str] = []
@@ -182,15 +195,43 @@ def get_logging_settings(config: Optional[Dict[str, Any]] = None) -> LoggingSett
     """Return normalized logging settings with safe defaults."""
     config = config if config is not None else load_config()
     enabled = _get_nested(config, "logging", "enabled")
-    path = _get_nested(config, "logging", "path")
-
-    normalized_path = ""
-    if isinstance(path, str):
-        normalized_path = _normalize_configured_path(path)
+    folder_settings = get_folder_settings(config)
+    log_dir = os.path.join(
+        get_default_download_dir(config),
+        folder_settings["ghaadd_root"],
+        folder_settings["logs"],
+    )
+    normalized_log_dir = _normalize_configured_path(log_dir)
 
     return {
         "enabled": _as_bool(enabled, DEFAULT_ENABLE_LOGGING),
-        "path": normalized_path,
+        "directory": normalized_log_dir,
+    }
+
+
+def get_folder_settings(config: Optional[Dict[str, Any]] = None) -> FolderSettings:
+    """Return configured folder names used under the GHAADD working area."""
+    config = config if config is not None else load_config()
+
+    folders = _get_nested(config, "folders")
+    folders = folders if isinstance(folders, dict) else {}
+
+    def _folder_name(key: str, default_value: str) -> str:
+        value = folders.get(key)
+        if isinstance(value, str):
+            candidate = value.strip().strip("\\/")
+            candidate = candidate.replace("/", "_").replace("\\", "_")
+            candidate = candidate.strip(".")
+            if candidate:
+                return candidate
+        return default_value
+
+    return {
+        "ghaadd_root": _folder_name("ghaadd_root", DEFAULT_GHAADD_ROOT_FOLDER),
+        "processing": _folder_name("processing", DEFAULT_PROCESSING_FOLDER),
+        "complete": _folder_name("complete", DEFAULT_COMPLETE_FOLDER),
+        "partial": _folder_name("partial", DEFAULT_PARTIAL_FOLDER),
+        "logs": _folder_name("logs", DEFAULT_LOGS_FOLDER),
     }
 
 

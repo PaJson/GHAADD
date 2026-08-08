@@ -10,7 +10,7 @@ from db_manager import (
     supersede_pending_jobs_by_ids,
 )
 from asset_downloader import (
-    move_done_folders_to_mapped_destinations,
+    move_complete_folders_to_mapped_destinations,
 )
 from doctor_checks import run_doctor
 from mapping_manager import validate_mapping_schema
@@ -30,9 +30,9 @@ def parse_cli_args(args: list[str], version: str) -> argparse.Namespace:
     parser.add_argument("--poll", action="store_true", help="Force polling mode even if disabled in config.")
     parser.add_argument("--purge-state", action="store_true", help="Delete the local state database (state.db).")
     parser.add_argument(
-        "--move-done-to-destination",
+        "--move-complete-to-destination",
         action="store_true",
-        help="Retry moving repository folders from Done to configured mapping destinations.",
+        help="Retry moving repository folders from Complete to configured mapping destinations.",
     )
     parser.add_argument(
         "--smoke-test", action="store_true", help="Run internal smoke tests for download behavior.")
@@ -257,8 +257,8 @@ def handle_cli_command(parsed_args: argparse.Namespace, run_smoke_tests: Callabl
             print("No local state database found to delete.")
         return True
 
-    if parsed_args.move_done_to_destination:
-        summary = move_done_folders_to_mapped_destinations()
+    if parsed_args.move_complete_to_destination:
+        summary = move_complete_folders_to_mapped_destinations()
         if parsed_args.json:
             print(json.dumps(summary, indent=2))
         return True

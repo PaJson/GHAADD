@@ -6,7 +6,14 @@ import shutil
 import time
 from db_manager import open_database, load_release_state, save_state_entry, prune_release_state
 from dotenv import load_dotenv
-from config_manager import get_all_download_dirs, get_default_download_dir, get_download_dir_for_release, is_state_persistence_disabled, load_config
+from config_manager import (
+    get_all_download_dirs,
+    get_default_download_dir,
+    get_download_dir_for_release,
+    get_folder_settings,
+    is_state_persistence_disabled,
+    load_config,
+)
 from email.utils import parsedate_tz, mktime_tz
 from mapping_manager import build_default_nicename, get_repository_mapping, load_mapping
 from payload_types import DownloadReleaseResult, DownloadResultPayload, ReleaseAssetQueueItem, SkippedItemPayload
@@ -46,15 +53,16 @@ def _resolve_directory_name_collision(target_dir: str) -> str:
 
 
 def _build_staging_directories(base_download_dir: str) -> tuple[str, str]:
-    """Return (processing_dir, done_dir) under the GHAADD staging root."""
-    ghaadd_root = os.path.join(base_download_dir, "GHAADD")
-    processing_dir = os.path.join(ghaadd_root, "Processing")
-    done_dir = os.path.join(ghaadd_root, "Done")
-    superseded_dir = os.path.join(ghaadd_root, "Superseded")
+    """Return (processing_dir, complete_dir) under the configured staging root."""
+    folder_settings = get_folder_settings()
+    ghaadd_root = os.path.join(base_download_dir, folder_settings["ghaadd_root"])
+    processing_dir = os.path.join(ghaadd_root, folder_settings["processing"])
+    complete_dir = os.path.join(ghaadd_root, folder_settings["complete"])
+    partial_dir = os.path.join(ghaadd_root, folder_settings["partial"])
     os.makedirs(processing_dir, exist_ok=True)
-    os.makedirs(done_dir, exist_ok=True)
-    os.makedirs(superseded_dir, exist_ok=True)
-    return processing_dir, done_dir
+    os.makedirs(complete_dir, exist_ok=True)
+    os.makedirs(partial_dir, exist_ok=True)
+    return processing_dir, complete_dir
 
 
 def _build_repo_parent_folder(repo: str) -> str:
@@ -87,20 +95,20 @@ def _sanitize_subfolder_path(subfolder: str) -> str:
 
 def _resolve_finalized_base_directory(
     repo: Optional[str],
-    default_done_dir: str,
+    default_complete_dir: str,
 ) -> tuple[str, bool, Optional[str]]:
     """Return finalization base directory, mapping usage, and optional fallback warning."""
     normalized_repo = str(repo or "").strip()
     if not normalized_repo:
-        return default_done_dir, False, None
+        return default_complete_dir, False, None
 
     mapping_entry = get_repository_mapping(normalized_repo)
     if not isinstance(mapping_entry, dict):
-        return default_done_dir, False, None
+        return default_complete_dir, False, None
 
     destination = str(mapping_entry.get("destination") or "").strip()
     if not destination:
-        return default_done_dir, False, None
+        return default_complete_dir, False, None
 
     destination_root = os.path.normpath(
         os.path.expanduser(os.path.expandvars(destination))
@@ -108,9 +116,9 @@ def _resolve_finalized_base_directory(
     if not os.path.isdir(destination_root):
         warning_text = (
             "Mapped destination root does not exist; "
-            f"falling back to Done for {normalized_repo}: {destination_root}"
+            f"falling back to Complete for {normalized_repo}: {destination_root}"
         )
-        return default_done_dir, False, warning_text
+        return default_complete_dir, False, warning_text
 
     nicename = str(mapping_entry.get("nicename") or "").strip()
     if not nicename:
@@ -195,8 +203,8 @@ def _warn_if_destination_limit_exceeded(repo: Optional[str], repo_destination_ro
     )
 
 
-def _move_done_repo_tree(source_repo_dir: str, target_repo_root: str) -> int:
-    """Move one repository subtree from Done into mapped destination root."""
+def _move_complete_repo_tree(source_repo_dir: str, target_repo_root: str) -> int:
+    """Move one repository subtree from Complete into mapped destination root."""
     moved_release_folders = 0
     os.makedirs(target_repo_root, exist_ok=True)
 
@@ -242,10 +250,11 @@ def _move_done_repo_tree(source_repo_dir: str, target_repo_root: str) -> int:
     return moved_release_folders
 
 
-def move_done_folders_to_mapped_destinations() -> dict[str, int]:
-    """Move eligible repository folders from Done to configured mapping destinations."""
+def move_complete_folders_to_mapped_destinations() -> dict[str, int]:
+    """Move eligible repository folders from Complete to configured mapping destinations."""
     config = load_config()
     download_roots = get_all_download_dirs(config)
+    folder_settings = get_folder_settings(config)
     mapping_payload = load_mapping()
     repositories = mapping_payload.get("repositories", [])
 
@@ -264,8 +273,12 @@ def move_done_folders_to_mapped_destinations() -> dict[str, int]:
         }
 
     for download_root in download_roots:
-        done_root = os.path.join(download_root, "GHAADD", "Done")
-        if not os.path.isdir(done_root):
+        complete_root = os.path.join(
+            download_root,
+            folder_settings["ghaadd_root"],
+            folder_settings["complete"],
+        )
+        if not os.path.isdir(complete_root):
             continue
 
         for entry in repositories:
@@ -277,7 +290,7 @@ def move_done_folders_to_mapped_destinations() -> dict[str, int]:
                 continue
 
             repo_parent_folder = _build_repo_parent_folder(repo_name)
-            source_repo_dir = os.path.join(done_root, repo_parent_folder)
+            source_repo_dir = os.path.join(complete_root, repo_parent_folder)
             if not os.path.isdir(source_repo_dir):
                 continue
 
@@ -290,7 +303,7 @@ def move_done_folders_to_mapped_destinations() -> dict[str, int]:
 
             target_repo_root, uses_mapping_destination, fallback_warning = _resolve_finalized_base_directory(
                 repo_name,
-                done_root,
+                complete_root,
             )
             if fallback_warning:
                 missing_destination_warnings += 1
@@ -301,7 +314,7 @@ def move_done_folders_to_mapped_destinations() -> dict[str, int]:
                 skipped_without_destination += 1
                 continue
 
-            moved_now = _move_done_repo_tree(source_repo_dir, target_repo_root)
+            moved_now = _move_complete_repo_tree(source_repo_dir, target_repo_root)
             if moved_now > 0:
                 moved_release_folders += moved_now
                 print(
@@ -311,7 +324,7 @@ def move_done_folders_to_mapped_destinations() -> dict[str, int]:
                 _warn_if_destination_limit_exceeded(repo_name, target_repo_root)
 
     print(
-        "Deferred Done->Destination move summary: "
+        "Deferred Complete->Destination move summary: "
         f"scanned_repo_roots={scanned_repo_roots}, "
         f"moved_release_folders={moved_release_folders}, "
         f"missing_destination_warnings={missing_destination_warnings}, "
@@ -326,7 +339,7 @@ def move_done_folders_to_mapped_destinations() -> dict[str, int]:
     }
 
 
-def move_processing_folder_to_done(working_dir: str, repo: Optional[str] = None) -> Optional[str]:
+def move_processing_folder_to_complete(working_dir: str, repo: Optional[str] = None) -> Optional[str]:
     """Move a finished release folder from Processing to final destination."""
     if not working_dir:
         return None
@@ -335,13 +348,16 @@ def move_processing_folder_to_done(working_dir: str, repo: Optional[str] = None)
     if not os.path.isdir(normalized_working_dir):
         return None
 
+    folder_settings = get_folder_settings()
+    processing_folder_lower = folder_settings["processing"].lower()
+
     processing_root = normalized_working_dir
     while True:
         parent_dir = os.path.dirname(processing_root)
         if parent_dir == processing_root:
             processing_root = ""
             break
-        if os.path.basename(parent_dir).lower() == "processing":
+        if os.path.basename(parent_dir).lower() == processing_folder_lower:
             processing_root = parent_dir
             break
         processing_root = parent_dir
@@ -350,12 +366,12 @@ def move_processing_folder_to_done(working_dir: str, repo: Optional[str] = None)
         return None
 
     ghaadd_root = os.path.dirname(processing_root)
-    done_dir = os.path.join(ghaadd_root, "Done")
+    complete_dir = os.path.join(ghaadd_root, folder_settings["complete"])
     relative_path = os.path.relpath(normalized_working_dir, processing_root)
 
     base_destination, uses_mapping_destination, fallback_warning = _resolve_finalized_base_directory(
         repo,
-        done_dir,
+        complete_dir,
     )
     if fallback_warning:
         print(f"   ⚠️ {fallback_warning}")
@@ -385,8 +401,8 @@ def move_processing_folder_to_done(working_dir: str, repo: Optional[str] = None)
     return target_dir
 
 
-def move_processing_folder_to_superseded(working_dir: str) -> Optional[str]:
-    """Move an incomplete superseded release folder from Processing to Superseded."""
+def move_processing_folder_to_partial(working_dir: str) -> Optional[str]:
+    """Move an incomplete superseded release folder from Processing to Partial."""
     if not working_dir:
         return None
 
@@ -394,13 +410,16 @@ def move_processing_folder_to_superseded(working_dir: str) -> Optional[str]:
     if not os.path.isdir(normalized_working_dir):
         return None
 
+    folder_settings = get_folder_settings()
+    processing_folder_lower = folder_settings["processing"].lower()
+
     processing_root = normalized_working_dir
     while True:
         parent_dir = os.path.dirname(processing_root)
         if parent_dir == processing_root:
             processing_root = ""
             break
-        if os.path.basename(parent_dir).lower() == "processing":
+        if os.path.basename(parent_dir).lower() == processing_folder_lower:
             processing_root = parent_dir
             break
         processing_root = parent_dir
@@ -409,11 +428,11 @@ def move_processing_folder_to_superseded(working_dir: str) -> Optional[str]:
         return None
 
     ghaadd_root = os.path.dirname(processing_root)
-    superseded_dir = os.path.join(ghaadd_root, "Superseded")
-    os.makedirs(superseded_dir, exist_ok=True)
+    partial_dir = os.path.join(ghaadd_root, folder_settings["partial"])
+    os.makedirs(partial_dir, exist_ok=True)
 
     relative_path = os.path.relpath(normalized_working_dir, processing_root)
-    target_dir = os.path.normpath(os.path.join(superseded_dir, relative_path))
+    target_dir = os.path.normpath(os.path.join(partial_dir, relative_path))
     os.makedirs(os.path.dirname(target_dir), exist_ok=True)
     target_dir = _resolve_directory_name_collision(target_dir)
     shutil.move(normalized_working_dir, target_dir)
