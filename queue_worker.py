@@ -25,7 +25,7 @@ from asset_downloader import (
     move_processing_folder_to_partial,
 )
 from mailbox_listener import get_pending_notifications, mark_as_read_and_delete
-from mapping_manager import upsert_repository_mapping
+from mapping_manager import get_repository_recheck_intervals_minutes, upsert_repository_mapping
 from payload_types import DownloadReleaseResult, NotificationPayload, QueuedNotificationPayload, SkippedItemPayload
 from typing import Literal, Optional, Tuple, Union, cast, overload
 
@@ -446,7 +446,6 @@ def process_selected_pending_jobs(connection, github_token: Optional[str], job_i
     skipped_ids = [job_id for job_id in normalized_ids if job_id in rows_by_id and rows_by_id[job_id]["status"] != "PENDING"]
 
     print(f"Running manual check for {len(rows)} matching job(s)...")
-    retry_intervals_minutes = get_recheck_intervals_minutes()
     now_timestamp = time.time()
 
     processed_count = 0
@@ -467,6 +466,8 @@ def process_selected_pending_jobs(connection, github_token: Optional[str], job_i
             f"[{processed_count}/{len(rows)}] Manual check for job #{job_id}: {repo} {tag} "
             f"(attempt={attempt_count}, expected_commit={expected_commit or 'unknown'})"
         )
+
+        retry_intervals_minutes = get_repository_recheck_intervals_minutes(repo)
 
         current_commit, current_commit_reason = get_current_commit_hash(
             repo,
@@ -668,7 +669,6 @@ def process_queue_once(connection, github_token: Optional[str]) -> None:
             f"{duplicate_count} duplicate pending job(s) as SUPERSEDED."
         )
 
-    retry_intervals_minutes = get_recheck_intervals_minutes()
     now_timestamp = time.time()
     due_jobs = get_due_jobs(connection, now_timestamp)
 
@@ -691,6 +691,8 @@ def process_queue_once(connection, github_token: Optional[str]) -> None:
             f"[{index}/{len(due_jobs)}] Job #{job_id}: {repo} {tag} "
             f"(attempt={attempt_count}, expected_commit={expected_commit or 'unknown'})"
         )
+
+        retry_intervals_minutes = get_repository_recheck_intervals_minutes(repo)
 
         current_commit, current_commit_reason = get_current_commit_hash(
             repo,

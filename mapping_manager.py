@@ -3,6 +3,8 @@ import os
 from datetime import datetime
 from typing import Any, Optional, TypedDict
 
+from config_manager import get_recheck_intervals_minutes
+
 
 class MappingValidationResult(TypedDict):
     ok: bool
@@ -114,6 +116,35 @@ def get_repository_mapping(repo: str) -> Optional[dict[str, Any]]:
             return entry
 
     return None
+
+
+def get_repository_recheck_intervals_minutes(repo: str) -> list[int]:
+    """Return per-repository recheck intervals when configured; else fall back to config."""
+    mapping_entry = get_repository_mapping(repo)
+    if not isinstance(mapping_entry, dict):
+        return list(get_recheck_intervals_minutes())
+
+    intervals_value = mapping_entry.get("recheck_intervals_minutes")
+    if not isinstance(intervals_value, list):
+        return list(get_recheck_intervals_minutes())
+
+    normalized: list[int] = []
+    for item in intervals_value:
+        if isinstance(item, bool):
+            continue
+        try:
+            minutes = int(item)
+        except (TypeError, ValueError):
+            continue
+        if minutes <= 0:
+            continue
+        if minutes not in normalized:
+            normalized.append(minutes)
+
+    if normalized:
+        return normalized
+
+    return list(get_recheck_intervals_minutes())
 
 
 def _current_active_stamp() -> str:
