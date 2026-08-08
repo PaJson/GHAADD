@@ -56,6 +56,21 @@ def _normalize_release_type(release_type):
     return normalized
 
 
+def _normalize_configured_path(path_value: str) -> str:
+    """Normalize configured path values and fix Windows drive-root shorthand."""
+    normalized = path_value.strip()
+    if not normalized:
+        return ""
+
+    # On Windows, "D:" is drive-relative (not drive-rooted). Treat it as "D:\\".
+    if os.name == "nt":
+        drive, tail = os.path.splitdrive(normalized)
+        if drive and tail == "":
+            return drive + "\\"
+
+    return normalized
+
+
 def load_config() -> Dict[str, Any]:
     """Load and return config.json as a dictionary, or an empty dict on failure."""
     config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
@@ -111,7 +126,7 @@ def get_default_download_dir(config: Optional[Dict[str, Any]] = None) -> str:
     config = config if config is not None else load_config()
     configured_dir = _get_nested(config, "paths", "default_download_dir")
     if isinstance(configured_dir, str) and configured_dir.strip():
-        return configured_dir.strip()
+        return _normalize_configured_path(configured_dir)
 
     return os.path.join(os.path.expanduser("~"), "Downloads")
 
@@ -125,7 +140,7 @@ def get_all_download_dirs(config: Optional[Dict[str, Any]] = None) -> list[str]:
     def add_path(candidate: Any) -> None:
         if not isinstance(candidate, str):
             return
-        normalized = candidate.strip()
+        normalized = _normalize_configured_path(candidate)
         if not normalized:
             return
         if normalized not in unique_dirs:
@@ -171,7 +186,7 @@ def get_logging_settings(config: Optional[Dict[str, Any]] = None) -> LoggingSett
 
     normalized_path = ""
     if isinstance(path, str):
-        normalized_path = path.strip()
+        normalized_path = _normalize_configured_path(path)
 
     return {
         "enabled": _as_bool(enabled, DEFAULT_ENABLE_LOGGING),
@@ -197,19 +212,19 @@ def get_download_dir_for_release(repo, release_type=None, config=None):
         if isinstance(repo_map, dict) and normalized_release_type:
             value = repo_map.get(normalized_release_type)
             if isinstance(value, str) and value.strip():
-                return value
+                return _normalize_configured_path(value)
 
     repo_paths = _get_nested(config, "paths", "repo_paths")
     if isinstance(repo_paths, dict):
         value = repo_paths.get(repo)
         if isinstance(value, str) and value.strip():
-            return value
+            return _normalize_configured_path(value)
 
     release_type_paths = _get_nested(config, "paths", "release_type_paths")
     if isinstance(release_type_paths, dict) and normalized_release_type:
         value = release_type_paths.get(normalized_release_type)
         if isinstance(value, str) and value.strip():
-            return value
+            return _normalize_configured_path(value)
 
     return get_default_download_dir(config)
 

@@ -132,6 +132,7 @@ Path note:
 
 - Use local paths (including in the config.json example below) that match your operating system.
 - Do not copy Windows-style paths on Linux/macOS, or POSIX paths on Windows.
+- On Windows, a bare drive like `D:` is drive-relative. Use `D:\\` (or a full path like `D:\\Downloads`) for a drive root.
 - Examples:
 	- Windows: D:\\Users\\YourUser\\Downloads
 	- Linux/macOS: /home/youruser/Downloads

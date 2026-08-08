@@ -15,6 +15,7 @@ class DoctorReport(TypedDict):
 
 
 _WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:\\")
+_WINDOWS_DRIVE_RELATIVE_RE = re.compile(r"^[A-Za-z]:(?![\\/])")
 
 
 def _config_file_path() -> str:
@@ -44,6 +45,12 @@ def _warn_path_style_mismatch(path_value: str, platform_name: str) -> str | None
 
     if platform_name in {"linux", "darwin"} and _looks_windows_style(path_value):
         return f"Path looks Windows-style on {platform_name}: {path_value}"
+
+    if platform_name == "windows" and _WINDOWS_DRIVE_RELATIVE_RE.match(path_value):
+        return (
+            "Path is drive-relative on Windows and may resolve under the current working directory; "
+            f"prefer a rooted path like {path_value}\\"
+        )
 
     return None
 
