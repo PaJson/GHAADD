@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from datetime import datetime
 from typing import Any, Optional, TypedDict
 
@@ -37,6 +38,46 @@ def _normalize_mapping_payload(payload: Any) -> dict[str, list[dict[str, Any]]]:
         item for item in repositories if isinstance(item, dict)
     ]
     return {"repositories": normalized_repositories}
+
+
+def _normalize_recheck_intervals_minutes(value: Any) -> list[int]:
+    """Normalize repository recheck intervals as an explicit override list."""
+    if not isinstance(value, list):
+        return []
+
+    normalized: list[int] = []
+    for item in value:
+        if isinstance(item, bool):
+            continue
+        try:
+            minutes = int(item)
+        except (TypeError, ValueError):
+            continue
+        if minutes <= 0:
+            continue
+        if minutes not in normalized:
+            normalized.append(minutes)
+
+    return normalized
+
+
+def _collapse_recheck_intervals_arrays(serialized_json: str) -> str:
+    """Render recheck_intervals_minutes arrays on a single line for readability."""
+    pattern = re.compile(
+        r'("recheck_intervals_minutes"\s*:\s*)\[\n(?P<body>(?:\s*\d+\s*,?\n)*)\s*\]',
+        re.MULTILINE,
+    )
+
+    def _replace(match: re.Match[str]) -> str:
+        body = match.group("body") or ""
+        values = [
+            line.strip().rstrip(",")
+            for line in body.splitlines()
+            if line.strip()
+        ]
+        return f"{match.group(1)}[{', '.join(values)}]"
+
+    return pattern.sub(_replace, serialized_json)
 
 
 def load_mapping() -> dict[str, list[dict[str, Any]]]:
@@ -77,8 +118,11 @@ def save_mapping(mapping_payload: dict[str, list[dict[str, Any]]]) -> None:
             entry.get("nicename") or entry.get("name") or ""
         ).strip().lower(),
     )
+
+    serialized_payload = json.dumps(normalized_payload, indent=2, ensure_ascii=True)
+    serialized_payload = _collapse_recheck_intervals_arrays(serialized_payload)
     with open(file_path, "w", encoding="utf-8") as mapping_file:
-        json.dump(normalized_payload, mapping_file, indent=2)
+        mapping_file.write(serialized_payload)
         mapping_file.write("\n")
 
 
@@ -171,6 +215,10 @@ def upsert_repository_mapping(
             entry["active"] = effective_active_stamp
             updated = True
 
+        if "recheck_intervals_minutes" not in entry:
+            entry["recheck_intervals_minutes"] = []
+            updated = True
+
         if updated:
             save_mapping(mapping_payload)
         return (False, updated)
@@ -182,6 +230,7 @@ def upsert_repository_mapping(
         "subfolder": "",
         "limit": 0,
         "active": effective_active_stamp,
+        "recheck_intervals_minutes": [],
     }
     repositories.append(skeleton_entry)
     save_mapping(mapping_payload)
