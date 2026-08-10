@@ -85,6 +85,7 @@ Each repository entry supports these fields:
 - destination: optional destination base path for custom routing
 - subfolder: optional subfolder path to append under the destination
 - limit: optional integer warning threshold for the number of folders at the destination (`0` disables checks)
+- limit_release_type_folders: optional array of folder names to include in destination limit counting for this repository (for example, `['Release', 'Pre-release']`)
 - recheck_intervals_minutes: optional list of positive integers to override queue re-check cadence for this repository
 - active: timestamp of the last activity for that repository entry
 
@@ -107,6 +108,7 @@ Example:
 	"destination": "X:\\Path\\To\\Destination",
 	"subfolder": "@GitHub/Nightly",
 	"limit": 25,
+	"limit_release_type_folders": ["Release", "Pre-release"],
 	"recheck_intervals_minutes": [3, 10, 30, 120],
 	"active": "2026-08-08_14-59"
 }
@@ -137,6 +139,12 @@ Destination behavior:
 
 If `limit` is `0`, no folder-count warning is applied for that repository.
 If `limit` is greater than `0`, the app warns when the repository destination appears to contain too many folders.
+
+Limit-count folder scope behavior:
+
+- If `limit_release_type_folders` is configured with one or more values, only those top-level folders are counted for the repository limit warning.
+- If `limit_release_type_folders` is missing or empty, the app auto-detects managed release-type folders using defaults (`Release`, `Pre-release`) plus known release_type values from the queue state.
+- Folder names are matched case-insensitively after normal path-name sanitization.
 
 If `recheck_intervals_minutes` is set for a repository, those values are used for that repository's re-check schedule. If the list is missing or invalid, the global `processing.recheck_intervals_minutes` values are used.
 

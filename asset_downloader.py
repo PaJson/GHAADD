@@ -16,7 +16,12 @@ from config_manager import (
 )
 from email.utils import parsedate_tz, mktime_tz
 from lifecycle_logger import log_warning
-from mapping_manager import build_default_nicename, get_repository_mapping, load_mapping
+from mapping_manager import (
+    build_default_nicename,
+    get_repository_limit_release_type_folders,
+    get_repository_mapping,
+    load_mapping,
+)
 from payload_types import DownloadReleaseResult, DownloadResultPayload, ReleaseAssetQueueItem, SkippedItemPayload
 from requests.exceptions import ChunkedEncodingError, ConnectionError, Timeout
 from typing import Literal, Optional, cast
@@ -163,15 +168,81 @@ def _count_direct_subdirectories(path: str) -> int:
         return 0
 
 
-def _count_repository_release_folders(repo_destination_root: str) -> int:
-    """Return count of release folders kept under one repository destination root."""
+def _resolve_tracked_release_type_folders(repo: Optional[str]) -> set[str]:
+    """Return normalized release-type folder names managed by GHAADD for one repository."""
+    default_tracked_folders = {
+        sanitize_folder_name("Release").lower(),
+        sanitize_folder_name("Pre-release").lower(),
+    }
+
+    normalized_repo = str(repo or "").strip()
+    if not normalized_repo:
+        return default_tracked_folders
+
+    configured_release_type_folders = get_repository_limit_release_type_folders(normalized_repo)
+    configured_tracked_folders = {
+        sanitize_folder_name(folder_name).lower()
+        for folder_name in configured_release_type_folders
+        if isinstance(folder_name, str) and folder_name.strip()
+    }
+    if configured_tracked_folders:
+        return configured_tracked_folders
+
+    tracked_folders = set(default_tracked_folders)
+
+    state_db = None
+    try:
+        state_db = open_database()
+        rows = state_db.execute(
+            """
+            SELECT DISTINCT release_type
+            FROM job_queue
+            WHERE repo = ?
+              AND release_type IS NOT NULL
+              AND TRIM(release_type) <> ''
+            """,
+            (normalized_repo,),
+        ).fetchall()
+        for row in rows:
+            folder_name = sanitize_folder_name(str(row["release_type"]))
+            if folder_name:
+                tracked_folders.add(folder_name.lower())
+    except OSError:
+        pass
+    except Exception:
+        pass
+    finally:
+        if state_db is not None:
+            state_db.close()
+
+    return tracked_folders
+
+
+def _count_repository_release_folders(
+    repo_destination_root: str,
+    tracked_release_type_folders: Optional[set[str]] = None,
+) -> int:
+    """Return count of release folders kept under managed release-type directories only."""
     if not os.path.isdir(repo_destination_root):
         return 0
+
+    normalized_tracked = {
+        name.strip().lower()
+        for name in (tracked_release_type_folders or set())
+        if isinstance(name, str) and name.strip()
+    }
 
     release_type_dirs: list[str] = []
     try:
         with os.scandir(repo_destination_root) as entries:
-            release_type_dirs = [entry.path for entry in entries if entry.is_dir()]
+            for entry in entries:
+                if not entry.is_dir():
+                    continue
+
+                if normalized_tracked and entry.name.strip().lower() not in normalized_tracked:
+                    continue
+
+                release_type_dirs.append(entry.path)
     except OSError:
         return 0
 
@@ -192,7 +263,11 @@ def _warn_if_destination_limit_exceeded(repo: Optional[str], repo_destination_ro
     if folder_limit <= 0:
         return
 
-    release_folder_count = _count_repository_release_folders(repo_destination_root)
+    tracked_release_type_folders = _resolve_tracked_release_type_folders(repo)
+    release_folder_count = _count_repository_release_folders(
+        repo_destination_root,
+        tracked_release_type_folders,
+    )
     if release_folder_count <= folder_limit:
         return
 

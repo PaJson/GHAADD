@@ -8,6 +8,9 @@ from config_manager import get_recheck_intervals_minutes
 from lifecycle_logger import log_warning
 
 
+DEFAULT_LIMIT_RELEASE_TYPE_FOLDERS = ["Release", "Pre-release"]
+
+
 class MappingValidationResult(TypedDict):
     ok: bool
     errors: list[str]
@@ -61,10 +64,59 @@ def _normalize_recheck_intervals_minutes(value: Any) -> list[int]:
     return normalized
 
 
+def _normalize_limit_release_type_folders(value: Any) -> list[str]:
+    """Normalize release-type folder override list for limit counting."""
+    if not isinstance(value, list):
+        return []
+
+    normalized: list[str] = []
+    seen_lower: set[str] = set()
+    for item in value:
+        if not isinstance(item, str):
+            continue
+
+        candidate = item.strip()
+        if not candidate:
+            continue
+
+        candidate_lower = candidate.lower()
+        if candidate_lower in seen_lower:
+            continue
+
+        seen_lower.add(candidate_lower)
+        normalized.append(candidate)
+
+    return normalized
+
+
+def _default_limit_release_type_folders() -> list[str]:
+    """Return the default release-type folder list for limit counting."""
+    return list(DEFAULT_LIMIT_RELEASE_TYPE_FOLDERS)
+
+
 def _collapse_recheck_intervals_arrays(serialized_json: str) -> str:
     """Render recheck_intervals_minutes arrays on a single line for readability."""
     pattern = re.compile(
         r'("recheck_intervals_minutes"\s*:\s*)\[\n(?P<body>(?:\s*\d+\s*,?\n)*)\s*\]',
+        re.MULTILINE,
+    )
+
+    def _replace(match: re.Match[str]) -> str:
+        body = match.group("body") or ""
+        values = [
+            line.strip().rstrip(",")
+            for line in body.splitlines()
+            if line.strip()
+        ]
+        return f"{match.group(1)}[{', '.join(values)}]"
+
+    return pattern.sub(_replace, serialized_json)
+
+
+def _collapse_limit_release_type_folders_arrays(serialized_json: str) -> str:
+    """Render limit_release_type_folders arrays on a single line for readability."""
+    pattern = re.compile(
+        r'("limit_release_type_folders"\s*:\s*)\[\n(?P<body>(?:\s*"[^"]+"\s*,?\n)*)\s*\]',
         re.MULTILINE,
     )
 
@@ -121,6 +173,7 @@ def save_mapping(mapping_payload: dict[str, list[dict[str, Any]]]) -> None:
 
     serialized_payload = json.dumps(normalized_payload, indent=2, ensure_ascii=True)
     serialized_payload = _collapse_recheck_intervals_arrays(serialized_payload)
+    serialized_payload = _collapse_limit_release_type_folders_arrays(serialized_payload)
     with open(file_path, "w", encoding="utf-8") as mapping_file:
         mapping_file.write(serialized_payload)
         mapping_file.write("\n")
@@ -192,6 +245,17 @@ def get_repository_recheck_intervals_minutes(repo: str) -> list[int]:
     return list(get_recheck_intervals_minutes())
 
 
+def get_repository_limit_release_type_folders(repo: str) -> list[str]:
+    """Return repository folder names used for destination limit counting overrides."""
+    mapping_entry = get_repository_mapping(repo)
+    if not isinstance(mapping_entry, dict):
+        return []
+
+    return _normalize_limit_release_type_folders(
+        mapping_entry.get("limit_release_type_folders")
+    )
+
+
 def _current_active_stamp() -> str:
     """Return activity timestamp in YYYY-MM-DD_HH-MM format."""
     return datetime.now().strftime("%Y-%m-%d_%H-%M")
@@ -219,6 +283,10 @@ def upsert_repository_mapping(
             entry["recheck_intervals_minutes"] = []
             updated = True
 
+        if "limit_release_type_folders" not in entry:
+            entry["limit_release_type_folders"] = _default_limit_release_type_folders()
+            updated = True
+
         if updated:
             save_mapping(mapping_payload)
         return (False, updated)
@@ -231,6 +299,7 @@ def upsert_repository_mapping(
         "limit": 0,
         "active": effective_active_stamp,
         "recheck_intervals_minutes": [],
+        "limit_release_type_folders": _default_limit_release_type_folders(),
     }
     repositories.append(skeleton_entry)
     save_mapping(mapping_payload)
@@ -297,6 +366,7 @@ def validate_mapping_schema() -> MappingValidationResult:
                 "subfolder",
                 "limit",
                 "recheck_intervals_minutes",
+                "limit_release_type_folders",
                 "active",
             }
         )
@@ -375,6 +445,31 @@ def validate_mapping_schema() -> MappingValidationResult:
                 if invalid_item_detected:
                     warnings.append(
                         f"{display_location}.recheck_intervals_minutes contains invalid values; global processing.recheck_intervals_minutes may be used.{display_suffix}"
+                    )
+
+        limit_release_type_folders_value = entry.get("limit_release_type_folders")
+        if limit_release_type_folders_value is not None:
+            if not isinstance(limit_release_type_folders_value, list):
+                errors.append(
+                    f"{display_location}.limit_release_type_folders must be an array when provided.{display_suffix}"
+                )
+            else:
+                has_invalid_item = False
+                has_empty_item = False
+                for folder_item in limit_release_type_folders_value:
+                    if not isinstance(folder_item, str):
+                        has_invalid_item = True
+                        continue
+                    if not folder_item.strip():
+                        has_empty_item = True
+
+                if has_invalid_item:
+                    errors.append(
+                        f"{display_location}.limit_release_type_folders must contain only strings.{display_suffix}"
+                    )
+                if has_empty_item:
+                    warnings.append(
+                        f"{display_location}.limit_release_type_folders contains empty values; they will be ignored.{display_suffix}"
                     )
 
     return {
