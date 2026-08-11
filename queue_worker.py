@@ -155,17 +155,22 @@ def _handle_superseded_pending_job_artifacts(
         )
         return "none"
 
-    _finalize_staged_release_folder(
+    done_dir = _finalize_staged_release_folder(
         working_dir,
         repo=repo,
         tag=tag,
         commit=row["expected_commit"],
         write_complete_log=False,
     )
+    
+    commit_hash = row["expected_commit"] or "unknown"
+    
     supersede_finalize_message = (
         f"{reason_code}: finalized staged artifacts for superseded pending job #{job_id} "
-        f"({repo} {tag}, files={downloaded_count}+{skipped_count}/{total_items})."
+        f"[{repo} {tag} ({commit_hash})] moved to [{done_dir}] "
+        f"(files={downloaded_count}+{skipped_count}/{total_items})."
     )
+    
     print(f"   [SUPERSEDE_FINALIZE] {supersede_finalize_message}")
     log_warning("SUPERSEDE_FINALIZE", supersede_finalize_message)
     return "finalized"
