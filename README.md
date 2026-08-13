@@ -74,6 +74,8 @@ First-time setup:
 2. Update paths and other values in config.json for your machine.
 3. Optional: create or edit mapping.json for repository metadata and routing overrides.
 
+If mapping.json contains invalid JSON, the app keeps the original file by copying it to a timestamped file named `mapping.json_YYYYMMDD_HHMMSS_ffffff` beside the application files. It then falls back to an empty mapping payload for the current operation and records the backup path in `Warning.log`. Review or restore the backup before saving a corrected mapping file.
+
 ### Repository mapping file (mapping.json)
 
 The app auto-creates and updates repository entries in mapping.json as notifications are ingested.
