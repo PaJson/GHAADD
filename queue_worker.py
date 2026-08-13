@@ -567,8 +567,9 @@ def process_selected_pending_jobs(connection, github_token: Optional[str], job_i
             print(f"   ℹ️ Commit baseline discovered: {current_commit}")
         else:
             warning_message = (
-                "Could not resolve current commit hash from GitHub API "
-                f"(reason={current_commit_reason or 'unavailable'})."
+                f"Could not resolve current commit hash from GitHub API for {repo} @ {tag} "
+                f"(expected_commit={expected_commit or 'unknown'}, "
+                f"reason={current_commit_reason or 'unavailable'})."
             )
             print(f"   ⚠️ {warning_message}")
             log_warning("API", warning_message)
@@ -804,8 +805,9 @@ def process_queue_once(connection, github_token: Optional[str]) -> None:
             print(f"   ℹ️ Commit baseline discovered: {current_commit}")
         else:
             warning_message = (
-                "Could not resolve current commit hash from GitHub API "
-                f"(reason={current_commit_reason or 'unavailable'})."
+                f"Could not resolve current commit hash from GitHub API for {repo} @ {tag} "
+                f"(expected_commit={expected_commit or 'unknown'}, "
+                f"reason={current_commit_reason or 'unavailable'})."
             )
             print(f"   ⚠️ {warning_message}")
             log_warning("API", warning_message)
