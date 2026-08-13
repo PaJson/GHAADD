@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import shutil
 from datetime import datetime
 from typing import Any, Optional, TypedDict
 
@@ -9,6 +10,9 @@ from lifecycle_logger import log_warning
 
 
 DEFAULT_LIMIT_RELEASE_TYPE_FOLDERS = ["Release", "Pre-release"]
+
+
+_BACKED_UP_INVALID_MAPPING_SIGNATURES: set[tuple[str, int, int]] = set()
 
 
 class MappingValidationResult(TypedDict):
@@ -21,6 +25,38 @@ def _mapping_file_path() -> str:
     """Return absolute path to mapping.json beside application files."""
     app_dir = os.path.dirname(os.path.abspath(__file__))
     return os.path.join(app_dir, "mapping.json")
+
+
+def _backup_invalid_mapping_file(file_path: str, reason: str) -> None:
+    """Copy an invalid mapping file aside once per file version."""
+    try:
+        file_stat = os.stat(file_path)
+    except OSError:
+        return
+
+    signature = (file_path, int(file_stat.st_mtime_ns), int(file_stat.st_size))
+    if signature in _BACKED_UP_INVALID_MAPPING_SIGNATURES:
+        return
+
+    backup_path = os.path.join(
+        os.path.dirname(file_path),
+        f"mapping.json_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}",
+    )
+
+    try:
+        shutil.copy2(file_path, backup_path)
+    except OSError as exc:
+        log_warning(
+            "MAPPING",
+            f"mapping.json could not be parsed ({reason}) and the backup copy failed: {exc}",
+        )
+        return
+
+    _BACKED_UP_INVALID_MAPPING_SIGNATURES.add(signature)
+    log_warning(
+        "MAPPING",
+        f"mapping.json could not be parsed ({reason}). Backed up the broken file to '{backup_path}'.",
+    )
 
 
 def _default_mapping_payload() -> dict[str, list[dict[str, Any]]]:
@@ -141,7 +177,10 @@ def load_mapping() -> dict[str, list[dict[str, Any]]]:
     try:
         with open(file_path, "r", encoding="utf-8") as mapping_file:
             payload = json.load(mapping_file)
-    except (OSError, json.JSONDecodeError):
+    except OSError:
+        return _default_mapping_payload()
+    except json.JSONDecodeError as exc:
+        _backup_invalid_mapping_file(file_path, str(exc))
         return _default_mapping_payload()
 
     return _normalize_mapping_payload(payload)
@@ -156,7 +195,10 @@ def load_mapping_raw() -> Any:
     try:
         with open(file_path, "r", encoding="utf-8") as mapping_file:
             return json.load(mapping_file)
-    except (OSError, json.JSONDecodeError):
+    except OSError:
+        return None
+    except json.JSONDecodeError as exc:
+        _backup_invalid_mapping_file(file_path, str(exc))
         return None
 
 
