@@ -202,15 +202,20 @@ def load_mapping_raw() -> Any:
         return None
 
 
+def _repository_sort_key(entry: dict[str, Any]) -> tuple[str, str]:
+    """Return a stable sort key for a repository mapping entry by repo name only."""
+    name_value = str(entry.get("name") or entry.get("nicename") or "").strip()
+    repo_name = name_value.split("/", 1)[1] if "/" in name_value else name_value
+    return (repo_name.lower(), name_value.lower())
+
+
 def save_mapping(mapping_payload: dict[str, list[dict[str, Any]]]) -> None:
     """Persist mapping payload to mapping.json."""
     file_path = _mapping_file_path()
     normalized_payload = _normalize_mapping_payload(mapping_payload)
     normalized_payload["repositories"] = sorted(
         normalized_payload["repositories"],
-        key=lambda entry: str(
-            entry.get("nicename") or entry.get("name") or ""
-        ).strip().lower(),
+        key=_repository_sort_key,
     )
 
     serialized_payload = json.dumps(normalized_payload, indent=2, ensure_ascii=True)
