@@ -176,6 +176,52 @@ def _handle_superseded_pending_job_artifacts(
     return "finalized"
 
 
+def _finalize_terminal_skip_job(
+    row,
+    repo: str,
+    tag: str,
+    commit: Optional[str],
+    current_downloaded_count: int,
+    current_skipped_count: int,
+    current_total_items: int,
+    current_working_dir: Optional[str],
+) -> Tuple[int, int, int]:
+    """Finalize a job whose release/tag disappeared, moving any real staged files.
+
+    A terminal SKIP (release_not_found) attempt never reaches the asset list, so it
+    always reports 0/0/0 and no working_dir. The job's persisted counters and
+    working_dir from earlier attempts are the only real record of what was staged,
+    so those are used for the file-count checks and the actual folder move.
+    Returns the (downloaded_count, skipped_count, total_items) to record for the job.
+    """
+    if current_total_items > 0:
+        downloaded_count = current_downloaded_count
+        skipped_count = current_skipped_count
+        total_items = current_total_items
+        working_dir = current_working_dir
+    else:
+        downloaded_count = int(row["downloaded_count"] or 0)
+        skipped_count = int(row["skipped_count"] or 0)
+        total_items = int(row["total_items"] or 0)
+        working_dir = str(row["working_dir"] or "").strip() or None
+
+    if working_dir and os.path.isdir(working_dir):
+        if _has_all_release_items_accounted(downloaded_count, skipped_count, total_items):
+            _finalize_staged_release_folder(working_dir, repo=repo, tag=tag, commit=commit)
+        else:
+            try:
+                partial_dir = move_processing_folder_to_partial(working_dir)
+            except OSError as exc:
+                print(f"   ⚠️ Could not move incomplete staging folder to {_PARTIAL_LABEL}: {exc}")
+                log_warning("MOVE", f"Could not move incomplete staging folder to {_PARTIAL_LABEL}: {exc}")
+                partial_dir = None
+            if partial_dir:
+                print(f"   📁 Moved incomplete artifacts to {_PARTIAL_LABEL}: {partial_dir}")
+                log_partial_move(repo, tag, commit, partial_dir)
+
+    return downloaded_count, skipped_count, total_items
+
+
 def _warn_if_file_count_changed_from_previous_success(
     connection,
     job_id: int,
@@ -609,6 +655,16 @@ def process_selected_pending_jobs(connection, github_token: Optional[str], job_i
         latest_commit = current_commit or expected_commit
 
         if result_status == "SKIP" and _is_terminal_skip_reason(skip_reason):
+            downloaded_count, skipped_count, total_items = _finalize_terminal_skip_job(
+                row,
+                repo,
+                tag,
+                latest_commit,
+                downloaded_count,
+                skipped_count,
+                total_items,
+                working_dir,
+            )
             mark_job_completed(
                 connection,
                 job_id,
@@ -618,18 +674,20 @@ def process_selected_pending_jobs(connection, github_token: Optional[str], job_i
                 total_items=total_items,
                 last_result=result_status,
             )
+            _warn_if_file_count_changed_from_previous_success(
+                connection,
+                job_id=job_id,
+                repo=repo,
+                tag=tag,
+                release_type=release_type,
+                current_total_items=total_items,
+            )
             save_job_skip_details(connection, job_id, attempt_count, skipped_items)
             print(
                 "   ⏹️ Release/tag not found; marked COMPLETED immediately "
                 f"at attempt={attempt_count}."
             )
             print(f"   📊 Files: downloaded={downloaded_count}, skipped={skipped_count}, total={total_items}")
-            _finalize_staged_release_folder(
-                working_dir,
-                repo=repo,
-                tag=tag,
-                commit=latest_commit,
-            )
             continue
 
         if attempt_count < len(retry_intervals_minutes):
@@ -848,6 +906,16 @@ def process_queue_once(connection, github_token: Optional[str]) -> None:
         latest_commit = current_commit or expected_commit
 
         if result_status == "SKIP" and _is_terminal_skip_reason(skip_reason):
+            downloaded_count, skipped_count, total_items = _finalize_terminal_skip_job(
+                job,
+                repo,
+                tag,
+                latest_commit,
+                downloaded_count,
+                skipped_count,
+                total_items,
+                working_dir,
+            )
             mark_job_completed(
                 connection,
                 job_id,
@@ -857,18 +925,20 @@ def process_queue_once(connection, github_token: Optional[str]) -> None:
                 total_items=total_items,
                 last_result=result_status,
             )
+            _warn_if_file_count_changed_from_previous_success(
+                connection,
+                job_id=job_id,
+                repo=repo,
+                tag=tag,
+                release_type=release_type,
+                current_total_items=total_items,
+            )
             save_job_skip_details(connection, job_id, current_attempt_count, skipped_items)
             print(
                 "   ⏹️ Release/tag not found; marked COMPLETED immediately "
                 f"at attempt={current_attempt_count}."
             )
             print(f"   📊 Files: downloaded={downloaded_count}, skipped={skipped_count}, total={total_items}")
-            _finalize_staged_release_folder(
-                working_dir,
-                repo=repo,
-                tag=tag,
-                commit=latest_commit,
-            )
             continue
 
         if current_attempt_count <= len(retry_intervals_minutes):

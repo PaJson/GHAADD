@@ -313,7 +313,7 @@ Behavior:
 - Repository folders include release type as an extra path segment (for example: Pre-release, Release).
 - When a new notification is ingested for the same repo/tag/release type, existing pending jobs for that identity are marked SUPERSEDED and replaced by a fresh pending job.
 - When a commit hash changes for the same repo/tag during rechecks, the old PENDING job is marked SUPERSEDED and a new PENDING job is created for the updated commit.
-- When a release/tag is not found on GitHub (SKIP: release_not_found), the job is completed immediately and not rechecked.
+- When a release/tag is not found on GitHub (SKIP: release_not_found), the job is completed immediately and not rechecked. Its staged folder is finalized using the counters/working_dir recorded from earlier attempts: moved to Complete if fully accounted for, or to Partial if incomplete.
 - When a queue job reaches a terminal state (COMPLETED or FAILED with no retries left), its release folder is moved to Complete.
 - When a pending job is superseded and its file counters indicate completion, its staged folder is finalized to Complete or mapped destination.
 - When a pending job is superseded and appears incomplete, its staged folder is moved to Partial for quarantine/inspection.
