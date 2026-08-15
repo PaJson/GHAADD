@@ -1,5 +1,6 @@
 import os
 import re
+import time
 from config_manager import get_gmail_folder
 from dotenv import load_dotenv
 from email.header import decode_header
@@ -130,31 +131,49 @@ def get_pending_notifications(limit=None):
     return notifications
 
 
-def mark_as_read_and_delete(email_ids):
-    """Mark a list of emails as read and move them to Trash."""
+def mark_as_read_and_delete(email_ids, max_attempts=2, retry_delay_seconds=5):
+    """Mark a list of emails as read and move them to Trash.
+
+    Retries transient IMAP store/move failures once before giving up.
+    Returns True on success, False if all attempts failed.
+    """
     if not email_ids:
-        return
-        
+        return True
+
     if not EMAIL or not PASSWORD:
         raise ValueError("EMAIL and PASSWORD environment variables must be set")
 
     mailbox_folder = get_gmail_folder()
 
-    try:
-        with IMAPClient('imap.gmail.com', use_uid=True) as server:
-            server.login(EMAIL, PASSWORD)
-            server.select_folder(mailbox_folder)
-            
-            # Normalize to a list in case a single ID is passed.
-            if not isinstance(email_ids, list):
-                email_ids = [email_ids]
-                
-            # Perform bulk read and move operations.
-            server.set_flags(email_ids, [b'\\Seen'])
-            server.move(email_ids, '[Gmail]/Trash')
-            
-    except Exception as e:
-        print(f"Error marking emails as read/deleted: {e}")
+    # Normalize to a list in case a single ID is passed.
+    if not isinstance(email_ids, list):
+        email_ids = [email_ids]
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            with IMAPClient('imap.gmail.com', use_uid=True) as server:
+                server.login(EMAIL, PASSWORD)
+                server.select_folder(mailbox_folder)
+
+                # Perform bulk read and move operations.
+                server.set_flags(email_ids, [b'\\Seen'])
+                server.move(email_ids, '[Gmail]/Trash')
+
+            return True
+
+        except Exception as e:
+            if attempt < max_attempts:
+                print(
+                    f"Error marking emails as read/deleted (attempt {attempt}/{max_attempts}): {e}. "
+                    f"Retrying in {retry_delay_seconds}s..."
+                )
+                time.sleep(retry_delay_seconds)
+            else:
+                print(f"Error marking emails as read/deleted (attempt {attempt}/{max_attempts}): {e}")
+
+    return False
+
+    return False
 
 
 def check_releases():

@@ -493,8 +493,15 @@ def ingest_notifications_once(connection, github_token: Optional[str]) -> int:
 
         if emails_to_delete:
             print(f"🧹 Cleaning up {len(emails_to_delete)} queued email(s)...")
-            mark_as_read_and_delete(emails_to_delete)
-            print("✓ Emails marked as read and moved to Trash.")
+            if mark_as_read_and_delete(emails_to_delete):
+                print("✓ Emails marked as read and moved to Trash.")
+            else:
+                warning_message = (
+                    f"Could not mark/move {len(emails_to_delete)} queued email(s) to Trash after retrying; "
+                    "they remain read but not deleted and may be re-queued next poll if marked unread again."
+                )
+                print(f"⚠️ {warning_message}")
+                log_warning("MAILBOX", warning_message)
 
         print(f"Ingest complete. {queued_count} job(s) queued as PENDING.")
         return queued_count
@@ -904,42 +911,7 @@ def process_queue_once(connection, github_token: Optional[str]) -> None:
 
         current_attempt_count = attempt_count + 1
         latest_commit = current_commit or expected_commit
-
-        if result_status == "SKIP" and _is_terminal_skip_reason(skip_reason):
-            downloaded_count, skipped_count, total_items = _finalize_terminal_skip_job(
-                job,
-                repo,
-                tag,
-                latest_commit,
-                downloaded_count,
-                skipped_count,
-                total_items,
-                working_dir,
-            )
-            mark_job_completed(
-                connection,
-                job_id,
-                attempt_count=current_attempt_count,
-                downloaded_count=downloaded_count,
-                skipped_count=skipped_count,
-                total_items=total_items,
-                last_result=result_status,
-            )
-            _warn_if_file_count_changed_from_previous_success(
-                connection,
-                job_id=job_id,
-                repo=repo,
-                tag=tag,
-                release_type=release_type,
-                current_total_items=total_items,
-            )
-            save_job_skip_details(connection, job_id, current_attempt_count, skipped_items)
-            print(
-                "   ⏹️ Release/tag not found; marked COMPLETED immediately "
-                f"at attempt={current_attempt_count}."
-            )
-            print(f"   📊 Files: downloaded={downloaded_count}, skipped={skipped_count}, total={total_items}")
-            continue
+        is_terminal_skip = result_status == "SKIP" and _is_terminal_skip_reason(skip_reason)
 
         if current_attempt_count <= len(retry_intervals_minutes):
             target_age_minutes = retry_intervals_minutes[current_attempt_count - 1]
@@ -961,12 +933,30 @@ def process_queue_once(connection, github_token: Optional[str]) -> None:
                 last_result="RETRY",
             )
             save_job_skip_details(connection, job_id, current_attempt_count, skipped_items)
+            if is_terminal_skip:
+                print(
+                    "   ⏳ Release/tag not found yet; keeping job PENDING and re-checking "
+                    f"per the full re-check schedule instead of completing immediately "
+                    f"(attempt={current_attempt_count})."
+                )
             print(
                 f"   🔄 Re-check scheduled in {remaining_minutes} minute(s) "
                 f"(target task age: {target_age_minutes}m, attempt={current_attempt_count}, last_status={result_status})."
             )
             print(f"   📊 Files: downloaded={downloaded_count}, skipped={skipped_count}, total={total_items}")
         else:
+            if is_terminal_skip:
+                downloaded_count, skipped_count, total_items = _finalize_terminal_skip_job(
+                    job,
+                    repo,
+                    tag,
+                    latest_commit,
+                    downloaded_count,
+                    skipped_count,
+                    total_items,
+                    working_dir,
+                )
+
             if result_status in ("SUCCESS", "SKIP"):
                 mark_job_completed(
                     connection,
@@ -1009,12 +999,13 @@ def process_queue_once(connection, github_token: Optional[str]) -> None:
                     f"at attempt={current_attempt_count}."
                 )
             print(f"   📊 Files: downloaded={downloaded_count}, skipped={skipped_count}, total={total_items}")
-            _finalize_staged_release_folder(
-                working_dir,
-                repo=repo,
-                tag=tag,
-                commit=latest_commit,
-            )
+            if not is_terminal_skip:
+                _finalize_staged_release_folder(
+                    working_dir,
+                    repo=repo,
+                    tag=tag,
+                    commit=latest_commit,
+                )
 
 
 def run_ingest_and_queue_cycle(connection, github_token: Optional[str]) -> None:

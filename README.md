@@ -20,6 +20,7 @@ Automated Python utility that reads GitHub release notification emails from Gmai
 - Supports optional per-run terminal logging to timestamped .log files.
 - Writes lifecycle logs for completed moves, superseded partial moves, and typed warnings.
 - Supports config-based download path routing by repo and release type.
+- Retries marking processed notification emails as read/deleted once on transient IMAP failures before logging a warning; the job is still queued even if the email cleanup ultimately fails.
 
 ## Requirements
 
@@ -313,7 +314,7 @@ Behavior:
 - Repository folders include release type as an extra path segment (for example: Pre-release, Release).
 - When a new notification is ingested for the same repo/tag/release type, existing pending jobs for that identity are marked SUPERSEDED and replaced by a fresh pending job.
 - When a commit hash changes for the same repo/tag during rechecks, the old PENDING job is marked SUPERSEDED and a new PENDING job is created for the updated commit.
-- When a release/tag is not found on GitHub (SKIP: release_not_found), the job is completed immediately and not rechecked. Its staged folder is finalized using the counters/working_dir recorded from earlier attempts: moved to Complete if fully accounted for, or to Partial if incomplete.
+- When a release/tag is not found on GitHub during an automatic poll (SKIP: release_not_found), the job stays PENDING and is rechecked on the repository's normal re-check schedule, instead of completing immediately. This covers releases published before their assets/commit are attached. Once the re-check schedule is exhausted, the job is completed and its staged folder (if any) is finalized using the counters/working_dir recorded from earlier attempts: moved to Complete if fully accounted for, or to Partial if incomplete. Manual pending-job runs (--run-pending) still complete release_not_found immediately since they run on demand.
 - When a queue job reaches a terminal state (COMPLETED or FAILED with no retries left), its release folder is moved to Complete.
 - When a pending job is superseded and its file counters indicate completion, its staged folder is finalized to Complete or mapped destination.
 - When a pending job is superseded and appears incomplete, its staged folder is moved to Partial for quarantine/inspection.
