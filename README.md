@@ -283,7 +283,7 @@ Key behavior:
 	- The app also writes lifecycle files in the same logs directory:
 		- Complete.log: completed staging-folder finalizations.
 		- Partial.log: superseded incomplete staging folders moved to Partial.
-		- Warning.log: typed warning entries (for example API, destination, move, sanity-check, and supersede warnings).
+		- Warning.log: typed warning entries (for example API, destination, move, sanity-check, supersede, and premature-finalize warnings).
 
 ## Download Path Routing
 
@@ -314,7 +314,7 @@ Behavior:
 - Repository folders include release type as an extra path segment (for example: Pre-release, Release).
 - When a new notification is ingested for the same repo/tag/release type, existing pending jobs for that identity are marked SUPERSEDED and replaced by a fresh pending job.
 - When a commit hash changes for the same repo/tag during rechecks, the old PENDING job is marked SUPERSEDED and a new PENDING job is created for the updated commit.
-- When a release/tag is not found on GitHub during an automatic poll (SKIP: release_not_found), the job stays PENDING and is rechecked on the repository's normal re-check schedule, instead of completing immediately. This covers releases published before their assets/commit are attached. Once the re-check schedule is exhausted, the job is completed and its staged folder (if any) is finalized using the counters/working_dir recorded from earlier attempts: moved to Complete if fully accounted for, or to Partial if incomplete. Manual pending-job runs (--run-pending) still complete release_not_found immediately since they run on demand.
+- When a release/tag is not found on GitHub during an automatic poll (SKIP: release_not_found), the job stays PENDING and is rechecked on the repository's normal re-check schedule, instead of completing immediately. This covers releases published before their assets/commit are attached. Once the re-check schedule is exhausted, the job is completed and its staged folder (if any) is finalized using the counters/working_dir recorded from earlier attempts: moved to Complete if fully accounted for, or to Partial if incomplete. A zero-result attempt (transient error, or a non-terminal SKIP/FAILED before the asset list is reached) never overwrites previously recorded non-zero counters, so a release that was already fully downloaded is not mistaken for incomplete just because it later disappeared upstream. When such a job is finalized to Complete this way, a PREMATURE_FINALIZE entry is written to Warning.log noting the release likely was superseded/replaced before the re-check schedule finished. Manual pending-job runs (--run-pending) still complete release_not_found immediately since they run on demand.
 - When a queue job reaches a terminal state (COMPLETED or FAILED with no retries left), its release folder is moved to Complete.
 - When a pending job is superseded and its file counters indicate completion, its staged folder is finalized to Complete or mapped destination.
 - When a pending job is superseded and appears incomplete, its staged folder is moved to Partial for quarantine/inspection.

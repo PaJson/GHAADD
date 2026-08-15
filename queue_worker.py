@@ -69,6 +69,36 @@ def _is_terminal_skip_reason(skip_reason: Optional[str]) -> bool:
     return skip_reason in {"release_not_found"}
 
 
+def _preserve_best_known_counters(
+    row,
+    downloaded_count: int,
+    skipped_count: int,
+    total_items: int,
+    working_dir: Optional[str],
+) -> Tuple[int, int, int, Optional[str]]:
+    """Avoid clobbering previously recorded progress with a zero-result attempt.
+
+    An attempt that errors out or is skipped before reaching the asset list has no
+    real counts of its own (0/0/0). Persisting those zeros would overwrite the
+    genuine counts/working_dir left behind by an earlier successful attempt on the
+    same job, which later makes a fully-staged release look incomplete.
+    """
+    if total_items > 0:
+        return downloaded_count, skipped_count, total_items, working_dir
+
+    previous_total_items = int(row["total_items"] or 0)
+    if previous_total_items <= 0:
+        return downloaded_count, skipped_count, total_items, working_dir
+
+    previous_working_dir = str(row["working_dir"] or "").strip() or None
+    return (
+        int(row["downloaded_count"] or 0),
+        int(row["skipped_count"] or 0),
+        previous_total_items,
+        working_dir or previous_working_dir,
+    )
+
+
 def _has_all_release_items_accounted(
     downloaded_count: int,
     skipped_count: int,
@@ -207,7 +237,15 @@ def _finalize_terminal_skip_job(
 
     if working_dir and os.path.isdir(working_dir):
         if _has_all_release_items_accounted(downloaded_count, skipped_count, total_items):
-            _finalize_staged_release_folder(working_dir, repo=repo, tag=tag, commit=commit)
+            done_dir = _finalize_staged_release_folder(working_dir, repo=repo, tag=tag, commit=commit)
+            if done_dir:
+                premature_message = (
+                    f"Release/tag {tag} for {repo} disappeared from GitHub (likely replaced/superseded "
+                    "upstream) before the re-check schedule finished; finalized as complete using the "
+                    f"previously recorded counts (files={downloaded_count}+{skipped_count}/{total_items})."
+                )
+                print(f"   ⚠️ {premature_message}")
+                log_warning("PREMATURE_FINALIZE", premature_message)
         else:
             try:
                 partial_dir = move_processing_folder_to_partial(working_dir)
@@ -659,6 +697,10 @@ def process_selected_pending_jobs(connection, github_token: Optional[str], job_i
             working_dir = None
             skip_reason = None
 
+        downloaded_count, skipped_count, total_items, working_dir = _preserve_best_known_counters(
+            row, downloaded_count, skipped_count, total_items, working_dir
+        )
+
         latest_commit = current_commit or expected_commit
 
         if result_status == "SKIP" and _is_terminal_skip_reason(skip_reason):
@@ -908,6 +950,10 @@ def process_queue_once(connection, github_token: Optional[str]) -> None:
             skipped_items: list[SkippedItemPayload] = []
             working_dir = None
             skip_reason = None
+
+        downloaded_count, skipped_count, total_items, working_dir = _preserve_best_known_counters(
+            job, downloaded_count, skipped_count, total_items, working_dir
+        )
 
         current_attempt_count = attempt_count + 1
         latest_commit = current_commit or expected_commit
