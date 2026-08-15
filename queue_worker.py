@@ -835,13 +835,18 @@ def process_queue_once(connection, github_token: Optional[str]) -> None:
         attempt_count = int(job["attempt_count"])
         created_at = float(job["created_at"])
         expected_commit = job["expected_commit"]
+        retry_intervals_minutes = get_repository_recheck_intervals_minutes(repo)
+
+        if 0 < attempt_count <= len(retry_intervals_minutes):
+            attempt_schedule = f"target task age: {retry_intervals_minutes[attempt_count - 1]}m"
+        else:
+            attempt_schedule = "initial run"
 
         print(
             f"[{index}/{len(due_jobs)}] Job #{job_id}: {repo} {tag} "
-            f"(attempt={attempt_count}, expected_commit={expected_commit or 'unknown'})"
+            f"(attempt={attempt_count}, {attempt_schedule}, "
+            f"expected_commit={expected_commit or 'unknown'})"
         )
-
-        retry_intervals_minutes = get_repository_recheck_intervals_minutes(repo)
 
         current_commit, current_commit_reason = get_current_commit_hash(
             repo,
