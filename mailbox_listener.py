@@ -41,8 +41,10 @@ def parse_github_subject(subject):
     Returns:
         tuple: (repo, tag, release_type, used_simple_pattern)
     """
-    # Capture content after "Release" or "Pre-release" until the final separator.
-    pattern = r"^\[([^\]]+)\]\s+(?:Pre-)?Release\s+(.+)(?:\s+-\s+.*)$"
+    # Non-greedy capture so the tag stops at the first " - " separator, even when
+    # the release title itself contains further " - " segments (e.g. a title that
+    # repeats the tag, like "Release v0.6.7 - v0.6.7 - v0.6.7").
+    pattern = r"^\[([^\]]+)\]\s+(?:Pre-)?Release\s+(.+?)(?:\s+-\s+.*)$"
     match = re.search(pattern, subject, re.IGNORECASE)
     
     if match:
