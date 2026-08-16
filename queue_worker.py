@@ -34,6 +34,7 @@ from mailbox_listener import (
 from mapping_manager import (
     get_repository_recheck_intervals_minutes,
     is_repository_paused,
+    mark_repository_finalized,
     upsert_repository_mapping,
 )
 from payload_types import DownloadReleaseResult, NotificationPayload, QueuedNotificationPayload, SkippedItemPayload
@@ -66,6 +67,8 @@ def _finalize_staged_release_folder(
 
     if done_dir:
         print(f"   📁 Finalized artifacts: {done_dir}")
+        if repo:
+            mark_repository_finalized(repo)
         if write_complete_log and repo and tag:
             log_completed_move(repo, tag, commit, done_dir)
 
@@ -200,6 +203,12 @@ def _handle_superseded_pending_job_artifacts(
         commit=row["expected_commit"],
         write_complete_log=False,
     )
+    if not done_dir:
+        print(
+            "   [SUPERSEDE_FINALIZE] "
+            f"{reason_code}: could not finalize staged artifacts for superseded pending job #{job_id}."
+        )
+        return "none"
     
     commit_hash = row["expected_commit"] or "unknown"
     

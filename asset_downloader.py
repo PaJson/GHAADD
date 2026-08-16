@@ -17,7 +17,7 @@ from config_manager import (
 from email.utils import parsedate_tz, mktime_tz
 from lifecycle_logger import log_warning
 from mapping_manager import (
-    build_default_nicename,
+    build_default_foldername,
     get_repository_limit_release_type_folders,
     get_repository_mapping,
     load_mapping,
@@ -126,16 +126,16 @@ def _resolve_finalized_base_directory(
         )
         return default_complete_dir, False, warning_text
 
-    nicename = str(mapping_entry.get("nicename") or "").strip()
-    if not nicename:
-        nicename = build_default_nicename(normalized_repo)
-    nicename_folder = sanitize_folder_name(nicename) or _build_repo_parent_folder(normalized_repo)
+    foldername = str(mapping_entry.get("foldername") or "").strip()
+    if not foldername:
+        foldername = build_default_foldername(normalized_repo)
+    foldername = sanitize_folder_name(foldername) or _build_repo_parent_folder(normalized_repo)
 
-    base_dir = os.path.join(destination_root, nicename_folder)
+    base_dir = os.path.join(destination_root, foldername)
 
-    folder = str(mapping_entry.get("folder") or "").strip()
-    if folder:
-        sanitized_folder_path = _sanitize_folder_path(folder)
+    subfolder = str(mapping_entry.get("subfolder") or "").strip()
+    if subfolder:
+        sanitized_folder_path = _sanitize_folder_path(subfolder)
         if sanitized_folder_path:
             base_dir = os.path.join(base_dir, sanitized_folder_path)
 

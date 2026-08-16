@@ -11,15 +11,16 @@ from lifecycle_logger import log_warning
 
 DEFAULT_LIMIT_RELEASE_TYPE_FOLDERS = ["Release", "Pre-release"]
 _MAPPING_FIELD_ORDER = (
-    "active",
+    "name",
     "destination",
-    "folder",
+    "foldername",
+    "subfolder",
     "limit",
     "limit_release_type_folders",
-    "name",
-    "nicename",
-    "paused",
     "recheck_intervals_minutes",
+    "last_notification_seen",
+    "last_finalized",
+    "paused",
 )
 
 
@@ -215,17 +216,14 @@ def load_mapping_raw() -> Any:
 
 def _repository_sort_key(entry: dict[str, Any]) -> tuple[str, str]:
     """Return a stable sort key for a repository mapping entry by repo name only."""
-    name_value = str(entry.get("name") or entry.get("nicename") or "").strip()
+    name_value = str(entry.get("name") or entry.get("foldername") or "").strip()
     repo_name = name_value.split("/", 1)[1] if "/" in name_value else name_value
     return (repo_name.lower(), name_value.lower())
 
 
 def _order_mapping_entry(entry: dict[str, Any]) -> dict[str, Any]:
-    """Migrate legacy fields and return a consistently ordered mapping entry."""
+    """Return a consistently ordered mapping entry."""
     ordered_entry = dict(entry)
-    if "folder" not in ordered_entry and "subfolder" in ordered_entry:
-        ordered_entry["folder"] = ordered_entry["subfolder"]
-    ordered_entry.pop("subfolder", None)
     ordered_entry.setdefault("paused", False)
 
     return {
@@ -256,7 +254,7 @@ def save_mapping(mapping_payload: dict[str, list[dict[str, Any]]]) -> None:
         mapping_file.write("\n")
 
 
-def build_default_nicename(repo: str) -> str:
+def build_default_foldername(repo: str) -> str:
     """Build default display name like 'duckstation (stenzek)' from owner/repo."""
     if not repo:
         return "unknown (unknown)"
@@ -339,27 +337,33 @@ def get_repository_limit_release_type_folders(repo: str) -> list[str]:
     )
 
 
-def _current_active_stamp() -> str:
-    """Return activity timestamp in YYYY-MM-DD_HH-MM format."""
+def _current_mapping_stamp() -> str:
+    """Return a mapping timestamp in YYYY-MM-DD_HH-MM format."""
     return datetime.now().strftime("%Y-%m-%d_%H-%M")
 
 
 def upsert_repository_mapping(
     repo: str,
-    active_stamp: Optional[str] = None,
+    notification_seen_stamp: Optional[str] = None,
 ) -> tuple[bool, bool]:
     """Upsert one repository mapping and return (created, updated)."""
     mapping_payload = load_mapping()
     repositories = mapping_payload["repositories"]
-    effective_active_stamp = active_stamp or _current_active_stamp()
+    effective_notification_seen_stamp = (
+        notification_seen_stamp or _current_mapping_stamp()
+    )
 
     for entry in repositories:
         if not _is_same_repository_identity(entry, repo):
             continue
 
         updated = False
-        if entry.get("active") != effective_active_stamp:
-            entry["active"] = effective_active_stamp
+        if entry.get("last_notification_seen") != effective_notification_seen_stamp:
+            entry["last_notification_seen"] = effective_notification_seen_stamp
+            updated = True
+
+        if "last_finalized" not in entry:
+            entry["last_finalized"] = ""
             updated = True
 
         if "recheck_intervals_minutes" not in entry:
@@ -374,25 +378,21 @@ def upsert_repository_mapping(
             entry["paused"] = False
             updated = True
 
-        if "folder" not in entry and "subfolder" in entry:
-            entry["folder"] = entry["subfolder"]
-            entry.pop("subfolder")
-            updated = True
-
         if updated:
             save_mapping(mapping_payload)
         return (False, updated)
 
     skeleton_entry = {
-        "active": effective_active_stamp,
+        "name": repo,
         "destination": "",
-        "folder": "",
+        "foldername": build_default_foldername(repo),
+        "subfolder": "",
         "limit": 0,
         "limit_release_type_folders": _default_limit_release_type_folders(),
-        "name": repo,
-        "nicename": build_default_nicename(repo),
-        "paused": False,
         "recheck_intervals_minutes": [],
+        "last_notification_seen": effective_notification_seen_stamp,
+        "last_finalized": "",
+        "paused": False,
     }
     repositories.append(skeleton_entry)
     save_mapping(mapping_payload)
@@ -401,6 +401,29 @@ def upsert_repository_mapping(
         f"Repository '{repo}' was added without a configured destination; it will use default routing until mapped.",
     )
     return (True, False)
+
+
+def mark_repository_finalized(
+    repo: str,
+    finalized_stamp: Optional[str] = None,
+) -> bool:
+    """Record when a repository release was moved to its complete destination."""
+    normalized_repo = str(repo or "").strip()
+    if not normalized_repo:
+        return False
+
+    mapping_payload = load_mapping()
+    finalized_value = finalized_stamp or _current_mapping_stamp()
+    for entry in mapping_payload["repositories"]:
+        if not _is_same_repository_identity(entry, normalized_repo):
+            continue
+        if entry.get("last_finalized") == finalized_value:
+            return False
+        entry["last_finalized"] = finalized_value
+        save_mapping(mapping_payload)
+        return True
+
+    return False
 
 
 def validate_mapping_schema() -> MappingValidationResult:
@@ -454,13 +477,14 @@ def validate_mapping_schema() -> MappingValidationResult:
             if key
             not in {
                 "name",
-                "nicename",
                 "destination",
-                "folder",
+                "foldername",
+                "subfolder",
                 "limit",
                 "recheck_intervals_minutes",
                 "limit_release_type_folders",
-                "active",
+                "last_notification_seen",
+                "last_finalized",
                 "paused",
             }
         )
@@ -479,7 +503,14 @@ def validate_mapping_schema() -> MappingValidationResult:
             else:
                 seen_names[normalized_name] = index
 
-        for field_name in ("nicename", "destination", "folder", "limit", "active"):
+        for field_name in (
+            "foldername",
+            "destination",
+            "subfolder",
+            "limit",
+            "last_notification_seen",
+            "last_finalized",
+        ):
             field_value = entry.get(field_name)
             if field_name == "limit":
                 if field_value is None:
@@ -512,10 +543,10 @@ def validate_mapping_schema() -> MappingValidationResult:
                 f"{display_location}.destination is empty; files will keep default routing until configured.{display_suffix}"
             )
 
-        nicename = entry.get("nicename")
-        if isinstance(nicename, str) and not nicename.strip():
+        foldername = entry.get("foldername")
+        if isinstance(foldername, str) and not foldername.strip():
             warnings.append(
-                f"{display_location}.nicename is empty; default display name will be used.{display_suffix}"
+                f"{display_location}.foldername is empty; default folder name will be used.{display_suffix}"
             )
 
         intervals_value = entry.get("recheck_intervals_minutes")

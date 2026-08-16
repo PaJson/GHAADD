@@ -83,24 +83,26 @@ The app auto-creates and updates repository entries in mapping.json as notificat
 
 Each repository entry supports these fields:
 
-- active: timestamp of the last activity for that repository entry
+- name: repository identity in owner/repo form
 - destination: optional destination base path for custom routing
-- folder: optional nested folder path to append under the destination
+- foldername: optional display and repository folder name
+- subfolder: optional nested folder path to append under the repository folder
 - limit: optional integer warning threshold for the number of folders at the destination (`0` disables checks)
 - limit_release_type_folders: optional array of folder names to include in destination limit counting for this repository (for example, `['Release', 'Pre-release']`)
-- name: repository identity in owner/repo form
-- nicename: optional display name used for human-readable labels
-- paused: when `true`, matching notification emails move to Trash but remain unread, no new jobs are queued, and jobs already queued continue normally
 - recheck_intervals_minutes: optional list of positive integers to override queue re-check cadence for this repository
+- last_notification_seen: timestamp when the last GitHub release notification was seen
+- last_finalized: timestamp when a release was last moved to its complete destination (empty when none has been finalized)
+- paused: when `true`, matching notification emails move to Trash but remain unread, no new jobs are queued, and jobs already queued continue normally
 
 When a new repository is seen, the app fills in a default skeleton entry with:
 
 - the repository name
-- a generated nicename (for example, repo (owner))
-- empty destination/folder values
+- a generated foldername (for example, repo (owner))
+- empty destination/subfolder values
 - a default `limit` value of `0` (disabled until you configure a threshold)
 - `paused: false`
-- an active timestamp
+- a last_notification_seen timestamp
+- an empty last_finalized value
 
 If you want to customize the display name or routing, you can edit these fields manually in mapping.json.
 
@@ -108,19 +110,20 @@ Example:
 
 ```json
 {
-	"active": "2026-08-08_14-59",
+	"name": "example-org/example-repo",
 	"destination": "X:\\Path\\To\\Destination",
-	"folder": "@GitHub/Nightly",
+	"foldername": "My name for this repository",
+	"subfolder": "@GitHub/Nightly",
 	"limit": 25,
 	"limit_release_type_folders": ["Release", "Pre-release"],
-	"name": "example-org/example-repo",
-	"nicename": "My name for this repository",
-	"paused": false,
-	"recheck_intervals_minutes": [3, 10, 30, 120]
+	"recheck_intervals_minutes": [3, 10, 30, 120],
+	"last_notification_seen": "2026-08-08_14-59",
+	"last_finalized": "2026-08-16_15-20",
+	"paused": false
 }
 ```
 
-In this example, the repository is still identified by its GitHub name in the name field, but the visible label becomes "My name for this repository" and the files are routed under the destination path plus the folder.
+In this example, the repository is identified by its GitHub name in the name field, the repository folder becomes "My name for this repository", and the files are routed under the destination path plus the subfolder.
 
 The resulting folder path for this example would be:
 
@@ -128,11 +131,11 @@ The resulting folder path for this example would be:
 X:\Path\To\Destination\My name for this repository\@GitHub\Nightly
 ```
 
-In other words, the app uses the combination of <destination> + <nicename> + <folder> as the effective base folder for that repository.
+In other words, the app uses the combination of <destination> + <foldername> + <subfolder> as the effective base folder for that repository.
 
 Folder behavior:
 
-- `folder` supports nested folders using either `/` or `\` as separators.
+- `subfolder` supports nested folders using either `/` or `\` as separators.
 - The app sanitizes each path segment separately, then joins them using the current OS path separator.
 - This means `@GitHub/Nightly` works on Windows, Linux, and macOS.
 - Empty segments and unsafe relative segments like `.` and `..` are ignored.
@@ -141,7 +144,7 @@ Destination behavior:
 
 - If `destination` is empty, the app falls back to the default `GHAADD/Complete` location.
 - If `destination` is set but the destination root folder does not exist, the app prints a warning and falls back to `GHAADD/Complete`.
-- When destination exists, `nicename` and `folder` folders are created automatically when needed.
+- When destination exists, `foldername` and `subfolder` folders are created automatically when needed.
 
 If `limit` is `0`, no folder-count warning is applied for that repository.
 If `limit` is greater than `0`, the app warns when the repository destination appears to contain too many folders.
