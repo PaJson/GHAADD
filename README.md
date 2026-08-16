@@ -8,7 +8,7 @@ Automated Python utility that reads GitHub release notification emails from Gmai
 - Parses both Release and Pre-release subject formats.
 - Logs when a fallback subject parser pattern is used.
 - Downloads all release assets plus zip/tar source archives.
-- Renames all downloaded source archives to include " (source)" before the archive suffix.
+- Renames all downloaded source archives to include " (source)" before the archive suffix to avoid naming conflicts with release assets.
 - Attempts to discover and download GitHub release attestations.
 - Preserves file timestamps using upstream metadata when available.
 - Uses local SQLite state to skip files that are already up to date.
