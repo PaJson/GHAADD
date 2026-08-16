@@ -26,8 +26,16 @@ from asset_downloader import (
     move_processing_folder_to_partial,
 )
 from lifecycle_logger import log_completed_move, log_partial_move, log_warning
-from mailbox_listener import get_pending_notifications, mark_as_read_and_delete
-from mapping_manager import get_repository_recheck_intervals_minutes, upsert_repository_mapping
+from mailbox_listener import (
+    get_pending_notifications,
+    mark_as_read_and_delete,
+    move_unread_to_trash,
+)
+from mapping_manager import (
+    get_repository_recheck_intervals_minutes,
+    is_repository_paused,
+    upsert_repository_mapping,
+)
 from payload_types import DownloadReleaseResult, NotificationPayload, QueuedNotificationPayload, SkippedItemPayload
 from typing import Literal, Optional, Tuple, Union, cast, overload
 
@@ -411,6 +419,7 @@ def ingest_notifications_once(connection, github_token: Optional[str]) -> int:
         print()
 
         emails_to_delete = []
+        paused_emails_to_trash = []
         queued_count = 0
         now_timestamp = time.time()
 
@@ -441,6 +450,13 @@ def ingest_notifications_once(connection, github_token: Optional[str]) -> int:
                     "   🗺️ Updated mapping active timestamp for repository "
                     f"{repo} (notification tag={tag}, type={release_type_label})."
                 )
+
+            if is_repository_paused(repo):
+                print(
+                    f"⏸️ Repository is paused; moved unread notification to Trash and skipped queueing {repo} {tag}."
+                )
+                paused_emails_to_trash.extend(email_ids)
+                continue
 
             try:
                 expected_commit, commit_reason = get_current_commit_hash(
@@ -537,6 +553,18 @@ def ingest_notifications_once(connection, github_token: Optional[str]) -> int:
                 warning_message = (
                     f"Could not mark/move {len(emails_to_delete)} queued email(s) to Trash after retrying; "
                     "they remain read but not deleted and may be re-queued next poll if marked unread again."
+                )
+                print(f"⚠️ {warning_message}")
+                log_warning("MAILBOX", warning_message)
+
+        if paused_emails_to_trash:
+            print(f"🗑️ Moving {len(paused_emails_to_trash)} paused unread email(s) to Trash...")
+            if move_unread_to_trash(paused_emails_to_trash):
+                print("✓ Paused emails remain unread and were moved to Trash.")
+            else:
+                warning_message = (
+                    f"Could not move {len(paused_emails_to_trash)} paused unread email(s) to Trash after retrying; "
+                    "they remain in the mailbox and will be checked again on the next poll."
                 )
                 print(f"⚠️ {warning_message}")
                 log_warning("MAILBOX", warning_message)
@@ -835,6 +863,7 @@ def process_queue_once(connection, github_token: Optional[str]) -> None:
         attempt_count = int(job["attempt_count"])
         created_at = float(job["created_at"])
         expected_commit = job["expected_commit"]
+
         retry_intervals_minutes = get_repository_recheck_intervals_minutes(repo)
 
         if 0 < attempt_count <= len(retry_intervals_minutes):

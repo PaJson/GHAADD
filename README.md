@@ -83,21 +83,23 @@ The app auto-creates and updates repository entries in mapping.json as notificat
 
 Each repository entry supports these fields:
 
-- name: repository identity in owner/repo form
-- nicename: optional display name used for human-readable labels
+- active: timestamp of the last activity for that repository entry
 - destination: optional destination base path for custom routing
-- subfolder: optional subfolder path to append under the destination
+- folder: optional nested folder path to append under the destination
 - limit: optional integer warning threshold for the number of folders at the destination (`0` disables checks)
 - limit_release_type_folders: optional array of folder names to include in destination limit counting for this repository (for example, `['Release', 'Pre-release']`)
+- name: repository identity in owner/repo form
+- nicename: optional display name used for human-readable labels
+- paused: when `true`, matching notification emails move to Trash but remain unread, no new jobs are queued, and jobs already queued continue normally
 - recheck_intervals_minutes: optional list of positive integers to override queue re-check cadence for this repository
-- active: timestamp of the last activity for that repository entry
 
 When a new repository is seen, the app fills in a default skeleton entry with:
 
 - the repository name
 - a generated nicename (for example, repo (owner))
-- empty destination/subfolder values
+- empty destination/folder values
 - a default `limit` value of `0` (disabled until you configure a threshold)
+- `paused: false`
 - an active timestamp
 
 If you want to customize the display name or routing, you can edit these fields manually in mapping.json.
@@ -106,18 +108,19 @@ Example:
 
 ```json
 {
-	"name": "example-org/example-repo",
-	"nicename": "My name for this repository",
+	"active": "2026-08-08_14-59",
 	"destination": "X:\\Path\\To\\Destination",
-	"subfolder": "@GitHub/Nightly",
+	"folder": "@GitHub/Nightly",
 	"limit": 25,
 	"limit_release_type_folders": ["Release", "Pre-release"],
-	"recheck_intervals_minutes": [3, 10, 30, 120],
-	"active": "2026-08-08_14-59"
+	"name": "example-org/example-repo",
+	"nicename": "My name for this repository",
+	"paused": false,
+	"recheck_intervals_minutes": [3, 10, 30, 120]
 }
 ```
 
-In this example, the repository is still identified by its GitHub name in the name field, but the visible label becomes "My name for this repository" and the files are routed under the destination path plus the subfolder.
+In this example, the repository is still identified by its GitHub name in the name field, but the visible label becomes "My name for this repository" and the files are routed under the destination path plus the folder.
 
 The resulting folder path for this example would be:
 
@@ -125,11 +128,11 @@ The resulting folder path for this example would be:
 X:\Path\To\Destination\My name for this repository\@GitHub\Nightly
 ```
 
-In other words, the app uses the combination of <destination> + <nicename> + <subfolder> as the effective base folder for that repository.
+In other words, the app uses the combination of <destination> + <nicename> + <folder> as the effective base folder for that repository.
 
-Subfolder behavior:
+Folder behavior:
 
-- `subfolder` supports nested folders using either `/` or `\` as separators.
+- `folder` supports nested folders using either `/` or `\` as separators.
 - The app sanitizes each path segment separately, then joins them using the current OS path separator.
 - This means `@GitHub/Nightly` works on Windows, Linux, and macOS.
 - Empty segments and unsafe relative segments like `.` and `..` are ignored.
@@ -138,7 +141,7 @@ Destination behavior:
 
 - If `destination` is empty, the app falls back to the default `GHAADD/Complete` location.
 - If `destination` is set but the destination root folder does not exist, the app prints a warning and falls back to `GHAADD/Complete`.
-- When destination exists, `nicename` and `subfolder` folders are created automatically when needed.
+- When destination exists, `nicename` and `folder` folders are created automatically when needed.
 
 If `limit` is `0`, no folder-count warning is applied for that repository.
 If `limit` is greater than `0`, the app warns when the repository destination appears to contain too many folders.
@@ -150,6 +153,8 @@ Limit-count folder scope behavior:
 - Folder names are matched case-insensitively after normal path-name sanitization.
 
 If `recheck_intervals_minutes` is set for a repository, those values are used for that repository's re-check schedule. If the list is missing or invalid, the global `processing.recheck_intervals_minutes` values are used.
+
+Set `paused` to `true` to temporarily stop new jobs for a repository. Matching notification emails move to Trash while remaining unread, so they are visible there but excluded from later polls of the configured mailbox. Jobs already in the queue continue to completion.
 
 The doctor check validates the mapping schema and warns when destination values are empty or when path styles do not match the current OS.
 

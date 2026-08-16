@@ -10,6 +10,17 @@ from lifecycle_logger import log_warning
 
 
 DEFAULT_LIMIT_RELEASE_TYPE_FOLDERS = ["Release", "Pre-release"]
+_MAPPING_FIELD_ORDER = (
+    "active",
+    "destination",
+    "folder",
+    "limit",
+    "limit_release_type_folders",
+    "name",
+    "nicename",
+    "paused",
+    "recheck_intervals_minutes",
+)
 
 
 _BACKED_UP_INVALID_MAPPING_SIGNATURES: set[tuple[str, int, int]] = set()
@@ -209,12 +220,31 @@ def _repository_sort_key(entry: dict[str, Any]) -> tuple[str, str]:
     return (repo_name.lower(), name_value.lower())
 
 
+def _order_mapping_entry(entry: dict[str, Any]) -> dict[str, Any]:
+    """Migrate legacy fields and return a consistently ordered mapping entry."""
+    ordered_entry = dict(entry)
+    if "folder" not in ordered_entry and "subfolder" in ordered_entry:
+        ordered_entry["folder"] = ordered_entry["subfolder"]
+    ordered_entry.pop("subfolder", None)
+    ordered_entry.setdefault("paused", False)
+
+    return {
+        key: ordered_entry[key]
+        for key in _MAPPING_FIELD_ORDER
+        if key in ordered_entry
+    } | {
+        key: ordered_entry[key]
+        for key in sorted(ordered_entry.keys())
+        if key not in _MAPPING_FIELD_ORDER
+    }
+
+
 def save_mapping(mapping_payload: dict[str, list[dict[str, Any]]]) -> None:
     """Persist mapping payload to mapping.json."""
     file_path = _mapping_file_path()
     normalized_payload = _normalize_mapping_payload(mapping_payload)
     normalized_payload["repositories"] = sorted(
-        normalized_payload["repositories"],
+        [_order_mapping_entry(entry) for entry in normalized_payload["repositories"]],
         key=_repository_sort_key,
     )
 
@@ -261,6 +291,12 @@ def get_repository_mapping(repo: str) -> Optional[dict[str, Any]]:
             return entry
 
     return None
+
+
+def is_repository_paused(repo: str) -> bool:
+    """Return whether a repository is explicitly paused in mapping.json."""
+    mapping_entry = get_repository_mapping(repo)
+    return bool(isinstance(mapping_entry, dict) and mapping_entry.get("paused") is True)
 
 
 def get_repository_recheck_intervals_minutes(repo: str) -> list[int]:
@@ -334,19 +370,29 @@ def upsert_repository_mapping(
             entry["limit_release_type_folders"] = _default_limit_release_type_folders()
             updated = True
 
+        if "paused" not in entry:
+            entry["paused"] = False
+            updated = True
+
+        if "folder" not in entry and "subfolder" in entry:
+            entry["folder"] = entry["subfolder"]
+            entry.pop("subfolder")
+            updated = True
+
         if updated:
             save_mapping(mapping_payload)
         return (False, updated)
 
     skeleton_entry = {
+        "active": effective_active_stamp,
+        "destination": "",
+        "folder": "",
+        "limit": 0,
+        "limit_release_type_folders": _default_limit_release_type_folders(),
         "name": repo,
         "nicename": build_default_nicename(repo),
-        "destination": "",
-        "subfolder": "",
-        "limit": 0,
-        "active": effective_active_stamp,
+        "paused": False,
         "recheck_intervals_minutes": [],
-        "limit_release_type_folders": _default_limit_release_type_folders(),
     }
     repositories.append(skeleton_entry)
     save_mapping(mapping_payload)
@@ -410,11 +456,12 @@ def validate_mapping_schema() -> MappingValidationResult:
                 "name",
                 "nicename",
                 "destination",
-                "subfolder",
+                "folder",
                 "limit",
                 "recheck_intervals_minutes",
                 "limit_release_type_folders",
                 "active",
+                "paused",
             }
         )
         for key in unknown_keys:
@@ -432,7 +479,7 @@ def validate_mapping_schema() -> MappingValidationResult:
             else:
                 seen_names[normalized_name] = index
 
-        for field_name in ("nicename", "destination", "subfolder", "limit", "active"):
+        for field_name in ("nicename", "destination", "folder", "limit", "active"):
             field_value = entry.get(field_name)
             if field_name == "limit":
                 if field_value is None:
@@ -452,6 +499,12 @@ def validate_mapping_schema() -> MappingValidationResult:
                 errors.append(
                     f"{display_location}.{field_name} must be a string when provided.{display_suffix}"
                 )
+
+        paused_value = entry.get("paused")
+        if paused_value is not None and not isinstance(paused_value, bool):
+            errors.append(
+                f"{display_location}.paused must be a boolean when provided.{display_suffix}"
+            )
 
         destination = entry.get("destination")
         if isinstance(destination, str) and not destination.strip():

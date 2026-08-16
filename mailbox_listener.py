@@ -175,6 +175,40 @@ def mark_as_read_and_delete(email_ids, max_attempts=2, retry_delay_seconds=5):
 
     return False
 
+
+
+def move_unread_to_trash(email_ids, max_attempts=2, retry_delay_seconds=5):
+    """Move unread emails to Trash without changing their seen state."""
+    if not email_ids:
+        return True
+
+    if not EMAIL or not PASSWORD:
+        raise ValueError("EMAIL and PASSWORD environment variables must be set")
+
+    mailbox_folder = get_gmail_folder()
+
+    if not isinstance(email_ids, list):
+        email_ids = [email_ids]
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            with IMAPClient('imap.gmail.com', use_uid=True) as server:
+                server.login(EMAIL, PASSWORD)
+                server.select_folder(mailbox_folder)
+                server.move(email_ids, '[Gmail]/Trash')
+
+            return True
+
+        except Exception as e:
+            if attempt < max_attempts:
+                print(
+                    f"Error moving unread emails to Trash (attempt {attempt}/{max_attempts}): {e}. "
+                    f"Retrying in {retry_delay_seconds}s..."
+                )
+                time.sleep(retry_delay_seconds)
+            else:
+                print(f"Error moving unread emails to Trash (attempt {attempt}/{max_attempts}): {e}")
+
     return False
 
 
