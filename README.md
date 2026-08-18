@@ -90,6 +90,7 @@ Each repository entry supports these fields:
 - limit: optional integer warning threshold for the number of folders at the destination (`0` disables checks)
 - limit_release_type_folders: optional array of folder names to include in destination limit counting for this repository (for example, `['Release', 'Pre-release']`)
 - recheck_intervals_minutes: optional list of positive integers to override queue re-check cadence for this repository
+- skiplist: optional array of release types to skip for this repository (for example, `['Pre-release']`); matching notifications are logged as `[SKIPPED]` in `Warning.log`, the email is marked as read and deleted, and no job is queued. Leave empty (`[]`) to download both `Release` and `Pre-release`
 - last_notification_seen: timestamp when the last GitHub release notification was seen
 - last_finalized: timestamp when a release was last moved to its complete destination (empty when none has been finalized)
 - paused: when `true`, matching notification emails move to Trash but remain unread, no new jobs are queued, and jobs already queued continue normally
@@ -100,6 +101,7 @@ When a new repository is seen, the app fills in a default skeleton entry with:
 - a generated foldername (for example, repo (owner))
 - empty destination/subfolder values
 - a default `limit` value of `0` (disabled until you configure a threshold)
+- an empty `skiplist` (`[]`, nothing is skipped)
 - `paused: false`
 - a last_notification_seen timestamp
 - an empty last_finalized value
@@ -117,6 +119,7 @@ Example:
 	"limit": 25,
 	"limit_release_type_folders": ["Release", "Pre-release"],
 	"recheck_intervals_minutes": [3, 10, 30, 120],
+	"skiplist": [],
 	"last_notification_seen": "2026-08-08_14-59",
 	"last_finalized": "2026-08-16_15-20",
 	"paused": false
@@ -156,6 +159,13 @@ Limit-count folder scope behavior:
 - Folder names are matched case-insensitively after normal path-name sanitization.
 
 If `recheck_intervals_minutes` is set for a repository, those values are used for that repository's re-check schedule. If the list is missing or invalid, the global `processing.recheck_intervals_minutes` values are used.
+
+Skiplist behavior:
+
+- `skiplist` lets you skip one or both release types (`Release`, `Pre-release`) per repository instead of downloading everything.
+- When an incoming notification's release type matches an entry in `skiplist` (case-insensitive), the app does not queue a job for it, logs a `[SKIPPED]` warning in `Warning.log`, and still marks the email as read and deletes it (unlike `paused`, which leaves the email unread).
+- Leave `skiplist` empty (`[]`) to keep downloading both release types (the default).
+- Adding both `"Release"` and `"Pre-release"` to `skiplist` is valid and effectively pauses new downloads for that repository while still cleaning up matching emails.
 
 Set `paused` to `true` to temporarily stop new jobs for a repository. Matching notification emails move to Trash while remaining unread, so they are visible there but excluded from later polls of the configured mailbox. Jobs already in the queue continue to completion.
 

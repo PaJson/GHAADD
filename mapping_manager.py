@@ -18,6 +18,7 @@ _MAPPING_FIELD_ORDER = (
     "limit",
     "limit_release_type_folders",
     "recheck_intervals_minutes",
+    "skiplist",
     "last_notification_seen",
     "last_finalized",
     "paused",
@@ -142,6 +143,11 @@ def _default_limit_release_type_folders() -> list[str]:
     return list(DEFAULT_LIMIT_RELEASE_TYPE_FOLDERS)
 
 
+def _normalize_skiplist(value: Any) -> list[str]:
+    """Normalize repository release-type skiplist entries."""
+    return _normalize_limit_release_type_folders(value)
+
+
 def _collapse_recheck_intervals_arrays(serialized_json: str) -> str:
     """Render recheck_intervals_minutes arrays on a single line for readability."""
     pattern = re.compile(
@@ -165,6 +171,25 @@ def _collapse_limit_release_type_folders_arrays(serialized_json: str) -> str:
     """Render limit_release_type_folders arrays on a single line for readability."""
     pattern = re.compile(
         r'("limit_release_type_folders"\s*:\s*)\[\n(?P<body>(?:\s*"[^"]+"\s*,?\n)*)\s*\]',
+        re.MULTILINE,
+    )
+
+    def _replace(match: re.Match[str]) -> str:
+        body = match.group("body") or ""
+        values = [
+            line.strip().rstrip(",")
+            for line in body.splitlines()
+            if line.strip()
+        ]
+        return f"{match.group(1)}[{', '.join(values)}]"
+
+    return pattern.sub(_replace, serialized_json)
+
+
+def _collapse_skiplist_arrays(serialized_json: str) -> str:
+    """Render skiplist arrays on a single line for readability."""
+    pattern = re.compile(
+        r'("skiplist"\s*:\s*)\[\n(?P<body>(?:\s*"[^"]+"\s*,?\n)*)\s*\]',
         re.MULTILINE,
     )
 
@@ -249,6 +274,7 @@ def save_mapping(mapping_payload: dict[str, list[dict[str, Any]]]) -> None:
     serialized_payload = json.dumps(normalized_payload, indent=2, ensure_ascii=True)
     serialized_payload = _collapse_recheck_intervals_arrays(serialized_payload)
     serialized_payload = _collapse_limit_release_type_folders_arrays(serialized_payload)
+    serialized_payload = _collapse_skiplist_arrays(serialized_payload)
     with open(file_path, "w", encoding="utf-8") as mapping_file:
         mapping_file.write(serialized_payload)
         mapping_file.write("\n")
@@ -337,6 +363,22 @@ def get_repository_limit_release_type_folders(repo: str) -> list[str]:
     )
 
 
+def get_repository_skiplist(repo: str) -> list[str]:
+    """Return repository release types (e.g. 'Release', 'Pre-release') that should be skipped."""
+    mapping_entry = get_repository_mapping(repo)
+    if not isinstance(mapping_entry, dict):
+        return []
+
+    return _normalize_skiplist(mapping_entry.get("skiplist"))
+
+
+def is_release_type_skipped(repo: str, release_type: Optional[str]) -> bool:
+    """Return True when the given release type is in the repository's skiplist."""
+    normalized_release_type = str(release_type or "Release").strip().lower()
+    skiplist = get_repository_skiplist(repo)
+    return any(entry.lower() == normalized_release_type for entry in skiplist)
+
+
 def _current_mapping_stamp() -> str:
     """Return a mapping timestamp in YYYY-MM-DD_HH-MM format."""
     return datetime.now().strftime("%Y-%m-%d_%H-%M")
@@ -374,6 +416,10 @@ def upsert_repository_mapping(
             entry["limit_release_type_folders"] = _default_limit_release_type_folders()
             updated = True
 
+        if "skiplist" not in entry:
+            entry["skiplist"] = []
+            updated = True
+
         if "paused" not in entry:
             entry["paused"] = False
             updated = True
@@ -390,6 +436,7 @@ def upsert_repository_mapping(
         "limit": 0,
         "limit_release_type_folders": _default_limit_release_type_folders(),
         "recheck_intervals_minutes": [],
+        "skiplist": [],
         "last_notification_seen": effective_notification_seen_stamp,
         "last_finalized": "",
         "paused": False,
@@ -483,6 +530,7 @@ def validate_mapping_schema() -> MappingValidationResult:
                 "limit",
                 "recheck_intervals_minutes",
                 "limit_release_type_folders",
+                "skiplist",
                 "last_notification_seen",
                 "last_finalized",
                 "paused",
@@ -601,6 +649,31 @@ def validate_mapping_schema() -> MappingValidationResult:
                 if has_empty_item:
                     warnings.append(
                         f"{display_location}.limit_release_type_folders contains empty values; they will be ignored.{display_suffix}"
+                    )
+
+        skiplist_value = entry.get("skiplist")
+        if skiplist_value is not None:
+            if not isinstance(skiplist_value, list):
+                errors.append(
+                    f"{display_location}.skiplist must be an array when provided.{display_suffix}"
+                )
+            else:
+                has_invalid_item = False
+                has_empty_item = False
+                for skiplist_item in skiplist_value:
+                    if not isinstance(skiplist_item, str):
+                        has_invalid_item = True
+                        continue
+                    if not skiplist_item.strip():
+                        has_empty_item = True
+
+                if has_invalid_item:
+                    errors.append(
+                        f"{display_location}.skiplist must contain only strings.{display_suffix}"
+                    )
+                if has_empty_item:
+                    warnings.append(
+                        f"{display_location}.skiplist contains empty values; they will be ignored.{display_suffix}"
                     )
 
     return {

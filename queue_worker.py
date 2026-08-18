@@ -33,6 +33,7 @@ from mailbox_listener import (
 )
 from mapping_manager import (
     get_repository_recheck_intervals_minutes,
+    is_release_type_skipped,
     is_repository_paused,
     mark_repository_finalized,
     upsert_repository_mapping,
@@ -465,6 +466,16 @@ def ingest_notifications_once(connection, github_token: Optional[str]) -> int:
                     f"⏸️ Repository is paused; moved unread notification to Trash and skipped queueing {repo} {tag}."
                 )
                 paused_emails_to_trash.extend(email_ids)
+                continue
+
+            if is_release_type_skipped(repo, release_type):
+                skip_message = (
+                    f"{repo} {tag} ({release_type_label}) matched the repository skiplist; "
+                    "notification was not queued."
+                )
+                print(f"⏭️ [SKIPPED] {skip_message}")
+                log_warning("SKIPPED", skip_message)
+                emails_to_delete.extend(email_ids)
                 continue
 
             try:
