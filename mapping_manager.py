@@ -10,6 +10,8 @@ from lifecycle_logger import log_warning
 
 
 DEFAULT_LIMIT_RELEASE_TYPE_FOLDERS = ["Release", "Pre-release"]
+DEFAULT_SUBFOLDER = "@GitHub"
+DEFAULT_LIMIT = 10
 _MAPPING_FIELD_ORDER = (
     "name",
     "destination",
@@ -432,8 +434,8 @@ def upsert_repository_mapping(
         "name": repo,
         "destination": "",
         "foldername": build_default_foldername(repo),
-        "subfolder": "",
-        "limit": 0,
+        "subfolder": DEFAULT_SUBFOLDER,
+        "limit": DEFAULT_LIMIT,
         "limit_release_type_folders": _default_limit_release_type_folders(),
         "recheck_intervals_minutes": [],
         "skiplist": [],
