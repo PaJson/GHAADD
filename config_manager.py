@@ -8,6 +8,7 @@ DEFAULT_POLL_JITTER_MIN_SECONDS = 5
 DEFAULT_POLL_JITTER_MAX_SECONDS = 30
 DEFAULT_MAX_EMAILS_TO_PROCESS = 0
 DEFAULT_RECHECK_INTERVALS_MINUTES = [5, 15, 30, 60, 120, 360, 720, 1440]
+DEFAULT_DESTINATION_CHECK_EVERY_N_POLLS = 10
 DEFAULT_DISABLE_STATE_PERSISTENCE = False
 DEFAULT_GMAIL_FOLDER = "GitHubNotifications"
 DEFAULT_ENABLE_LOGGING = False
@@ -123,6 +124,16 @@ def is_state_persistence_disabled(config=None):
     config = config if config is not None else load_config()
     value = _get_nested(config, "state", "disable_state_persistence")
     return _as_bool(value, DEFAULT_DISABLE_STATE_PERSISTENCE)
+
+
+def get_destination_check_every_n_polls(config=None):
+    """Return how often (in poll cycles) to verify mapped destinations still exist.
+
+    A value of 0 disables the periodic check.
+    """
+    config = config if config is not None else load_config()
+    value = _get_nested(config, "processing", "destination_check_every_n_polls")
+    return max(0, _as_int(value, DEFAULT_DESTINATION_CHECK_EVERY_N_POLLS))
 
 
 def get_default_download_dir(config: Optional[Dict[str, Any]] = None) -> str:

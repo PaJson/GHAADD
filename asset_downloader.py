@@ -257,6 +257,28 @@ def _count_repository_release_folders(
     return total
 
 
+def _format_bytes(num_bytes: int) -> str:
+    """Return a human-readable size string (e.g. '12.3 GB') for a byte count."""
+    size = float(num_bytes)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if size < 1024 or unit == "TB":
+            return f"{int(size)} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} TB"
+
+
+def _compute_directory_size_bytes(path: str) -> int:
+    """Return total size in bytes of all files under a directory tree."""
+    total_size = 0
+    for current_dir, _dirnames, filenames in os.walk(path):
+        for filename in filenames:
+            try:
+                total_size += os.path.getsize(os.path.join(current_dir, filename))
+            except OSError:
+                continue
+    return total_size
+
+
 def _warn_if_destination_limit_exceeded(repo: Optional[str], repo_destination_root: str) -> None:
     """Emit warning when repository destination exceeds configured folder limit."""
     folder_limit = _resolve_repository_limit(repo)
@@ -272,10 +294,11 @@ def _warn_if_destination_limit_exceeded(repo: Optional[str], repo_destination_ro
         return
 
     repo_label = str(repo or "unknown")
+    used_space_label = _format_bytes(_compute_directory_size_bytes(repo_destination_root))
     warning_message = (
         "Folder limit warning: "
         f"{repo_label} currently has {release_folder_count} folder(s) "
-        f"in '{repo_destination_root}' (limit={folder_limit})."
+        f"in '{repo_destination_root}' (limit={folder_limit}, used space={used_space_label})."
     )
     print(f"   ⚠️ {warning_message}")
     log_warning("LIMIT", warning_message)

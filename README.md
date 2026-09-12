@@ -150,7 +150,7 @@ Destination behavior:
 - When destination exists, `foldername` and `subfolder` folders are created automatically when needed.
 
 If `limit` is `0`, no folder-count warning is applied for that repository.
-If `limit` is greater than `0`, the app warns when the repository destination appears to contain too many folders.
+If `limit` is greater than `0`, the app warns when the repository destination appears to contain too many folders. The warning also reports the total on-disk size of that destination folder (computed only when the warning actually fires, not on every move), to help decide whether to raise or lower the limit.
 
 Limit-count folder scope behavior:
 
@@ -196,6 +196,7 @@ CLI options:
 	- Add --json to output the diagnostics report as JSON.
 - --mapping-validate: Validate mapping.json schema and print errors/warnings.
 	- Add --json to output the validation result as JSON.
+	- Includes an advisory warning when two or more repositories resolve to the same destination+foldername+subfolder path (often left over after a repository rename).
 - --move-complete-to-destination: Retry moving repository folders from `Complete` to configured mapping destinations.
 	- Useful when destination storage was unavailable earlier (for example NAS/network issues).
 	- Add --json to output a machine-readable summary.
@@ -239,7 +240,8 @@ Example:
 {
 	"processing": {
 		"max_emails_to_process": 0,
-		"recheck_intervals_minutes": [5, 15, 60, 360, 720, 1440]
+		"recheck_intervals_minutes": [5, 15, 60, 360, 720, 1440],
+		"destination_check_every_n_polls": 10
 	},
 	"mailbox": {
 		"folder": "GitHubNotifications"
@@ -274,6 +276,9 @@ Key behavior:
 - processing.max_emails_to_process
 	- 0 means process all unread notifications.
 	- > 0 limits processing to that many emails per cycle.
+- processing.destination_check_every_n_polls
+	- While polling, every Nth poll cycle checks whether each mapped repository destination folder still exists on disk and logs a warning (`Warning.log`) for any that are missing (for example, after a local folder was moved/renamed without updating mapping.json).
+	- 0 disables the periodic check. Defaults to 10. This check also runs once as part of `--doctor`.
 - processing.recheck_intervals_minutes
 	- Re-check cadence list used by the queue system.
 	- Values are interpreted as minutes.

@@ -473,6 +473,82 @@ def mark_repository_finalized(
     return False
 
 
+def _normalize_destination_root_for_comparison(destination: str) -> str:
+    """Return a comparison-safe form of a destination root path."""
+    normalized = os.path.normpath(os.path.expanduser(os.path.expandvars(destination.strip())))
+    return normalized.lower() if os.name == "nt" else normalized
+
+
+def _normalize_folder_segment_for_comparison(value: str) -> str:
+    """Return a comparison-safe form of a foldername/subfolder segment."""
+    segments = [segment for segment in re.split(r"[\\/]+", value.strip()) if segment not in ("", ".", "..")]
+    joined = "/".join(segments)
+    return joined.lower() if os.name == "nt" else joined
+
+
+def _build_destination_comparison_key(
+    destination: str,
+    foldername: Any,
+    subfolder: Any,
+    repo_name: str,
+) -> tuple[str, str, str]:
+    """Return a normalized (destination, foldername, subfolder) key for duplicate checks."""
+    destination_norm = _normalize_destination_root_for_comparison(destination)
+
+    foldername_value = foldername if isinstance(foldername, str) and foldername.strip() else build_default_foldername(repo_name)
+    foldername_norm = _normalize_folder_segment_for_comparison(foldername_value)
+
+    subfolder_value = subfolder if isinstance(subfolder, str) else ""
+    subfolder_norm = _normalize_folder_segment_for_comparison(subfolder_value)
+
+    return (destination_norm, foldername_norm, subfolder_norm)
+
+
+def find_missing_mapped_destinations() -> list[dict[str, str]]:
+    """Return mapped repository entries whose destination folder no longer exists."""
+    mapping_payload = load_mapping()
+    missing_entries: list[dict[str, str]] = []
+
+    for entry in mapping_payload.get("repositories", []):
+        if not isinstance(entry, dict):
+            continue
+
+        destination = entry.get("destination")
+        if not isinstance(destination, str) or not destination.strip():
+            continue
+
+        resolved_destination = os.path.normpath(
+            os.path.expanduser(os.path.expandvars(destination.strip()))
+        )
+        if os.path.isdir(resolved_destination):
+            continue
+
+        missing_entries.append(
+            {
+                "name": str(entry.get("name") or "unknown"),
+                "destination": destination.strip(),
+                "resolved_destination": resolved_destination,
+            }
+        )
+
+    return missing_entries
+
+
+def warn_about_missing_mapped_destinations() -> int:
+    """Log a warning for each mapped destination folder that no longer exists on disk."""
+    missing_entries = find_missing_mapped_destinations()
+    for missing_entry in missing_entries:
+        warning_message = (
+            f"Mapped destination for '{missing_entry['name']}' no longer exists: "
+            f"{missing_entry['resolved_destination']} "
+            "(folder may have been moved, renamed, or deleted; update mapping.json or recreate it)."
+        )
+        print(f"⚠️ {warning_message}")
+        log_warning("MAPPING", warning_message)
+
+    return len(missing_entries)
+
+
 def validate_mapping_schema() -> MappingValidationResult:
     """Validate mapping.json structure and return errors/warnings."""
     errors: list[str] = []
@@ -505,6 +581,7 @@ def validate_mapping_schema() -> MappingValidationResult:
         }
 
     seen_names: dict[str, int] = {}
+    seen_destinations: dict[tuple[str, str, str], dict[str, Any]] = {}
     for index, entry in enumerate(repositories, 1):
         location = f"repositories[{index}]"
 
@@ -517,6 +594,34 @@ def validate_mapping_schema() -> MappingValidationResult:
         name = entry.get("name")
         if isinstance(name, str) and name.strip():
             display_suffix = f" ({name.strip()})"
+
+        destination_value = entry.get("destination")
+        if isinstance(destination_value, str) and destination_value.strip():
+            repo_name_for_key = str(name) if isinstance(name, str) else ""
+            destination_key = _build_destination_comparison_key(
+                destination_value,
+                entry.get("foldername"),
+                entry.get("subfolder"),
+                repo_name_for_key,
+            )
+            foldername_value = entry.get("foldername")
+            effective_foldername = (
+                foldername_value.strip()
+                if isinstance(foldername_value, str) and foldername_value.strip()
+                else build_default_foldername(repo_name_for_key)
+            )
+            subfolder_value = entry.get("subfolder")
+            display_path_parts = [destination_value.strip(), effective_foldername]
+            if isinstance(subfolder_value, str) and subfolder_value.strip():
+                display_path_parts.append(subfolder_value.strip())
+
+            destination_group = seen_destinations.setdefault(
+                destination_key,
+                {"repo_names": [], "display_path": os.path.join(*display_path_parts)},
+            )
+            destination_group["repo_names"].append(
+                str(name).strip() if isinstance(name, str) and name.strip() else f"repositories[{index}]"
+            )
 
         unknown_keys = sorted(
             key
@@ -675,6 +780,18 @@ def validate_mapping_schema() -> MappingValidationResult:
                     warnings.append(
                         f"{display_location}.skiplist contains empty values; they will be ignored.{display_suffix}"
                     )
+
+    for destination_group in seen_destinations.values():
+        repo_names = destination_group["repo_names"]
+        if len(repo_names) < 2:
+            continue
+        destination_display = destination_group["display_path"]
+        warnings.append(
+            "Multiple repositories resolve to the same destination folder "
+            f"('{destination_display}'): {', '.join(repo_names)}. "
+            "This is expected if intentionally shared, but often happens after a "
+            "repository rename left an old entry pointing at the same place."
+        )
 
     return {
         "ok": len(errors) == 0,

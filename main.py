@@ -4,6 +4,7 @@ import sys
 import time
 from config_manager import (
     get_default_download_dir,
+    get_destination_check_every_n_polls,
     get_logging_settings,
     get_polling_settings,
     load_config,
@@ -11,7 +12,7 @@ from config_manager import (
 from datetime import datetime
 from dotenv import load_dotenv
 
-__version__ = "0.9.9.9.9.9.9-beta"
+__version__ = "0.9.9.9.9.9.9-9-beta"
 
 # Load environment variables from .env.
 load_dotenv()
@@ -21,6 +22,7 @@ GITHUB_TOKEN = os.getenv("GITHUB_PAT")
 from cli_commands import handle_cli_command, parse_cli_args
 from db_manager import open_database
 from asset_downloader import download_release
+from mapping_manager import warn_about_missing_mapped_destinations
 from queue_worker import run_ingest_and_queue_cycle
 
 
@@ -135,12 +137,20 @@ def run_polling_loop(interval_seconds, jitter_min_seconds, jitter_max_seconds):
     )
     print("Press Ctrl+C to stop.\n")
 
+    destination_check_every_n_polls = get_destination_check_every_n_polls()
+
     cycle = 1
     with open_database() as connection:
         while True:
             started = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             print(f"=== Poll cycle {cycle} @ {started} ===")
             run_ingest_and_queue_cycle(connection, GITHUB_TOKEN)
+
+            if destination_check_every_n_polls > 0 and cycle % destination_check_every_n_polls == 0:
+                print(f"🔎 Periodic check ({destination_check_every_n_polls}-poll interval): verifying mapped destinations still exist...")
+                missing_count = warn_about_missing_mapped_destinations()
+                if missing_count == 0:
+                    print("   ✅ All mapped destinations are present.")
 
             jitter = random.randint(jitter_min_seconds, jitter_max_seconds)
             sleep_seconds = interval_seconds + jitter

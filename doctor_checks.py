@@ -3,7 +3,7 @@ import re
 import sys
 from typing import TypedDict
 
-from mapping_manager import validate_mapping_schema
+from mapping_manager import find_missing_mapped_destinations, validate_mapping_schema
 
 
 class DoctorReport(TypedDict):
@@ -152,8 +152,15 @@ def run_doctor() -> DoctorReport:
         if mismatch_warning:
             warnings.append(f"{location}: {mismatch_warning}")
 
+    for missing_entry in find_missing_mapped_destinations():
+        warnings.append(
+            f"mapping destination missing for '{missing_entry['name']}': "
+            f"{missing_entry['resolved_destination']}"
+        )
+
     checks.append("Validated environment variables and local JSON config files.")
     checks.append("Checked path style compatibility for configured destination paths.")
+    checks.append("Checked that mapped destination folders still exist on disk.")
 
     return {
         "ok": len(errors) == 0,

@@ -88,27 +88,54 @@ def _preserve_best_known_counters(
     total_items: int,
     working_dir: Optional[str],
 ) -> Tuple[int, int, int, Optional[str]]:
-    """Avoid clobbering previously recorded progress with a zero-result attempt.
+    """Avoid clobbering previously recorded progress with a worse-result attempt.
 
     An attempt that errors out or is skipped before reaching the asset list has no
     real counts of its own (0/0/0). Persisting those zeros would overwrite the
     genuine counts/working_dir left behind by an earlier successful attempt on the
     same job, which later makes a fully-staged release look incomplete.
-    """
-    if total_items > 0:
-        return downloaded_count, skipped_count, total_items, working_dir
 
+    The same problem happens mid-run: if a prior attempt already accounted for
+    every expected item (e.g. 16/16 downloaded+skipped), but this attempt gets
+    interrupted partway through re-verification (a GitHub 404 because the release
+    was replaced/deleted upstream mid-recheck), it reports fewer accounted-for
+    items than before (e.g. 10/16). That regression is never true data loss -
+    the previously downloaded files are still on disk - so it must not overwrite
+    the last known-good, fully-accounted-for counters either.
+    """
     previous_total_items = int(row["total_items"] or 0)
     if previous_total_items <= 0:
         return downloaded_count, skipped_count, total_items, working_dir
 
+    previous_downloaded_count = int(row["downloaded_count"] or 0)
+    previous_skipped_count = int(row["skipped_count"] or 0)
     previous_working_dir = str(row["working_dir"] or "").strip() or None
-    return (
-        int(row["downloaded_count"] or 0),
-        int(row["skipped_count"] or 0),
-        previous_total_items,
-        working_dir or previous_working_dir,
+    previous_accounted = previous_downloaded_count + previous_skipped_count
+    previously_fully_accounted = previous_accounted >= previous_total_items
+
+    if total_items <= 0:
+        return (
+            previous_downloaded_count,
+            previous_skipped_count,
+            previous_total_items,
+            working_dir or previous_working_dir,
+        )
+
+    current_accounted = downloaded_count + skipped_count
+    regressed_from_complete = (
+        previously_fully_accounted
+        and total_items == previous_total_items
+        and current_accounted < previous_accounted
     )
+    if regressed_from_complete:
+        return (
+            previous_downloaded_count,
+            previous_skipped_count,
+            previous_total_items,
+            working_dir or previous_working_dir,
+        )
+
+    return downloaded_count, skipped_count, total_items, working_dir
 
 
 def _has_all_release_items_accounted(
