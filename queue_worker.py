@@ -312,6 +312,7 @@ def _warn_if_file_count_changed_from_previous_success(
     tag: str,
     release_type: Optional[str],
     current_total_items: int,
+    working_dir: Optional[str] = None,
 ) -> None:
     """Print a warning when the final successful file count differs from the previous release."""
     previous_job = get_previous_successful_completed_job(
@@ -331,11 +332,12 @@ def _warn_if_file_count_changed_from_previous_success(
     delta = int(current_total_items) - previous_total_items
     delta_sign = "+" if delta > 0 else ""
     previous_tag = previous_job["tag"] or "unknown"
+    folder = working_dir or "unknown"
     warning_message = (
         "Sanity check: file count changed versus previous successful release "
         f"for {repo} ({release_type or 'Release'}). "
         f"Current={current_total_items}, Previous={previous_total_items} "
-        f"(tag={previous_tag}, delta={delta_sign}{delta})."
+        f"(tag={previous_tag}, delta={delta_sign}{delta}, folder={folder})."
     )
     print(f"   ⚠️ {warning_message}")
     log_warning("SANITY_CHECK", warning_message)
@@ -805,6 +807,7 @@ def process_selected_pending_jobs(connection, github_token: Optional[str], job_i
                 tag=tag,
                 release_type=release_type,
                 current_total_items=total_items,
+                working_dir=working_dir,
             )
             save_job_skip_details(connection, job_id, attempt_count, skipped_items)
             print(
@@ -850,6 +853,7 @@ def process_selected_pending_jobs(connection, github_token: Optional[str], job_i
                         tag=tag,
                         release_type=release_type,
                         current_total_items=total_items,
+                        working_dir=working_dir,
                     )
             else:
                 mark_job_failed(
@@ -1105,6 +1109,7 @@ def process_queue_once(connection, github_token: Optional[str]) -> None:
                         tag=tag,
                         release_type=release_type,
                         current_total_items=total_items,
+                        working_dir=working_dir,
                     )
             else:
                 mark_job_failed(
