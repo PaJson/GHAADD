@@ -22,6 +22,7 @@ from db_manager import (
 )
 from asset_downloader import (
     download_release,
+    get_release_data,
     move_processing_folder_to_complete,
     move_processing_folder_to_partial,
 )
@@ -496,6 +497,19 @@ def ingest_notifications_once(connection, github_token: Optional[str]) -> int:
                 )
                 paused_emails_to_trash.extend(email_ids)
                 continue
+
+            # The email subject only reflects the release's state when GitHub sent the
+            # notification; confirm against the live API before acting on it (skiplist, folder).
+            live_release_data = get_release_data(repo, tag)
+            if live_release_data is not None:
+                live_release_type = "Pre-release" if live_release_data.get("prerelease") else "Release"
+                if live_release_type != (release_type or "Release"):
+                    print(
+                        f"   ℹ️ Notification reported '{release_type_label}' but GitHub currently shows "
+                        f"'{live_release_type}' for {repo} {tag}; using the live value."
+                    )
+                release_type = live_release_type
+                release_type_label = release_type
 
             if is_release_type_skipped(repo, release_type):
                 skip_message = (

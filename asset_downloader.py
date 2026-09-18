@@ -853,9 +853,9 @@ def download_all_assets(
 
     custom_folder = generate_folder_name(repo, release_data, headers_api)
     repo_parent_folder = _build_repo_parent_folder(repo)
-    effective_release_type = release_type
-    if not effective_release_type:
-        effective_release_type = "Pre-release" if release_data.get("prerelease") else "Release"
+    # Trust the live GitHub API over the release_type inferred from the notification email,
+    # since the email only reflects the release's state at the time it was sent.
+    effective_release_type = "Pre-release" if release_data.get("prerelease") else "Release"
     release_type_folder = sanitize_folder_name(effective_release_type) or "Release"
     processing_download_dir, _ = _build_staging_directories(download_dir)
     final_download_dir = os.path.join(
