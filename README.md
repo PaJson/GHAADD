@@ -24,7 +24,7 @@ Automated Python utility that reads GitHub release notification emails from Gmai
 
 ## Requirements
 
-- Python 3.8+
+- Python 3.10+ (the codebase uses PEP 604 `X | Y` union type annotations)
 - Gmail App Password for IMAP access
 - GitHub PAT (recommended to avoid rate limits)
 
@@ -190,6 +190,8 @@ python main.py
 
 CLI options:
 
+- --drain-queue: Skip email ingestion entirely and repeatedly process only due queue jobs (sleeping until the next pending job's scheduled re-check time between cycles) until the pending queue is fully empty, then exit. Takes precedence over --once and --poll when provided.
+- --run-pending JOB [JOB ...]: Immediately run one or more specific pending jobs by ID, without changing their retry schedule (unlike automatic rechecks, this completes `release_not_found`/SKIP results right away). Example: python main.py --run-pending 23 27.
 - --purge-state: Delete local state.db and exit.
 - --smoke-test: Run internal smoke tests and exit.
 - --doctor: Run environment and cross-platform diagnostics.
