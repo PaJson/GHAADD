@@ -5,8 +5,8 @@ import time
 from config_manager import (
     get_default_download_dir,
     get_destination_check_every_n_polls,
-    get_logging_settings,
     get_polling_settings,
+    get_terminal_log_settings,
     load_config,
 )
 from datetime import datetime
@@ -82,7 +82,7 @@ class TeeStream:
 
 def setup_terminal_logging(config):
     """Enable terminal-output mirroring to a timestamped per-run log file."""
-    settings = get_logging_settings(config)
+    settings = get_terminal_log_settings(config)
     if not settings["enabled"]:
         return None
 

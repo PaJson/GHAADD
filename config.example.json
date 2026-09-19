@@ -6,7 +6,7 @@
     "partial": "Partial",
     "logs": "Logs"
   },
-  "logging": {
+  "terminal_log": {
     "enabled": false
   },
   "mailbox": {

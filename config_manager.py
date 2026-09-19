@@ -11,7 +11,7 @@ DEFAULT_RECHECK_INTERVALS_MINUTES = [5, 15, 30, 60, 120, 360, 720, 1440]
 DEFAULT_DESTINATION_CHECK_EVERY_N_POLLS = 10
 DEFAULT_DISABLE_STATE_PERSISTENCE = False
 DEFAULT_GMAIL_FOLDER = "GitHubNotifications"
-DEFAULT_ENABLE_LOGGING = False
+DEFAULT_ENABLE_TERMINAL_LOG = False
 DEFAULT_GHAADD_ROOT_FOLDER = "GHAADD"
 DEFAULT_PROCESSING_FOLDER = "Processing"
 DEFAULT_COMPLETE_FOLDER = "Complete"
@@ -27,7 +27,7 @@ class FolderSettings(TypedDict):
     logs: str
 
 
-class LoggingSettings(TypedDict):
+class TerminalLogSettings(TypedDict):
     enabled: bool
     directory: str
 
@@ -174,10 +174,10 @@ def get_gmail_folder(config=None):
     return DEFAULT_GMAIL_FOLDER
 
 
-def get_logging_settings(config: Optional[Dict[str, Any]] = None) -> LoggingSettings:
-    """Return normalized logging settings with safe defaults."""
+def get_terminal_log_settings(config: Optional[Dict[str, Any]] = None) -> TerminalLogSettings:
+    """Return normalized terminal transcript mirroring settings with safe defaults."""
     config = config if config is not None else load_config()
-    enabled = _get_nested(config, "logging", "enabled")
+    enabled = _get_nested(config, "terminal_log", "enabled")
     folder_settings = get_folder_settings(config)
     log_dir = os.path.join(
         get_default_download_dir(config),
@@ -187,7 +187,7 @@ def get_logging_settings(config: Optional[Dict[str, Any]] = None) -> LoggingSett
     normalized_log_dir = _normalize_configured_path(log_dir)
 
     return {
-        "enabled": _as_bool(enabled, DEFAULT_ENABLE_LOGGING),
+        "enabled": _as_bool(enabled, DEFAULT_ENABLE_TERMINAL_LOG),
         "directory": normalized_log_dir,
     }
 

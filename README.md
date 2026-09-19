@@ -272,7 +272,7 @@ Example:
 		"partial": "Partial",
 		"logs": "Logs"
 	},
-	"logging": {
+	"terminal_log": {
 		"enabled": false
 	},
 	"paths": {
@@ -308,7 +308,7 @@ Key behavior:
 - folders.ghaadd_root, folders.processing, folders.complete, folders.partial, folders.logs
 	- Folder names used under each resolved base download path.
 	- Defaults are GHAADD, Processing, Complete, Partial, and Logs.
-- logging.enabled
+- terminal_log.enabled
 	- false disables terminal output logging.
 	- true writes all terminal output (stdout and stderr) to a .log file for this run.
 	- Log files are written under: paths.default_download_dir/folders.ghaadd_root/folders.logs.
