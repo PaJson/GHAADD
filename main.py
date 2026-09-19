@@ -12,7 +12,7 @@ from config_manager import (
 from datetime import datetime
 from dotenv import load_dotenv
 
-__version__ = "0.9.9.9.9.9.9.9.9.9-beta"
+__version__ = "0.9.9.9.9.9.9.9.9.9.9-beta"
 
 # Load environment variables from .env.
 load_dotenv()

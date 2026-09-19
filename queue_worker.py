@@ -77,6 +77,52 @@ def _finalize_staged_release_folder(
     return done_dir
 
 
+def _handle_working_dir_relocation(
+    previous_working_dir: Optional[str],
+    new_working_dir: Optional[str],
+    repo: str,
+    tag: str,
+    job_id: int,
+) -> None:
+    """Warn about and quarantine a Processing folder abandoned by a mid-flight rename.
+
+    Re-check attempts recompute the staging folder name from live release metadata
+    (title, prerelease flag). If that metadata changes upstream between attempts,
+    a new folder is used and the previous attempt's folder is no longer referenced
+    by the job - left alone, it would silently linger in Processing forever.
+    """
+    if not previous_working_dir or not new_working_dir:
+        return
+    if os.path.normcase(os.path.normpath(previous_working_dir)) == os.path.normcase(os.path.normpath(new_working_dir)):
+        return
+    if not os.path.isdir(previous_working_dir):
+        return
+
+    rename_message = (
+        f"Job #{job_id} ({repo} {tag}): staging folder changed between attempts "
+        "(release title/prerelease flag likely edited upstream), leaving the previous "
+        f"attempt's folder unreferenced. Old folder: '{previous_working_dir}' -> "
+        f"New folder: '{new_working_dir}'."
+    )
+    print(f"   ⚠️ {rename_message}")
+    log_warning("FOLDER_RENAMED", rename_message)
+
+    try:
+        quarantined_dir = move_processing_folder_to_partial(previous_working_dir)
+    except OSError as exc:
+        move_failure_message = f"Could not move stale staging folder '{previous_working_dir}' to {_PARTIAL_LABEL}: {exc}"
+        print(f"   ⚠️ {move_failure_message}")
+        log_warning("FOLDER_RENAMED_MOVE", move_failure_message)
+        return
+
+    if quarantined_dir:
+        print(f"   📁 Moved stale staging folder to {_PARTIAL_LABEL}: {quarantined_dir}")
+        log_warning(
+            "FOLDER_RENAMED_MOVED",
+            f"Job #{job_id} ({repo} {tag}): moved stale staging folder to {_PARTIAL_LABEL}: {quarantined_dir}",
+        )
+
+
 def _is_terminal_skip_reason(skip_reason: Optional[str]) -> bool:
     """Return True when a SKIP result should end the re-check plan immediately."""
     return skip_reason in {"release_not_found"}
@@ -756,6 +802,8 @@ def process_selected_pending_jobs(connection, github_token: Optional[str], job_i
             print(f"   ⚠️ {warning_message}")
             log_warning("API", warning_message)
 
+        previous_working_dir = str(row["working_dir"] or "").strip() or None
+
         result: DownloadReleaseResult
         try:
             result = download_release(repo, tag, release_type, include_stats=True)
@@ -791,6 +839,7 @@ def process_selected_pending_jobs(connection, github_token: Optional[str], job_i
         downloaded_count, skipped_count, total_items, working_dir = _preserve_best_known_counters(
             row, downloaded_count, skipped_count, total_items, working_dir
         )
+        _handle_working_dir_relocation(previous_working_dir, working_dir, repo, tag, job_id)
 
         latest_commit = current_commit or expected_commit
 
@@ -1021,6 +1070,8 @@ def process_queue_once(connection, github_token: Optional[str]) -> None:
             print(f"   ⚠️ {warning_message}")
             log_warning("API", warning_message)
 
+        previous_working_dir = str(job["working_dir"] or "").strip() or None
+
         result: DownloadReleaseResult
         try:
             result = download_release(repo, tag, release_type, include_stats=True)
@@ -1056,6 +1107,7 @@ def process_queue_once(connection, github_token: Optional[str]) -> None:
         downloaded_count, skipped_count, total_items, working_dir = _preserve_best_known_counters(
             job, downloaded_count, skipped_count, total_items, working_dir
         )
+        _handle_working_dir_relocation(previous_working_dir, working_dir, repo, tag, job_id)
 
         current_attempt_count = attempt_count + 1
         latest_commit = current_commit or expected_commit
