@@ -89,13 +89,16 @@ def open_database():
         """
     )
 
-    # Store lifecycle events (completed/partial moves, typed warnings) so CLI
-    # and GUI share one structured source instead of parsing text log files.
+    # Store lifecycle events (completed/partial moves, typed warnings, cycle
+    # summaries) so CLI and GUI share one structured source instead of parsing
+    # text log files. event_type is intentionally unconstrained (no CHECK) so
+    # new event types can be added later without a table rebuild; the set of
+    # valid values is governed by lifecycle_logger.py alone.
     connection.execute(
         """
         CREATE TABLE IF NOT EXISTS lifecycle_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            event_type TEXT NOT NULL CHECK (event_type IN ('COMPLETED_MOVE', 'PARTIAL_MOVE', 'WARNING')),
+            event_type TEXT NOT NULL,
             category TEXT,
             repo TEXT,
             tag TEXT,
@@ -106,6 +109,39 @@ def open_database():
         )
         """
     )
+
+    # Migrate away from the original restrictive event_type CHECK constraint
+    # (SQLite can't ALTER a CHECK constraint in place, so rebuild the table).
+    lifecycle_events_table_def = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='lifecycle_events'"
+    ).fetchone()
+    if lifecycle_events_table_def and "CHECK" in (lifecycle_events_table_def["sql"] or ""):
+        connection.execute("ALTER TABLE lifecycle_events RENAME TO lifecycle_events_old")
+        connection.execute(
+            """
+            CREATE TABLE lifecycle_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_type TEXT NOT NULL,
+                category TEXT,
+                repo TEXT,
+                tag TEXT,
+                commit_hash TEXT,
+                destination_path TEXT,
+                message TEXT NOT NULL,
+                created_at REAL NOT NULL DEFAULT (CAST(strftime('%s', 'now') AS REAL))
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO lifecycle_events (
+                id, event_type, category, repo, tag, commit_hash, destination_path, message, created_at
+            )
+            SELECT id, event_type, category, repo, tag, commit_hash, destination_path, message, created_at
+            FROM lifecycle_events_old
+            """
+        )
+        connection.execute("DROP TABLE lifecycle_events_old")
 
     # Indexes for queue polling and reporting performance.
     connection.execute(

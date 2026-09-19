@@ -228,7 +228,7 @@ CLI options:
 - --lifecycle-log: Print recent lifecycle events (completed moves, superseded partial moves, typed warnings) recorded in state.db.
 	- Add --json to output the events as JSON.
 	- Add --lifecycle-limit N to control how many events are printed (default 20, 0 means all).
-	- Add --lifecycle-type TYPE to filter by event type (COMPLETED_MOVE, PARTIAL_MOVE, WARNING).
+	- Add --lifecycle-type TYPE to filter by event type (COMPLETED_MOVE, PARTIAL_MOVE, WARNING, CYCLE_SUMMARY).
 	- Add --lifecycle-repo-filter TEXT to filter by repository substring (case-insensitive).
 - --once: Force single-run mode even when polling is enabled.
 - --poll: Force polling mode for this run.

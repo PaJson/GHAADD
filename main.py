@@ -23,6 +23,7 @@ from cli_commands import handle_cli_command, parse_cli_args
 from daemon_lock import acquire_daemon_lock
 from db_manager import get_next_pending_job, open_database
 from asset_downloader import download_release
+from lifecycle_logger import log_cycle_summary
 from mapping_manager import warn_about_missing_mapped_destinations
 from queue_worker import process_queue_once, run_ingest_and_queue_cycle
 
@@ -172,7 +173,9 @@ def run_drain_queue_loop(github_token):
         while True:
             started = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             print(f"=== Drain cycle {cycle} @ {started} ===")
-            process_queue_once(connection, github_token)
+            queue_stats = process_queue_once(connection, github_token)
+            summary_message = log_cycle_summary(None, queue_stats)
+            print(f"📋 {summary_message}")
 
             next_pending_job = get_next_pending_job(connection)
             if next_pending_job is None:

@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import Optional
 
 from db_manager import get_lifecycle_events, insert_lifecycle_event, open_database
+from payload_types import IngestCycleStats, QueueCycleStats
 
 
 def _record_lifecycle_event(
@@ -118,4 +119,46 @@ def list_lifecycle_events(
             }
         )
     return events
+
+
+def log_cycle_summary(
+    ingest_stats: Optional[IngestCycleStats] = None,
+    queue_stats: Optional[QueueCycleStats] = None,
+) -> str:
+    """Record a one-line summary for one ingest/process cycle and return it."""
+    ingest_values: dict = dict(ingest_stats or {})
+    queue_values: dict = dict(queue_stats or {})
+
+    notifications_part = (
+        "notifications: found={found} queued={queued} "
+        "(malformed={malformed}, paused={paused}, skiplist={skiplist}, "
+        "errors={errors}, duplicates_collapsed={duplicates})"
+    ).format(
+        found=ingest_values.get("notifications_found", 0),
+        queued=ingest_values.get("notifications_queued", 0),
+        malformed=ingest_values.get("notifications_skipped_malformed", 0),
+        paused=ingest_values.get("notifications_skipped_paused", 0),
+        skiplist=ingest_values.get("notifications_skipped_skiplist", 0),
+        errors=ingest_values.get("notifications_errors", 0),
+        duplicates=ingest_values.get("notifications_collapsed_duplicates", 0),
+    )
+
+    queue_part = (
+        "queue: due={due} completed={completed} failed={failed} "
+        "retried={retried} superseded={superseded} "
+        "files(downloaded={downloaded}, skipped={skipped})"
+    ).format(
+        due=queue_values.get("due_jobs", 0),
+        completed=queue_values.get("completed", 0),
+        failed=queue_values.get("failed", 0),
+        retried=queue_values.get("retried", 0),
+        superseded=queue_values.get("superseded", 0),
+        downloaded=queue_values.get("downloaded_files", 0),
+        skipped=queue_values.get("skipped_files", 0),
+    )
+
+    message = f"Cycle summary - {notifications_part} | {queue_part}"
+    _record_lifecycle_event("CYCLE_SUMMARY", message)
+    return message
+
 

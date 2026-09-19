@@ -108,7 +108,7 @@ def parse_cli_args(args: list[str], version: str) -> argparse.Namespace:
     )
     lifecycle_group.add_argument(
         "--lifecycle-type",
-        choices=("COMPLETED_MOVE", "PARTIAL_MOVE", "WARNING"),
+        choices=("COMPLETED_MOVE", "PARTIAL_MOVE", "WARNING", "CYCLE_SUMMARY"),
         help="Filter lifecycle events by type.",
     )
     lifecycle_group.add_argument(

@@ -170,3 +170,23 @@ class NotificationPayload(TypedDict):
 
 class QueuedNotificationPayload(NotificationPayload):
     email_ids: list[str]
+
+
+class IngestCycleStats(TypedDict):
+    notifications_found: int
+    notifications_collapsed_duplicates: int
+    notifications_queued: int
+    notifications_skipped_malformed: int
+    notifications_skipped_paused: int
+    notifications_skipped_skiplist: int
+    notifications_errors: int
+
+
+class QueueCycleStats(TypedDict):
+    due_jobs: int
+    completed: int
+    failed: int
+    retried: int
+    superseded: int
+    downloaded_files: int
+    skipped_files: int

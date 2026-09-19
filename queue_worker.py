@@ -26,7 +26,7 @@ from asset_downloader import (
     move_processing_folder_to_complete,
     move_processing_folder_to_partial,
 )
-from lifecycle_logger import log_completed_move, log_partial_move, log_warning
+from lifecycle_logger import log_completed_move, log_cycle_summary, log_partial_move, log_warning
 from mailbox_listener import (
     get_pending_notifications,
     mark_as_read_and_delete,
@@ -39,7 +39,14 @@ from mapping_manager import (
     mark_repository_finalized,
     upsert_repository_mapping,
 )
-from payload_types import DownloadReleaseResult, NotificationPayload, QueuedNotificationPayload, SkippedItemPayload
+from payload_types import (
+    DownloadReleaseResult,
+    IngestCycleStats,
+    NotificationPayload,
+    QueuedNotificationPayload,
+    QueueCycleStats,
+    SkippedItemPayload,
+)
 from typing import Literal, Optional, Tuple, Union, cast, overload
 
 
@@ -443,7 +450,20 @@ def get_current_commit_hash(
         return (None, reason) if include_reason else None
 
 
-def ingest_notifications_once(connection, github_token: Optional[str]) -> int:
+def _empty_ingest_cycle_stats() -> IngestCycleStats:
+    """Return a zeroed ingest-cycle stats payload."""
+    return {
+        "notifications_found": 0,
+        "notifications_collapsed_duplicates": 0,
+        "notifications_queued": 0,
+        "notifications_skipped_malformed": 0,
+        "notifications_skipped_paused": 0,
+        "notifications_skipped_skiplist": 0,
+        "notifications_errors": 0,
+    }
+
+
+def ingest_notifications_once(connection, github_token: Optional[str]) -> IngestCycleStats:
     """Ingest unseen notifications into job_queue and delete emails immediately."""
     max_emails_to_process = get_max_emails_to_process()
 
@@ -461,7 +481,7 @@ def ingest_notifications_once(connection, github_token: Optional[str]) -> int:
 
         if not notifications:
             print("No pending notifications found.")
-            return 0
+            return _empty_ingest_cycle_stats()
 
         unique_notifications: list[QueuedNotificationPayload] = []
         notifications_by_release: dict[tuple[Optional[str], Optional[str], Optional[str]], QueuedNotificationPayload] = {}
@@ -507,6 +527,10 @@ def ingest_notifications_once(connection, github_token: Optional[str]) -> int:
         emails_to_delete = []
         paused_emails_to_trash = []
         queued_count = 0
+        malformed_count = 0
+        paused_count = 0
+        skiplist_count = 0
+        error_count = 0
         now_timestamp = time.time()
 
         for idx, notification in enumerate(unique_notifications, 1):
@@ -520,6 +544,7 @@ def ingest_notifications_once(connection, github_token: Optional[str]) -> int:
             if repo is None or tag is None:
                 print("✗ Skipping malformed notification: missing repo or tag.\n")
                 emails_to_delete.extend(email_ids)
+                malformed_count += 1
                 continue
 
             mapping_created, mapping_updated = upsert_repository_mapping(
@@ -542,6 +567,7 @@ def ingest_notifications_once(connection, github_token: Optional[str]) -> int:
                     f"⏸️ Repository is paused; moved unread notification to Trash and skipped queueing {repo} {tag}."
                 )
                 paused_emails_to_trash.extend(email_ids)
+                paused_count += 1
                 continue
 
             # The email subject only reflects the release's state when GitHub sent the
@@ -565,6 +591,7 @@ def ingest_notifications_once(connection, github_token: Optional[str]) -> int:
                 print(f"⏭️ [SKIPPED] {skip_message}")
                 log_warning("SKIPPED", skip_message)
                 emails_to_delete.extend(email_ids)
+                skiplist_count += 1
                 continue
 
             try:
@@ -652,6 +679,7 @@ def ingest_notifications_once(connection, github_token: Optional[str]) -> int:
                     )
             except Exception as exc:
                 print(f"✗ Error queueing {repo} {tag}: {str(exc)}\n")
+                error_count += 1
                 continue
 
         if emails_to_delete:
@@ -679,11 +707,19 @@ def ingest_notifications_once(connection, github_token: Optional[str]) -> int:
                 log_warning("MAILBOX", warning_message)
 
         print(f"Ingest complete. {queued_count} job(s) queued as PENDING.")
-        return queued_count
+        return {
+            "notifications_found": len(unique_notifications),
+            "notifications_collapsed_duplicates": len(collapsed_notifications),
+            "notifications_queued": queued_count,
+            "notifications_skipped_malformed": malformed_count,
+            "notifications_skipped_paused": paused_count,
+            "notifications_skipped_skiplist": skiplist_count,
+            "notifications_errors": error_count,
+        }
 
     except Exception as exc:
         print(f"Fatal error: {str(exc)}", file=sys.stderr)
-        return 0
+        return _empty_ingest_cycle_stats()
 
 
 def process_selected_pending_jobs(connection, github_token: Optional[str], job_ids) -> tuple[int, list[int], list[int]]:
@@ -951,7 +987,20 @@ def process_selected_pending_jobs(connection, github_token: Optional[str], job_i
     return processed_count, skipped_ids, missing_ids
 
 
-def process_queue_once(connection, github_token: Optional[str]) -> None:
+def _empty_queue_cycle_stats() -> QueueCycleStats:
+    """Return a zeroed queue-cycle stats payload."""
+    return {
+        "due_jobs": 0,
+        "completed": 0,
+        "failed": 0,
+        "retried": 0,
+        "superseded": 0,
+        "downloaded_files": 0,
+        "skipped_files": 0,
+    }
+
+
+def process_queue_once(connection, github_token: Optional[str]) -> QueueCycleStats:
     """Process due queue rows and re-check each job using configured intervals."""
     duplicate_count = supersede_duplicate_pending_jobs(connection)
     if duplicate_count > 0:
@@ -965,9 +1014,16 @@ def process_queue_once(connection, github_token: Optional[str]) -> None:
 
     if not due_jobs:
         print("No due queue jobs found.")
-        return
+        return _empty_queue_cycle_stats()
 
     print(f"Processing {len(due_jobs)} due queue job(s)...")
+
+    completed_count = 0
+    failed_count = 0
+    retried_count = 0
+    superseded_count = 0
+    downloaded_files_total = 0
+    skipped_files_total = 0
 
     for index, job in enumerate(due_jobs, 1):
         job_id = job["id"]
@@ -1144,6 +1200,9 @@ def process_queue_once(connection, github_token: Optional[str]) -> None:
                 f"(target task age: {target_age_minutes}m, attempt={current_attempt_count}, last_status={result_status})."
             )
             print(f"   📊 Files: downloaded={downloaded_count}, skipped={skipped_count}, total={total_items}")
+            retried_count += 1
+            downloaded_files_total += downloaded_count
+            skipped_files_total += skipped_count
         else:
             if is_terminal_skip:
                 downloaded_count, skipped_count, total_items = _finalize_terminal_skip_job(
@@ -1208,11 +1267,31 @@ def process_queue_once(connection, github_token: Optional[str]) -> None:
                     commit=latest_commit,
                 )
 
+            downloaded_files_total += downloaded_count
+            skipped_files_total += skipped_count
+            if result_status in ("SUCCESS", "SKIP"):
+                completed_count += 1
+            else:
+                failed_count += 1
+
+    return {
+        "due_jobs": len(due_jobs),
+        "completed": completed_count,
+        "failed": failed_count,
+        "retried": retried_count,
+        "superseded": superseded_count,
+        "downloaded_files": downloaded_files_total,
+        "skipped_files": skipped_files_total,
+    }
+
 
 def run_ingest_and_queue_cycle(connection, github_token: Optional[str]) -> None:
     """Run one full cycle: ingest new emails, then process due queue jobs."""
-    ingest_notifications_once(connection, github_token)
-    process_queue_once(connection, github_token)
+    ingest_stats = ingest_notifications_once(connection, github_token)
+    queue_stats = process_queue_once(connection, github_token)
+
+    summary_message = log_cycle_summary(ingest_stats, queue_stats)
+    print(f"📋 {summary_message}")
 
     next_pending_job = get_next_pending_job(connection)
     if next_pending_job is None:
