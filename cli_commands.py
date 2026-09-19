@@ -13,6 +13,7 @@ from asset_downloader import (
     move_complete_folders_to_mapped_destinations,
 )
 from doctor_checks import run_doctor
+from lifecycle_logger import list_lifecycle_events
 from mapping_manager import validate_mapping_schema
 from queue_reports import build_queue_status_options, print_queue_status
 from queue_worker import process_selected_pending_jobs
@@ -92,6 +93,27 @@ def parse_cli_args(args: list[str], version: str) -> argparse.Namespace:
         type=int,
         metavar="ID",
         help="Mark specific pending job IDs as SUPERSEDED (removes them from pending queue).",
+    )
+
+    lifecycle_group = parser.add_argument_group("lifecycle log options")
+    lifecycle_group.add_argument(
+        "--lifecycle-log",
+        action="store_true",
+        help="Print recent lifecycle events (completed moves, superseded partial moves, warnings).",
+    )
+    lifecycle_group.add_argument(
+        "--lifecycle-limit",
+        type=int,
+        help="Limit how many lifecycle events to print (0 means all). Default 20.",
+    )
+    lifecycle_group.add_argument(
+        "--lifecycle-type",
+        choices=("COMPLETED_MOVE", "PARTIAL_MOVE", "WARNING"),
+        help="Filter lifecycle events by type.",
+    )
+    lifecycle_group.add_argument(
+        "--lifecycle-repo-filter",
+        help="Filter lifecycle events by repository name substring (case-insensitive).",
     )
 
     return parser.parse_args(args)
@@ -273,6 +295,39 @@ def handle_cli_command(parsed_args: argparse.Namespace, run_smoke_tests: Callabl
 
     if parsed_args.smoke_test:
         run_smoke_tests()
+        return True
+
+    if parsed_args.lifecycle_log:
+        limit = parsed_args.lifecycle_limit
+        if limit is not None:
+            if limit < 0:
+                print(
+                    "Lifecycle log option error: invalid --lifecycle-limit value. "
+                    "Expected an integer >= 0.",
+                    file=sys.stderr,
+                )
+                return True
+            limit = None if limit == 0 else limit
+        else:
+            limit = 20
+
+        events = list_lifecycle_events(
+            limit=limit,
+            event_type=parsed_args.lifecycle_type,
+            repo_filter=parsed_args.lifecycle_repo_filter,
+        )
+
+        if parsed_args.json:
+            print(json.dumps(events, indent=2))
+            return True
+
+        if not events:
+            print("No lifecycle events found.")
+            return True
+
+        for event in events:
+            label = event["category"] or event["event_type"]
+            print(f"[{event['created_at_readable']}] {label}: {event['message']}")
         return True
 
     return False

@@ -12,7 +12,7 @@ from config_manager import (
 from datetime import datetime
 from dotenv import load_dotenv
 
-__version__ = "1.0-rc1"
+__version__ = "1.0-RC2"
 
 # Load environment variables from .env.
 load_dotenv()
@@ -20,6 +20,7 @@ GITHUB_TOKEN = os.getenv("GITHUB_PAT")
 
 # Import application modules.
 from cli_commands import handle_cli_command, parse_cli_args
+from daemon_lock import acquire_daemon_lock
 from db_manager import get_next_pending_job, open_database
 from asset_downloader import download_release
 from mapping_manager import warn_about_missing_mapped_destinations
@@ -201,32 +202,35 @@ def main():
 
         polling_settings = get_polling_settings(config)
 
-        if parsed_args.drain_queue:
+        # Only mutating run modes contend for the daemon lock; one-shot CLI
+        # commands above already returned and never reach this point.
+        with acquire_daemon_lock():
+            if parsed_args.drain_queue:
+                try:
+                    run_drain_queue_loop(GITHUB_TOKEN)
+                except KeyboardInterrupt:
+                    print("\nDrain-queue mode stopped by user.")
+                return
+
+            # Force single-run mode with --once, even when polling is enabled in config.
+            once_mode = parsed_args.once
+            poll_enabled = not once_mode and (
+                parsed_args.poll
+                or polling_settings["enabled"]
+            )
+            if once_mode or not poll_enabled:
+                with open_database() as connection:
+                    run_ingest_and_queue_cycle(connection, GITHUB_TOKEN)
+                return
+
+            interval_seconds = polling_settings["interval_seconds"]
+            jitter_min_seconds = polling_settings["jitter_min_seconds"]
+            jitter_max_seconds = polling_settings["jitter_max_seconds"]
+
             try:
-                run_drain_queue_loop(GITHUB_TOKEN)
+                run_polling_loop(interval_seconds, jitter_min_seconds, jitter_max_seconds)
             except KeyboardInterrupt:
-                print("\nDrain-queue mode stopped by user.")
-            return
-
-        # Force single-run mode with --once, even when polling is enabled in config.
-        once_mode = parsed_args.once
-        poll_enabled = not once_mode and (
-            parsed_args.poll
-            or polling_settings["enabled"]
-        )
-        if once_mode or not poll_enabled:
-            with open_database() as connection:
-                run_ingest_and_queue_cycle(connection, GITHUB_TOKEN)
-            return
-
-        interval_seconds = polling_settings["interval_seconds"]
-        jitter_min_seconds = polling_settings["jitter_min_seconds"]
-        jitter_max_seconds = polling_settings["jitter_max_seconds"]
-
-        try:
-            run_polling_loop(interval_seconds, jitter_min_seconds, jitter_max_seconds)
-        except KeyboardInterrupt:
-            print("\nPolling stopped by user.")
+                print("\nPolling stopped by user.")
     finally:
         if log_stream is not None:
             sys.stdout = _ORIGINAL_STDOUT

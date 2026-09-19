@@ -18,9 +18,10 @@ Automated Python utility that reads GitHub release notification emails from Gmai
 - Supports configurable polling mode with jitter.
 - Prints app version at startup and prints the next pending job after each ingest/process cycle.
 - Supports optional per-run terminal logging to timestamped .log files.
-- Writes lifecycle logs for completed moves, superseded partial moves, and typed warnings.
+- Records lifecycle events (completed moves, superseded partial moves, typed warnings) in state.db, viewable with --lifecycle-log.
 - Supports config-based download path routing by repo and release type.
 - Retries marking processed notification emails as read/deleted once on transient IMAP failures before logging a warning; the job is still queued even if the email cleanup ultimately fails.
+- Prevents accidentally running two mutating instances at once (default run, --once, --poll, --drain-queue) using a singleton file lock; read-only commands (--doctor, --queue-status, --mapping-validate, etc.) are unaffected and can run anytime.
 
 ## Requirements
 
@@ -57,7 +58,7 @@ Default value:
 2. Install dependencies:
 
 ```bash
-pip install requests python-dotenv imapclient
+pip install requests python-dotenv imapclient filelock
 ```
 
 ## Local Configuration Files
@@ -75,7 +76,7 @@ First-time setup:
 2. Update paths and other values in config.json for your machine.
 3. Optional: create or edit mapping.json for repository metadata and routing overrides.
 
-If mapping.json contains invalid JSON, the app keeps the original file by copying it to a timestamped file named `mapping.json_YYYYMMDD_HHMMSS_ffffff` beside the application files. It then falls back to an empty mapping payload for the current operation and records the backup path in `Warning.log`. Review or restore the backup before saving a corrected mapping file.
+If mapping.json contains invalid JSON, the app keeps the original file by copying it to a timestamped file named `mapping.json_YYYYMMDD_HHMMSS_ffffff` beside the application files. It then falls back to an empty mapping payload for the current operation and records the backup path as a WARNING lifecycle event (see --lifecycle-log). Review or restore the backup before saving a corrected mapping file.
 
 ### Repository mapping file (mapping.json)
 
@@ -90,7 +91,7 @@ Each repository entry supports these fields:
 - limit: optional integer warning threshold for the number of folders at the destination (`0` disables checks)
 - limit_release_type_folders: optional array of folder names to include in destination limit counting for this repository (for example, `['Release', 'Pre-release']`)
 - recheck_intervals_minutes: optional list of positive integers to override queue re-check cadence for this repository
-- skiplist: optional array of release types to skip for this repository (for example, `['Pre-release']`); matching notifications are logged as `[SKIPPED]` in `Warning.log`, the email is marked as read and deleted, and no job is queued. Leave empty (`[]`) to download both `Release` and `Pre-release`
+- skiplist: optional array of release types to skip for this repository (for example, `['Pre-release']`); matching notifications are logged as a SKIPPED WARNING lifecycle event (see --lifecycle-log), the email is marked as read and deleted, and no job is queued. Leave empty (`[]`) to download both `Release` and `Pre-release`
 - last_notification_seen: timestamp when the last GitHub release notification was seen
 - last_finalized: timestamp when a release was last moved to its complete destination (empty when none has been finalized)
 - paused: when `true`, matching notification emails move to Trash but remain unread, no new jobs are queued, and jobs already queued continue normally
@@ -163,7 +164,7 @@ If `recheck_intervals_minutes` is set for a repository, those values are used fo
 Skiplist behavior:
 
 - `skiplist` lets you skip one or both release types (`Release`, `Pre-release`) per repository instead of downloading everything.
-- When an incoming notification's release type matches an entry in `skiplist` (case-insensitive), the app does not queue a job for it, logs a `[SKIPPED]` warning in `Warning.log`, and still marks the email as read and deletes it (unlike `paused`, which leaves the email unread).
+- When an incoming notification's release type matches an entry in `skiplist` (case-insensitive), the app does not queue a job for it, records a SKIPPED WARNING lifecycle event, and still marks the email as read and deletes it (unlike `paused`, which leaves the email unread).
 - Leave `skiplist` empty (`[]`) to keep downloading both release types (the default).
 - Adding both `"Release"` and `"Pre-release"` to `skiplist` is valid and effectively pauses new downloads for that repository while still cleaning up matching emails.
 
@@ -187,6 +188,8 @@ Default run:
 ```bash
 python main.py
 ```
+
+Only one mutating instance (default run, --once, --poll, or --drain-queue) can run at a time. A second attempt exits immediately with "Another GHAADD instance is already running" instead of racing the first instance. This is enforced with a `ghaadd.lock` file created beside the app files; read-only commands below (--doctor, --queue-status, --mapping-validate, --run-pending, etc.) are never blocked by it.
 
 CLI options:
 
@@ -222,6 +225,11 @@ CLI options:
 		- previous_success_total_items
 		- file_count_delta_vs_previous_success
 	- Queue status also includes skipped-item detail previews (when available) for listed jobs.
+- --lifecycle-log: Print recent lifecycle events (completed moves, superseded partial moves, typed warnings) recorded in state.db.
+	- Add --json to output the events as JSON.
+	- Add --lifecycle-limit N to control how many events are printed (default 20, 0 means all).
+	- Add --lifecycle-type TYPE to filter by event type (COMPLETED_MOVE, PARTIAL_MOVE, WARNING).
+	- Add --lifecycle-repo-filter TEXT to filter by repository substring (case-insensitive).
 - --once: Force single-run mode even when polling is enabled.
 - --poll: Force polling mode for this run.
 
@@ -279,7 +287,7 @@ Key behavior:
 	- 0 means process all unread notifications.
 	- > 0 limits processing to that many emails per cycle.
 - processing.destination_check_every_n_polls
-	- While polling, every Nth poll cycle checks whether each mapped repository destination folder still exists on disk and logs a warning (`Warning.log`) for any that are missing (for example, after a local folder was moved/renamed without updating mapping.json).
+	- While polling, every Nth poll cycle checks whether each mapped repository destination folder still exists on disk and records a WARNING lifecycle event for any that are missing (for example, after a local folder was moved/renamed without updating mapping.json).
 	- 0 disables the periodic check. Defaults to 10. This check also runs once as part of `--doctor`.
 - processing.recheck_intervals_minutes
 	- Re-check cadence list used by the queue system.
@@ -305,10 +313,7 @@ Key behavior:
 	- true writes all terminal output (stdout and stderr) to a .log file for this run.
 	- Log files are written under: paths.default_download_dir/folders.ghaadd_root/folders.logs.
 	- Each run creates a new log file named with app start time (format: YYYYMMDD_HHMMSS.log).
-	- The app also writes lifecycle files in the same logs directory:
-		- Complete.log: completed staging-folder finalizations.
-		- Partial.log: superseded incomplete staging folders moved to Partial.
-		- Warning.log: typed warning entries (for example API, destination, move, sanity-check, supersede, and premature-finalize warnings).
+	- This setting only affects the terminal-output mirror. Lifecycle events (completed moves, superseded partial moves, typed warnings such as API, destination, move, sanity-check, supersede, and premature-finalize) are always recorded in state.db regardless of this setting, and are viewable with --lifecycle-log.
 
 ## Download Path Routing
 
@@ -339,7 +344,7 @@ Behavior:
 - Repository folders include release type as an extra path segment (for example: Pre-release, Release).
 - When a new notification is ingested for the same repo/tag/release type, existing pending jobs for that identity are marked SUPERSEDED and replaced by a fresh pending job.
 - When a commit hash changes for the same repo/tag during rechecks, the old PENDING job is marked SUPERSEDED and a new PENDING job is created for the updated commit.
-- When a release/tag is not found on GitHub during an automatic poll (SKIP: release_not_found), the job stays PENDING and is rechecked on the repository's normal re-check schedule, instead of completing immediately. This covers releases published before their assets/commit are attached. Once the re-check schedule is exhausted, the job is completed and its staged folder (if any) is finalized using the counters/working_dir recorded from earlier attempts: moved to Complete if fully accounted for, or to Partial if incomplete. A zero-result attempt (transient error, or a non-terminal SKIP/FAILED before the asset list is reached) never overwrites previously recorded non-zero counters, so a release that was already fully downloaded is not mistaken for incomplete just because it later disappeared upstream. When such a job is finalized to Complete this way, a PREMATURE_FINALIZE entry is written to Warning.log noting the release likely was superseded/replaced before the re-check schedule finished. Manual pending-job runs (--run-pending) still complete release_not_found immediately since they run on demand.
+- When a release/tag is not found on GitHub during an automatic poll (SKIP: release_not_found), the job stays PENDING and is rechecked on the repository's normal re-check schedule, instead of completing immediately. This covers releases published before their assets/commit are attached. Once the re-check schedule is exhausted, the job is completed and its staged folder (if any) is finalized using the counters/working_dir recorded from earlier attempts: moved to Complete if fully accounted for, or to Partial if incomplete. A zero-result attempt (transient error, or a non-terminal SKIP/FAILED before the asset list is reached) never overwrites previously recorded non-zero counters, so a release that was already fully downloaded is not mistaken for incomplete just because it later disappeared upstream. When such a job is finalized to Complete this way, a PREMATURE_FINALIZE WARNING lifecycle event is recorded noting the release likely was superseded/replaced before the re-check schedule finished. Manual pending-job runs (--run-pending) still complete release_not_found immediately since they run on demand.
 - When a queue job reaches a terminal state (COMPLETED or FAILED with no retries left), its release folder is moved to Complete.
 - When a pending job is superseded and its file counters indicate completion, its staged folder is finalized to Complete or mapped destination.
 - When a pending job is superseded and appears incomplete, its staged folder is moved to Partial for quarantine/inspection.

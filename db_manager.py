@@ -1,6 +1,6 @@
 import os
 import sqlite3
-from typing import Iterable
+from typing import Iterable, Optional
 
 STATE_DB_NAME = "state.db"
 
@@ -89,6 +89,24 @@ def open_database():
         """
     )
 
+    # Store lifecycle events (completed/partial moves, typed warnings) so CLI
+    # and GUI share one structured source instead of parsing text log files.
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS lifecycle_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_type TEXT NOT NULL CHECK (event_type IN ('COMPLETED_MOVE', 'PARTIAL_MOVE', 'WARNING')),
+            category TEXT,
+            repo TEXT,
+            tag TEXT,
+            commit_hash TEXT,
+            destination_path TEXT,
+            message TEXT NOT NULL,
+            created_at REAL NOT NULL DEFAULT (CAST(strftime('%s', 'now') AS REAL))
+        )
+        """
+    )
+
     # Indexes for queue polling and reporting performance.
     connection.execute(
         """
@@ -118,6 +136,18 @@ def open_database():
         """
         CREATE INDEX IF NOT EXISTS idx_job_skip_details_reason
         ON job_skip_details(reason)
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_lifecycle_events_created_at
+        ON lifecycle_events(created_at)
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_lifecycle_events_event_type
+        ON lifecycle_events(event_type)
         """
     )
 
@@ -1001,3 +1031,57 @@ def get_previous_successful_completed_job(connection, repo, tag, release_type, e
         """,
                 (int(exclude_job_id), repo, tag, tag, release_type, release_type),
     ).fetchone()
+
+
+# Lifecycle event helpers.
+
+def insert_lifecycle_event(
+    connection,
+    event_type,
+    message,
+    category=None,
+    repo=None,
+    tag=None,
+    commit_hash=None,
+    destination_path=None,
+):
+    """Insert one lifecycle event row and return its row id."""
+    cursor = connection.execute(
+        """
+        INSERT INTO lifecycle_events (
+            event_type, category, repo, tag, commit_hash, destination_path, message, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, CAST(strftime('%s', 'now') AS REAL))
+        """,
+        (event_type, category, repo, tag, commit_hash, destination_path, message),
+    )
+    connection.commit()
+    return cursor.lastrowid
+
+
+def get_lifecycle_events(connection, limit: Optional[int] = 20, event_type=None, repo_filter=None):
+    """Return recent lifecycle events, newest first, optionally filtered."""
+    conditions = []
+    params: list = []
+
+    if event_type:
+        conditions.append("event_type = ?")
+        params.append(event_type)
+
+    if repo_filter:
+        conditions.append("LOWER(repo) LIKE ?")
+        params.append(f"%{repo_filter.lower()}%")
+
+    where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    limit_clause = "" if limit is None else "LIMIT ?"
+    if limit is not None:
+        params.append(int(limit))
+
+    query = f"""
+        SELECT id, event_type, category, repo, tag, commit_hash, destination_path, message, created_at
+        FROM lifecycle_events
+        {where_clause}
+        ORDER BY created_at DESC, id DESC
+        {limit_clause}
+    """
+    return connection.execute(query, params).fetchall()

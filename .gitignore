@@ -6,4 +6,6 @@ mapping.json
 state.db
 state.db-shm
 state.db-wal
+ghaadd.lock
+ghaadd.daemon.status.json
 ToDo.txt
