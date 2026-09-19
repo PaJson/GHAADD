@@ -12,7 +12,7 @@ from config_manager import (
 from datetime import datetime
 from dotenv import load_dotenv
 
-__version__ = "0.9.9.9.9.9.9.9.9.9.9-beta"
+__version__ = "1.0-rc1"
 
 # Load environment variables from .env.
 load_dotenv()
@@ -20,10 +20,10 @@ GITHUB_TOKEN = os.getenv("GITHUB_PAT")
 
 # Import application modules.
 from cli_commands import handle_cli_command, parse_cli_args
-from db_manager import open_database
+from db_manager import get_next_pending_job, open_database
 from asset_downloader import download_release
 from mapping_manager import warn_about_missing_mapped_destinations
-from queue_worker import run_ingest_and_queue_cycle
+from queue_worker import process_queue_once, run_ingest_and_queue_cycle
 
 
 _ORIGINAL_STDOUT = sys.stdout
@@ -162,6 +162,33 @@ def run_polling_loop(interval_seconds, jitter_min_seconds, jitter_max_seconds):
             cycle += 1
 
 
+def run_drain_queue_loop(github_token):
+    """Process only due queue jobs (no email ingestion) until the queue is fully empty."""
+    print("Drain-queue mode enabled. Email ingestion is skipped.\n")
+
+    cycle = 1
+    with open_database() as connection:
+        while True:
+            started = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            print(f"=== Drain cycle {cycle} @ {started} ===")
+            process_queue_once(connection, github_token)
+
+            next_pending_job = get_next_pending_job(connection)
+            if next_pending_job is None:
+                print("\nQueue is empty. All pending jobs are completed/failed. Exiting.")
+                return
+
+            next_check_time = float(next_pending_job["next_check_time"])
+            next_check_time_readable = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(next_check_time))
+            sleep_seconds = max(0.0, next_check_time - time.time())
+            print(
+                f"Next pending job: {next_pending_job['repo']} {next_pending_job['tag']} "
+                f"@ {next_check_time_readable} (sleeping {int(sleep_seconds)}s)\n"
+            )
+            time.sleep(sleep_seconds)
+            cycle += 1
+
+
 def main():
     """Run the main orchestration flow for ingest and queue processing."""
     print(f"GHAADD {__version__} is starting...")
@@ -173,6 +200,13 @@ def main():
             return
 
         polling_settings = get_polling_settings(config)
+
+        if parsed_args.drain_queue:
+            try:
+                run_drain_queue_loop(GITHUB_TOKEN)
+            except KeyboardInterrupt:
+                print("\nDrain-queue mode stopped by user.")
+            return
 
         # Force single-run mode with --once, even when polling is enabled in config.
         once_mode = parsed_args.once

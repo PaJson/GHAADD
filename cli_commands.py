@@ -28,6 +28,14 @@ def parse_cli_args(args: list[str], version: str) -> argparse.Namespace:
 
     parser.add_argument("--once", action="store_true", help="Run a single ingest-and-process cycle, then exit.")
     parser.add_argument("--poll", action="store_true", help="Force polling mode even if disabled in config.")
+    parser.add_argument(
+        "--drain-queue",
+        action="store_true",
+        help=(
+            "Skip email ingestion entirely and only process due queue jobs, "
+            "repeating on schedule until every pending job is completed/failed, then exit."
+        ),
+    )
     parser.add_argument("--purge-state", action="store_true", help="Delete the local state database (state.db).")
     parser.add_argument(
         "--move-complete-to-destination",
