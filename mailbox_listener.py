@@ -3,6 +3,7 @@ import re
 import time
 from config_manager import get_gmail_folder
 from dotenv import load_dotenv
+from dry_run_mode import is_dry_run
 from email.header import decode_header
 from imapclient import IMAPClient
 
@@ -138,8 +139,13 @@ def mark_as_read_and_delete(email_ids, max_attempts=2, retry_delay_seconds=5):
 
     Retries transient IMAP store/move failures once before giving up.
     Returns True on success, False if all attempts failed.
+    Skipped entirely in dry-run mode; the mailbox is left untouched.
     """
     if not email_ids:
+        return True
+
+    if is_dry_run():
+        print(f"   🧪 [DRY-RUN] Would mark {len(email_ids)} email(s) as read and move to Trash.")
         return True
 
     if not EMAIL or not PASSWORD:
@@ -178,8 +184,15 @@ def mark_as_read_and_delete(email_ids, max_attempts=2, retry_delay_seconds=5):
 
 
 def move_unread_to_trash(email_ids, max_attempts=2, retry_delay_seconds=5):
-    """Move unread emails to Trash without changing their seen state."""
+    """Move unread emails to Trash without changing their seen state.
+
+    Skipped entirely in dry-run mode; the mailbox is left untouched.
+    """
     if not email_ids:
+        return True
+
+    if is_dry_run():
+        print(f"   🧪 [DRY-RUN] Would move {len(email_ids)} unread email(s) to Trash.")
         return True
 
     if not EMAIL or not PASSWORD:

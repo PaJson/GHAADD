@@ -2,6 +2,7 @@ import os
 import random
 import sys
 import time
+from contextlib import nullcontext
 from config_manager import (
     get_default_download_dir,
     get_destination_check_every_n_polls,
@@ -12,7 +13,7 @@ from config_manager import (
 from datetime import datetime
 from dotenv import load_dotenv
 
-__version__ = "1.0-RC2"
+__version__ = "1.0-RC3"
 
 # Load environment variables from .env.
 load_dotenv()
@@ -23,9 +24,10 @@ from cli_commands import handle_cli_command, parse_cli_args
 from daemon_lock import acquire_daemon_lock
 from db_manager import get_next_pending_job, open_database
 from asset_downloader import download_release
+from dry_run_mode import set_dry_run
 from lifecycle_logger import log_cycle_summary
 from mapping_manager import warn_about_missing_mapped_destinations
-from queue_worker import process_queue_once, run_ingest_and_queue_cycle
+from queue_worker import process_queue_once, run_ingest_and_queue_cycle, run_single_cycle
 
 
 _ORIGINAL_STDOUT = sys.stdout
@@ -200,19 +202,30 @@ def main():
     log_stream = setup_terminal_logging(config)
     try:
         parsed_args = parse_cli_args(sys.argv[1:], __version__)
+        set_dry_run(parsed_args.dry_run)
+        if parsed_args.dry_run:
+            print("🧪 Dry-run mode enabled: no writes/deletes will be performed.\n")
+
         if handle_cli_command(parsed_args, run_internal_smoke_tests):
             return
 
         polling_settings = get_polling_settings(config)
 
-        # Only mutating run modes contend for the daemon lock; one-shot CLI
-        # commands above already returned and never reach this point.
-        with acquire_daemon_lock():
+        # Only mutating run modes contend for the daemon lock; dry-run has no
+        # real side effects, so it behaves like a read-only command and never
+        # blocks on (or is blocked by) another running instance.
+        lock_context = nullcontext() if parsed_args.dry_run else acquire_daemon_lock()
+        with lock_context:
             if parsed_args.drain_queue:
                 try:
                     run_drain_queue_loop(GITHUB_TOKEN)
                 except KeyboardInterrupt:
                     print("\nDrain-queue mode stopped by user.")
+                return
+
+            if parsed_args.single:
+                with open_database() as connection:
+                    run_single_cycle(connection, GITHUB_TOKEN)
                 return
 
             # Force single-run mode with --once, even when polling is enabled in config.

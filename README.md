@@ -22,6 +22,7 @@ Automated Python utility that reads GitHub release notification emails from Gmai
 - Supports config-based download path routing by repo and release type.
 - Retries marking processed notification emails as read/deleted once on transient IMAP failures before logging a warning; the job is still queued even if the email cleanup ultimately fails.
 - Prevents accidentally running two mutating instances at once (default run, --once, --poll, --drain-queue) using a singleton file lock; read-only commands (--doctor, --queue-status, --mapping-validate, etc.) are unaffected and can run anytime.
+- Supports a tightly-scoped --single mode (at most one notification/queue item per run) and an orthogonal --dry-run modifier (no writes/deletes, full preview) for safe, controlled testing against real data.
 
 ## Requirements
 
@@ -189,7 +190,7 @@ Default run:
 python main.py
 ```
 
-Only one mutating instance (default run, --once, --poll, or --drain-queue) can run at a time. A second attempt exits immediately with "Another GHAADD instance is already running" instead of racing the first instance. This is enforced with a `ghaadd.lock` file created beside the app files; read-only commands below (--doctor, --queue-status, --mapping-validate, --run-pending, etc.) are never blocked by it.
+Only one mutating instance (default run, --once, --single, --poll, or --drain-queue) can run at a time. A second attempt exits immediately with "Another GHAADD instance is already running" instead of racing the first instance. This is enforced with a `ghaadd.lock` file created beside the app files; read-only commands below (--doctor, --queue-status, --mapping-validate, --run-pending, etc.) are never blocked by it. --dry-run is also exempt from the lock, since it performs no writes/deletes and is safe to run alongside another instance.
 
 CLI options:
 
@@ -231,6 +232,8 @@ CLI options:
 	- Add --lifecycle-type TYPE to filter by event type (COMPLETED_MOVE, PARTIAL_MOVE, WARNING, CYCLE_SUMMARY).
 	- Add --lifecycle-repo-filter TEXT to filter by repository substring (case-insensitive).
 - --once: Force single-run mode even when polling is enabled.
+- --single: Ingest at most one new notification and process at most one queue item, then exit. Prefers the just-ingested item if a new notification exists; otherwise falls back to the single oldest due job already in the queue. Useful for controlled verification against real data instead of risking hundreds of items in one run.
+- --dry-run: Modifier for --single/--once/--poll/--drain-queue. Previews what would happen with no writes/deletes: no emails marked as read or moved to Trash, no files downloaded, no changes to state.db (job_queue/asset_state/lifecycle_events) or mapping.json. GitHub API and IMAP reads still happen (read-only) so the preview reflects real data. Fully repeatable - re-running leaves the same state every time. Example: python main.py --single --dry-run.
 - --poll: Force polling mode for this run.
 
 Polling behavior:

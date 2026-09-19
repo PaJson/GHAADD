@@ -30,6 +30,22 @@ def parse_cli_args(args: list[str], version: str) -> argparse.Namespace:
     parser.add_argument("--once", action="store_true", help="Run a single ingest-and-process cycle, then exit.")
     parser.add_argument("--poll", action="store_true", help="Force polling mode even if disabled in config.")
     parser.add_argument(
+        "--single",
+        action="store_true",
+        help=(
+            "Ingest at most one new notification and process at most one queue item, then exit. "
+            "Prefers the just-ingested item; falls back to the oldest due job if no new notification exists."
+        ),
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help=(
+            "Modifier for --single/--once/--poll/--drain-queue: preview actions without any writes/deletes "
+            "(no emails marked/deleted, no files downloaded, no state.db/mapping.json changes)."
+        ),
+    )
+    parser.add_argument(
         "--drain-queue",
         action="store_true",
         help=(

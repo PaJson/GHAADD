@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import Optional
 
 from db_manager import get_lifecycle_events, insert_lifecycle_event, open_database
+from dry_run_mode import is_dry_run
 from payload_types import IngestCycleStats, QueueCycleStats
 
 
@@ -17,7 +18,11 @@ def _record_lifecycle_event(
     """Insert one lifecycle event using a short-lived connection.
 
     Never raises, so a logging failure can never break queue processing.
+    Skipped entirely in dry-run mode so it leaves no trace in state.db.
     """
+    if is_dry_run():
+        return
+
     connection = None
     try:
         connection = open_database()

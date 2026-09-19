@@ -190,3 +190,10 @@ class QueueCycleStats(TypedDict):
     superseded: int
     downloaded_files: int
     skipped_files: int
+
+
+class QueuedItemInfo(TypedDict):
+    repo: str
+    tag: str
+    release_type: Optional[str]
+    job_id: Optional[int]

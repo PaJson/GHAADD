@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any, Optional, TypedDict
 
 from config_manager import get_recheck_intervals_minutes
+from dry_run_mode import is_dry_run
 from lifecycle_logger import log_warning
 
 
@@ -266,6 +267,9 @@ def _order_mapping_entry(entry: dict[str, Any]) -> dict[str, Any]:
 
 def save_mapping(mapping_payload: dict[str, list[dict[str, Any]]]) -> None:
     """Persist mapping payload to mapping.json."""
+    if is_dry_run():
+        return
+
     file_path = _mapping_file_path()
     normalized_payload = _normalize_mapping_payload(mapping_payload)
     normalized_payload["repositories"] = sorted(

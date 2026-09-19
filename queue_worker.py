@@ -4,6 +4,7 @@ import time
 import os
 
 from config_manager import get_folder_settings, get_max_emails_to_process, get_recheck_intervals_minutes
+from dry_run_mode import is_dry_run
 from db_manager import (
     enqueue_job,
     get_jobs_by_ids,
@@ -43,6 +44,7 @@ from payload_types import (
     DownloadReleaseResult,
     IngestCycleStats,
     NotificationPayload,
+    QueuedItemInfo,
     QueuedNotificationPayload,
     QueueCycleStats,
     SkippedItemPayload,
@@ -463,9 +465,19 @@ def _empty_ingest_cycle_stats() -> IngestCycleStats:
     }
 
 
-def ingest_notifications_once(connection, github_token: Optional[str]) -> IngestCycleStats:
-    """Ingest unseen notifications into job_queue and delete emails immediately."""
-    max_emails_to_process = get_max_emails_to_process()
+def ingest_notifications_once(
+    connection,
+    github_token: Optional[str],
+    notification_limit: Optional[int] = None,
+) -> Tuple[IngestCycleStats, Optional[QueuedItemInfo]]:
+    """Ingest unseen notifications into job_queue and delete emails immediately.
+
+    notification_limit, when given, overrides processing.max_emails_to_process
+    for this call only (used by --single to fetch at most one notification).
+    Returns cycle stats plus the identity of the one item just queued, if any
+    (used by --single to immediately process that same item).
+    """
+    max_emails_to_process = notification_limit if notification_limit is not None else get_max_emails_to_process()
 
     try:
         print(
@@ -481,7 +493,7 @@ def ingest_notifications_once(connection, github_token: Optional[str]) -> Ingest
 
         if not notifications:
             print("No pending notifications found.")
-            return _empty_ingest_cycle_stats()
+            return _empty_ingest_cycle_stats(), None
 
         unique_notifications: list[QueuedNotificationPayload] = []
         notifications_by_release: dict[tuple[Optional[str], Optional[str], Optional[str]], QueuedNotificationPayload] = {}
@@ -531,6 +543,7 @@ def ingest_notifications_once(connection, github_token: Optional[str]) -> Ingest
         paused_count = 0
         skiplist_count = 0
         error_count = 0
+        queued_item_info: Optional[QueuedItemInfo] = None
         now_timestamp = time.time()
 
         for idx, notification in enumerate(unique_notifications, 1):
@@ -624,24 +637,31 @@ def ingest_notifications_once(connection, github_token: Optional[str]) -> Ingest
                     elif artifact_outcome == "quarantined":
                         quarantined_superseded_count += 1
 
-                    mark_job_superseded(
-                        connection,
-                        int(pending_row["id"]),
-                        attempt_count=int(pending_row["attempt_count"] or 0),
-                        expected_commit=expected_commit or pending_row["expected_commit"],
-                        downloaded_count=int(pending_row["downloaded_count"] or 0),
-                        skipped_count=int(pending_row["skipped_count"] or 0),
-                        total_items=int(pending_row["total_items"] or 0),
-                        last_result=(
-                            "SUPERSEDED_REPLACED_BY_NEW_NOTIFICATION_FINALIZED"
-                            if artifact_outcome == "finalized"
-                            else (
-                                "SUPERSEDED_REPLACED_BY_NEW_NOTIFICATION_INCOMPLETE_MOVED"
-                                if artifact_outcome == "quarantined"
-                                else "SUPERSEDED_REPLACED_BY_NEW_NOTIFICATION"
-                            )
-                        ),
+                    superseded_last_result = (
+                        "SUPERSEDED_REPLACED_BY_NEW_NOTIFICATION_FINALIZED"
+                        if artifact_outcome == "finalized"
+                        else (
+                            "SUPERSEDED_REPLACED_BY_NEW_NOTIFICATION_INCOMPLETE_MOVED"
+                            if artifact_outcome == "quarantined"
+                            else "SUPERSEDED_REPLACED_BY_NEW_NOTIFICATION"
+                        )
                     )
+                    if is_dry_run():
+                        print(
+                            f"   🧪 [DRY-RUN] Would mark pending job #{int(pending_row['id'])} "
+                            f"as SUPERSEDED ({superseded_last_result})."
+                        )
+                    else:
+                        mark_job_superseded(
+                            connection,
+                            int(pending_row["id"]),
+                            attempt_count=int(pending_row["attempt_count"] or 0),
+                            expected_commit=expected_commit or pending_row["expected_commit"],
+                            downloaded_count=int(pending_row["downloaded_count"] or 0),
+                            skipped_count=int(pending_row["skipped_count"] or 0),
+                            total_items=int(pending_row["total_items"] or 0),
+                            last_result=superseded_last_result,
+                        )
 
                 if superseded_count > 0:
                     print(
@@ -660,23 +680,36 @@ def ingest_notifications_once(connection, github_token: Optional[str]) -> Ingest
                             f"to {_PARTIAL_LABEL}."
                         )
 
-                enqueue_job(
-                    connection,
-                    repo,
-                    tag,
-                    release_type=release_type,
-                    next_check_time=now_timestamp,
-                    expected_commit=expected_commit,
-                )
+                queued_job_id: Optional[int] = None
+                if is_dry_run():
+                    print(
+                        f"   🧪 [DRY-RUN] Would queue as PENDING for {repo} {tag} "
+                        f"(expected_commit={expected_commit or 'unknown'})."
+                    )
+                else:
+                    queued_job_id = enqueue_job(
+                        connection,
+                        repo,
+                        tag,
+                        release_type=release_type,
+                        next_check_time=now_timestamp,
+                        expected_commit=expected_commit,
+                    )
+                    if expected_commit:
+                        print(f"✓ Queued as PENDING for {repo} {tag} (expected_commit={expected_commit})")
+                    else:
+                        print(
+                            f"✓ Queued as PENDING for {repo} {tag} "
+                            f"(expected_commit=unknown, reason={commit_reason or 'unavailable'})"
+                        )
                 emails_to_delete.extend(email_ids)
                 queued_count += 1
-                if expected_commit:
-                    print(f"✓ Queued as PENDING for {repo} {tag} (expected_commit={expected_commit})")
-                else:
-                    print(
-                        f"✓ Queued as PENDING for {repo} {tag} "
-                        f"(expected_commit=unknown, reason={commit_reason or 'unavailable'})"
-                    )
+                queued_item_info = {
+                    "repo": repo,
+                    "tag": tag,
+                    "release_type": release_type,
+                    "job_id": queued_job_id,
+                }
             except Exception as exc:
                 print(f"✗ Error queueing {repo} {tag}: {str(exc)}\n")
                 error_count += 1
@@ -715,11 +748,11 @@ def ingest_notifications_once(connection, github_token: Optional[str]) -> Ingest
             "notifications_skipped_paused": paused_count,
             "notifications_skipped_skiplist": skiplist_count,
             "notifications_errors": error_count,
-        }
+        }, queued_item_info
 
     except Exception as exc:
         print(f"Fatal error: {str(exc)}", file=sys.stderr)
-        return _empty_ingest_cycle_stats()
+        return _empty_ingest_cycle_stats(), None
 
 
 def process_selected_pending_jobs(connection, github_token: Optional[str], job_ids) -> tuple[int, list[int], list[int]]:
@@ -1000,17 +1033,34 @@ def _empty_queue_cycle_stats() -> QueueCycleStats:
     }
 
 
-def process_queue_once(connection, github_token: Optional[str]) -> QueueCycleStats:
-    """Process due queue rows and re-check each job using configured intervals."""
-    duplicate_count = supersede_duplicate_pending_jobs(connection)
-    if duplicate_count > 0:
-        print(
-            "🧹 Queue cleanup: marked "
-            f"{duplicate_count} duplicate pending job(s) as SUPERSEDED."
-        )
+def process_queue_once(
+    connection,
+    github_token: Optional[str],
+    limit: Optional[int] = None,
+    job_filter_ids: Optional[list[int]] = None,
+) -> QueueCycleStats:
+    """Process due queue rows and re-check each job using configured intervals.
+
+    limit caps how many due jobs are fetched this call (ignored when
+    job_filter_ids is given). job_filter_ids, when given, processes exactly
+    those job rows regardless of due time (used by --single to run a job
+    that was just queued in the same cycle).
+    """
+    if is_dry_run():
+        print("   🧪 [DRY-RUN] Skipping duplicate-pending-job cleanup (no writes in dry-run).")
+    else:
+        duplicate_count = supersede_duplicate_pending_jobs(connection)
+        if duplicate_count > 0:
+            print(
+                "🧹 Queue cleanup: marked "
+                f"{duplicate_count} duplicate pending job(s) as SUPERSEDED."
+            )
 
     now_timestamp = time.time()
-    due_jobs = get_due_jobs(connection, now_timestamp)
+    if job_filter_ids:
+        due_jobs = get_jobs_by_ids(connection, job_filter_ids)
+    else:
+        due_jobs = get_due_jobs(connection, now_timestamp, limit=limit)
 
     if not due_jobs:
         print("No due queue jobs found.")
@@ -1069,18 +1119,24 @@ def process_queue_once(connection, github_token: Optional[str]) -> QueueCycleSta
             )
 
             if existing_new_commit_job is None:
-                enqueue_job(
-                    connection,
-                    repo,
-                    tag,
-                    release_type=release_type,
-                    next_check_time=now_timestamp,
-                    expected_commit=current_commit,
-                )
-                print(
-                    "   🆕 Created a new PENDING job for the updated commit "
-                    f"({current_commit})."
-                )
+                if is_dry_run():
+                    print(
+                        "   🧪 [DRY-RUN] Would create a new PENDING job for the updated commit "
+                        f"({current_commit})."
+                    )
+                else:
+                    enqueue_job(
+                        connection,
+                        repo,
+                        tag,
+                        release_type=release_type,
+                        next_check_time=now_timestamp,
+                        expected_commit=current_commit,
+                    )
+                    print(
+                        "   🆕 Created a new PENDING job for the updated commit "
+                        f"({current_commit})."
+                    )
             else:
                 print(
                     "   ℹ️ A PENDING job for the updated commit already exists "
@@ -1093,25 +1149,32 @@ def process_queue_once(connection, github_token: Optional[str]) -> QueueCycleSta
                 tag,
                 reason_code="COMMIT_CHANGED_AUTO",
             )
-            mark_job_superseded(
-                connection,
-                job_id,
-                attempt_count=attempt_count,
-                expected_commit=current_commit,
-                downloaded_count=int(job["downloaded_count"] or 0),
-                skipped_count=int(job["skipped_count"] or 0),
-                total_items=int(job["total_items"] or 0),
-                last_result=(
-                    "SUPERSEDED_COMMIT_CHANGED_FINALIZED"
-                    if artifact_outcome == "finalized"
-                    else (
-                        "SUPERSEDED_COMMIT_CHANGED_INCOMPLETE_MOVED"
-                        if artifact_outcome == "quarantined"
-                        else "SUPERSEDED_COMMIT_CHANGED"
-                    )
-                ),
+            commit_changed_last_result = (
+                "SUPERSEDED_COMMIT_CHANGED_FINALIZED"
+                if artifact_outcome == "finalized"
+                else (
+                    "SUPERSEDED_COMMIT_CHANGED_INCOMPLETE_MOVED"
+                    if artifact_outcome == "quarantined"
+                    else "SUPERSEDED_COMMIT_CHANGED"
+                )
             )
-            print("   ⏭️ Marked current job as SUPERSEDED; skipping download for this older commit baseline.")
+            if is_dry_run():
+                print(
+                    f"   🧪 [DRY-RUN] Would mark job #{job_id} as SUPERSEDED "
+                    f"({commit_changed_last_result}); skipping download for this older commit baseline."
+                )
+            else:
+                mark_job_superseded(
+                    connection,
+                    job_id,
+                    attempt_count=attempt_count,
+                    expected_commit=current_commit,
+                    downloaded_count=int(job["downloaded_count"] or 0),
+                    skipped_count=int(job["skipped_count"] or 0),
+                    total_items=int(job["total_items"] or 0),
+                    last_result=commit_changed_last_result,
+                )
+                print("   ⏭️ Marked current job as SUPERSEDED; skipping download for this older commit baseline.")
             continue
         elif expected_commit and current_commit and expected_commit == current_commit:
             print(f"   ✅ Commit unchanged: {current_commit}")
@@ -1176,19 +1239,25 @@ def process_queue_once(connection, github_token: Optional[str]) -> QueueCycleSta
             # Calculate remaining delay relative to right now
             remaining_minutes = max(0, int(round((next_check_time - time.time()) / 60)))
 
-            reschedule_job(
-                connection,
-                job_id,
-                next_check_time=next_check_time,
-                attempt_count=current_attempt_count,
-                expected_commit=latest_commit,
-                downloaded_count=downloaded_count,
-                skipped_count=skipped_count,
-                total_items=total_items,
-                working_dir=working_dir,
-                last_result="RETRY",
-            )
-            save_job_skip_details(connection, job_id, current_attempt_count, skipped_items)
+            if is_dry_run():
+                print(
+                    f"   🧪 [DRY-RUN] Would reschedule job #{job_id} "
+                    f"(attempt={current_attempt_count}, last_status={result_status}); no skip-detail rows written."
+                )
+            else:
+                reschedule_job(
+                    connection,
+                    job_id,
+                    next_check_time=next_check_time,
+                    attempt_count=current_attempt_count,
+                    expected_commit=latest_commit,
+                    downloaded_count=downloaded_count,
+                    skipped_count=skipped_count,
+                    total_items=total_items,
+                    working_dir=working_dir,
+                    last_result="RETRY",
+                )
+                save_job_skip_details(connection, job_id, current_attempt_count, skipped_items)
             if is_terminal_skip:
                 print(
                     "   ⏳ Release/tag not found yet; keeping job PENDING and re-checking "
@@ -1217,37 +1286,44 @@ def process_queue_once(connection, github_token: Optional[str]) -> QueueCycleSta
                 )
 
             if result_status in ("SUCCESS", "SKIP"):
-                mark_job_completed(
-                    connection,
-                    job_id,
-                    attempt_count=current_attempt_count,
-                    downloaded_count=downloaded_count,
-                    skipped_count=skipped_count,
-                    total_items=total_items,
-                    last_result=result_status,
-                )
-                if result_status == "SUCCESS":
-                    _warn_if_file_count_changed_from_previous_success(
+                if is_dry_run():
+                    print(f"   🧪 [DRY-RUN] Would mark job #{job_id} as COMPLETED (last_status={result_status}).")
+                else:
+                    mark_job_completed(
                         connection,
-                        job_id=job_id,
-                        repo=repo,
-                        tag=tag,
-                        release_type=release_type,
-                        current_total_items=total_items,
-                        working_dir=working_dir,
+                        job_id,
+                        attempt_count=current_attempt_count,
+                        downloaded_count=downloaded_count,
+                        skipped_count=skipped_count,
+                        total_items=total_items,
+                        last_result=result_status,
                     )
+                    if result_status == "SUCCESS":
+                        _warn_if_file_count_changed_from_previous_success(
+                            connection,
+                            job_id=job_id,
+                            repo=repo,
+                            tag=tag,
+                            release_type=release_type,
+                            current_total_items=total_items,
+                            working_dir=working_dir,
+                        )
             else:
-                mark_job_failed(
-                    connection,
-                    job_id,
-                    attempt_count=current_attempt_count,
-                    expected_commit=latest_commit,
-                    downloaded_count=downloaded_count,
-                    skipped_count=skipped_count,
-                    total_items=total_items,
-                    last_result="FAILED",
-                )
-            save_job_skip_details(connection, job_id, current_attempt_count, skipped_items)
+                if is_dry_run():
+                    print(f"   🧪 [DRY-RUN] Would mark job #{job_id} as FAILED.")
+                else:
+                    mark_job_failed(
+                        connection,
+                        job_id,
+                        attempt_count=current_attempt_count,
+                        expected_commit=latest_commit,
+                        downloaded_count=downloaded_count,
+                        skipped_count=skipped_count,
+                        total_items=total_items,
+                        last_result="FAILED",
+                    )
+            if not is_dry_run():
+                save_job_skip_details(connection, job_id, current_attempt_count, skipped_items)
             if result_status in ("SUCCESS", "SKIP"):
                 print(
                     "   ✅ Re-check plan complete; marked COMPLETED "
@@ -1287,8 +1363,50 @@ def process_queue_once(connection, github_token: Optional[str]) -> QueueCycleSta
 
 def run_ingest_and_queue_cycle(connection, github_token: Optional[str]) -> None:
     """Run one full cycle: ingest new emails, then process due queue jobs."""
-    ingest_stats = ingest_notifications_once(connection, github_token)
+    ingest_stats, _queued_item_info = ingest_notifications_once(connection, github_token)
     queue_stats = process_queue_once(connection, github_token)
+
+    summary_message = log_cycle_summary(ingest_stats, queue_stats)
+    print(f"📋 {summary_message}")
+
+    next_pending_job = get_next_pending_job(connection)
+    if next_pending_job is None:
+        print("Next pending job: NONE")
+        return
+
+    next_check_time_readable = time.strftime(
+        "%Y-%m-%d %H:%M:%S",
+        time.localtime(float(next_pending_job["next_check_time"])),
+    )
+    print(
+        "Next pending job: "
+        f"{next_pending_job['repo']} {next_pending_job['tag']} @ {next_check_time_readable}"
+    )
+
+
+def run_single_cycle(connection, github_token: Optional[str]) -> None:
+    """Ingest at most one new notification and process at most one queue item.
+
+    Prefers the just-ingested notification's job when one was queued; falls
+    back to the oldest due job already in the queue otherwise. Fully honors
+    dry-run mode (is_dry_run()) throughout the call chain: when dry-run and a
+    notification was found, nothing was actually enqueued, so the would-be
+    download is previewed directly instead of looking up a real job id.
+    """
+    ingest_stats, queued_item = ingest_notifications_once(connection, github_token, notification_limit=1)
+
+    if queued_item is not None and queued_item.get("job_id") is not None:
+        queued_job_id = int(cast(int, queued_item["job_id"]))
+        queue_stats = process_queue_once(connection, github_token, job_filter_ids=[queued_job_id])
+    elif queued_item is not None:
+        print(
+            "🧪 [DRY-RUN] Would process newly-ingested item now: "
+            f"{queued_item['repo']} {queued_item['tag']} ({queued_item.get('release_type') or 'Release'})"
+        )
+        download_release(queued_item["repo"], queued_item["tag"], queued_item.get("release_type"))
+        queue_stats = _empty_queue_cycle_stats()
+    else:
+        queue_stats = process_queue_once(connection, github_token, limit=1)
 
     summary_message = log_cycle_summary(ingest_stats, queue_stats)
     print(f"📋 {summary_message}")

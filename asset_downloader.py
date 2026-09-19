@@ -6,6 +6,7 @@ import shutil
 import time
 from db_manager import open_database, load_release_state, save_state_entry, prune_release_state
 from dotenv import load_dotenv
+from dry_run_mode import is_dry_run
 from config_manager import (
     get_all_download_dirs,
     get_default_download_dir,
@@ -65,9 +66,10 @@ def _build_staging_directories(base_download_dir: str) -> tuple[str, str]:
     processing_dir = os.path.join(ghaadd_root, folder_settings["processing"])
     complete_dir = os.path.join(ghaadd_root, folder_settings["complete"])
     partial_dir = os.path.join(ghaadd_root, folder_settings["partial"])
-    os.makedirs(processing_dir, exist_ok=True)
-    os.makedirs(complete_dir, exist_ok=True)
-    os.makedirs(partial_dir, exist_ok=True)
+    if not is_dry_run():
+        os.makedirs(processing_dir, exist_ok=True)
+        os.makedirs(complete_dir, exist_ok=True)
+        os.makedirs(partial_dir, exist_ok=True)
     return processing_dir, complete_dir
 
 
@@ -487,8 +489,13 @@ def move_processing_folder_to_complete(working_dir: str, repo: Optional[str] = N
             target_relative_path = os.path.join(*relative_parts[1:])
 
     target_dir = os.path.normpath(os.path.join(base_destination, target_relative_path))
-    os.makedirs(os.path.dirname(target_dir), exist_ok=True)
     target_dir = _resolve_directory_name_collision(target_dir)
+
+    if is_dry_run():
+        print(f"   🧪 [DRY-RUN] Would move '{normalized_working_dir}' to '{target_dir}'.")
+        return target_dir
+
+    os.makedirs(os.path.dirname(target_dir), exist_ok=True)
     shutil.move(normalized_working_dir, target_dir)
 
     repo_destination_root = base_destination
@@ -532,12 +539,17 @@ def move_processing_folder_to_partial(working_dir: str) -> Optional[str]:
 
     ghaadd_root = os.path.dirname(processing_root)
     partial_dir = os.path.join(ghaadd_root, folder_settings["partial"])
-    os.makedirs(partial_dir, exist_ok=True)
 
     relative_path = os.path.relpath(normalized_working_dir, processing_root)
     target_dir = os.path.normpath(os.path.join(partial_dir, relative_path))
-    os.makedirs(os.path.dirname(target_dir), exist_ok=True)
     target_dir = _resolve_directory_name_collision(target_dir)
+
+    if is_dry_run():
+        print(f"   🧪 [DRY-RUN] Would move '{normalized_working_dir}' to '{target_dir}'.")
+        return target_dir
+
+    os.makedirs(partial_dir, exist_ok=True)
+    os.makedirs(os.path.dirname(target_dir), exist_ok=True)
     shutil.move(normalized_working_dir, target_dir)
 
     _remove_empty_processing_parents(
@@ -864,13 +876,15 @@ def download_all_assets(
         release_type_folder,
         custom_folder,
     )
-    os.makedirs(final_download_dir, exist_ok=True)
+    if not is_dry_run():
+        os.makedirs(final_download_dir, exist_ok=True)
 
     release_key = f"{repo}|{tag}"
     state_enabled = is_state_persistence_enabled()
     state_db = open_database() if state_enabled else None
     if state_db is not None:
-        prune_release_state(state_db, release_key, {item["key"] for item in download_queue}, download_dir)
+        if not is_dry_run():
+            prune_release_state(state_db, release_key, {item["key"] for item in download_queue}, download_dir)
         release_state = load_release_state(state_db, release_key)
     else:
         release_state = {}
@@ -995,7 +1009,7 @@ def download_all_assets(
                             remote_last_modified,
                             remote_etag,
                         ):
-                            if state_db is not None:
+                            if state_db is not None and not is_dry_run():
                                 save_state_entry(
                                     state_db,
                                     release_key,
@@ -1017,6 +1031,13 @@ def download_all_assets(
                         pass
 
                 print(f"   📥 Downloading ({i}/{total_files}): {file_name or 'attestation'}")
+
+                if is_dry_run():
+                    print(f"   🧪 [DRY-RUN] Would download ({i}/{total_files}): {file_name or 'attestation'} (no bytes fetched, no state written).")
+                    downloaded_count += 1
+                    if not is_source_item:
+                        normal_downloaded_count += 1
+                    continue
 
                 file_saved = False
                 for download_attempt in range(1, per_file_retries + 1):
@@ -1162,6 +1183,9 @@ def download_all_assets(
     finally:
         if state_db is not None:
             state_db.close()
+
+    if is_dry_run():
+        print(f"   🧪 [DRY-RUN] Would stage under: {final_download_dir} (folder not created).")
 
     return _build_download_result(
         "SUCCESS",
