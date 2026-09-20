@@ -86,7 +86,7 @@ The app auto-creates and updates repository entries in mapping.json as notificat
 Each repository entry supports these fields:
 
 - name: repository identity in owner/repo form
-- destination: optional destination base path for custom routing
+- destination: optional destination base path for custom routing (can be any path on disk, not limited to paths.default_download_dir - see Deletion Safety below for what this does and does not do)
 - foldername: optional display and repository folder name
 - subfolder: optional nested folder path to append under the repository folder
 - limit: optional integer warning threshold for the number of folders at the destination (`0` disables checks)
@@ -365,6 +365,16 @@ Behavior:
 - When a queue job reaches a terminal state (COMPLETED or FAILED with no retries left), its release folder is moved to Complete.
 - When a pending job is superseded and its file counters indicate completion, its staged folder is finalized to Complete or mapped destination.
 - When a pending job is superseded and appears incomplete, its staged folder is moved to Partial for quarantine/inspection.
+
+## Deletion Safety
+
+GHAADD never recursively deletes a directory tree anywhere, whether under paths.default_download_dir or a mapped repository destination. The only filesystem removals that ever happen are:
+
+- A repository's own `*.part` temp file, removed on a failed/interrupted download of that same file (always inside that release's own Processing folder).
+- Now-empty leftover subfolders under GHAADD/Processing after a completed release folder is moved out (empty-directory removal only; stops immediately at a non-empty folder, and never goes above the Processing root).
+- The app's own state.db and ghaadd.daemon.status.json files (fixed paths beside the app files, unrelated to paths.default_download_dir/mapping destinations), only removed via the explicit `--purge-state` command or daemon shutdown cleanup.
+
+A mapping entry's `destination` (and `foldername`/`subfolder`) is only ever used as a **move target**: finished release folders are moved there, never deleted from there. If a folder with the same name already exists at the target, GHAADD renames the incoming folder with a `(2)`, `(3)`, ... suffix instead of overwriting or deleting the existing one. Nothing pre-existing at a mapped destination is ever touched.
 
 ## Source Archive Naming
 
