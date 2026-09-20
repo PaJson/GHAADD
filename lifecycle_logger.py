@@ -1,7 +1,12 @@
 from datetime import datetime
 from typing import Optional
 
-from db_manager import get_lifecycle_events, insert_lifecycle_event, open_database
+from db_manager import (
+    get_lifecycle_events,
+    insert_lifecycle_event,
+    open_database,
+    purge_lifecycle_events as _purge_lifecycle_events,
+)
 from dry_run_mode import is_dry_run
 from payload_types import IngestCycleStats, QueueCycleStats
 
@@ -124,6 +129,32 @@ def list_lifecycle_events(
             }
         )
     return events
+
+
+def purge_lifecycle_events(
+    event_type: Optional[str] = None,
+    repo_filter: Optional[str] = None,
+    min_age_days: Optional[int] = None,
+    dry_run: bool = False,
+) -> int:
+    """Delete lifecycle events matching the given filters and return the count removed.
+
+    When dry_run is True, no rows are deleted - the matching count is
+    returned instead.
+    """
+    connection = None
+    try:
+        connection = open_database()
+        return _purge_lifecycle_events(
+            connection,
+            event_type=event_type,
+            repo_filter=repo_filter,
+            min_age_days=min_age_days,
+            dry_run=dry_run,
+        )
+    finally:
+        if connection is not None:
+            connection.close()
 
 
 def log_cycle_summary(

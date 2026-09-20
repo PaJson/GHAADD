@@ -196,7 +196,7 @@ CLI options:
 
 - --drain-queue: Skip email ingestion entirely and repeatedly process only due queue jobs (sleeping until the next pending job's scheduled re-check time between cycles) until the pending queue is fully empty, then exit. Takes precedence over --once and --poll when provided.
 - --run-pending JOB [JOB ...]: Immediately run one or more specific pending jobs by ID, without changing their retry schedule (unlike automatic rechecks, this completes `release_not_found`/SKIP results right away). Example: python main.py --run-pending 23 27.
-- --purge-state: Delete local state.db and exit.
+- --purge-state: Delete local state.db and exit. Add --dry-run to preview whether it would delete anything without doing so.
 - --smoke-test: Run internal smoke tests and exit.
 - --doctor: Run environment and cross-platform diagnostics.
 	- Add --json to output the diagnostics report as JSON.
@@ -231,9 +231,23 @@ CLI options:
 	- Add --lifecycle-limit N to control how many events are printed (default 20, 0 means all).
 	- Add --lifecycle-type TYPE to filter by event type (COMPLETED_MOVE, PARTIAL_MOVE, WARNING, CYCLE_SUMMARY).
 	- Add --lifecycle-repo-filter TEXT to filter by repository substring (case-insensitive).
+- --purge: Delete lifecycle events (completed moves, superseded partial moves, warnings, cycle summaries) from state.db. This only clears the lifecycle_events table - job_queue/asset_state are untouched. Requires --purge-age.
+	- Add --purge-type TYPE to limit the purge to one event type (COMPLETED_MOVE, PARTIAL_MOVE, WARNING, CYCLE_SUMMARY). Omit to match every type.
+	- Add --purge-repository TEXT to limit the purge to a repository substring (case-insensitive). Omit to match every repository.
+	- --purge-age DAYS is required: only events at least DAYS old are removed. Use --purge-age 0 to remove every matching event regardless of age - this is a deliberate guard against accidentally wiping everything, since omitting the flag entirely is an error instead of silently defaulting to "all".
+	- Add --dry-run to preview the matching count without deleting anything.
+	- Examples:
+		- python main.py --purge --purge-type WARNING --purge-repository my-repo --purge-age 10 (delete warnings for `my-repo` older than 10 days)
+		- python main.py --purge --purge-type WARNING --purge-age 0 (delete every warning for every repository right now)
+- --purge-jobs: Delete terminal job_queue rows (COMPLETED/FAILED/SUPERSEDED) from state.db; PENDING jobs are never touched, so the active queue can't be purged by accident. Deleting a job also removes its job_skip_details rows. Requires --purge-age.
+	- Add --purge-status STATUS to limit the purge to one status (COMPLETED, FAILED, SUPERSEDED). Omit to match every terminal status.
+	- Add --purge-repository TEXT to limit the purge to a repository substring (case-insensitive). Omit to match every repository.
+	- --purge-age DAYS is required, same semantics as --purge (based on each job's completed_at, falling back to updated_at/created_at). Use --purge-age 0 to remove every matching terminal job right now.
+	- Add --dry-run to preview the matching count without deleting anything.
+	- Example: python main.py --purge-jobs --purge-status COMPLETED --purge-age 30 (delete completed jobs older than 30 days)
 - --once: Force single-run mode even when polling is enabled.
 - --single: Ingest at most one new notification and process at most one queue item, then exit. Prefers the just-ingested item if a new notification exists; otherwise falls back to the single oldest due job already in the queue. Useful for controlled verification against real data instead of risking hundreds of items in one run.
-- --dry-run: Modifier for --single/--once/--poll/--drain-queue. Previews what would happen with no writes/deletes: no emails marked as read or moved to Trash, no files downloaded, no changes to state.db (job_queue/asset_state/lifecycle_events) or mapping.json. GitHub API and IMAP reads still happen (read-only) so the preview reflects real data. Fully repeatable - re-running leaves the same state every time. Example: python main.py --single --dry-run.
+- --dry-run: Modifier for --single/--once/--poll/--drain-queue/--purge-state/--purge/--purge-jobs. For run modes, previews what would happen with no writes/deletes: no emails marked as read or moved to Trash, no files downloaded, no changes to state.db (job_queue/asset_state/lifecycle_events) or mapping.json. GitHub API and IMAP reads still happen (read-only) so the preview reflects real data. Fully repeatable - re-running leaves the same state every time. For purge commands, prints the matching count instead of deleting anything. Example: python main.py --single --dry-run.
 - --poll: Force polling mode for this run.
 
 Polling behavior:
@@ -385,6 +399,12 @@ python main.py --purge-state
 ```
 
 to remove the database.
+
+To clear out old lifecycle events (completed moves, superseded partial moves, warnings, cycle summaries) or old terminal job_queue rows instead of wiping the whole database, use `--purge`/`--purge-jobs` (see CLI options above) - for example, to clear warnings you've already reviewed:
+
+```bash
+python main.py --purge --purge-type WARNING --purge-age 0
+```
 
 ## Troubleshooting
 

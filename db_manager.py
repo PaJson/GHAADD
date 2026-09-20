@@ -1121,3 +1121,76 @@ def get_lifecycle_events(connection, limit: Optional[int] = 20, event_type=None,
         {limit_clause}
     """
     return connection.execute(query, params).fetchall()
+
+
+def purge_lifecycle_events(connection, event_type=None, repo_filter=None, min_age_days=None, dry_run=False):
+    """Delete lifecycle events matching the given filters and return the number removed.
+
+    min_age_days=0 matches every event created up to now (i.e. no age floor);
+    larger values only match events at least that many days old. When
+    dry_run is True, no rows are deleted - the matching count is returned
+    instead, computed via SELECT COUNT(*).
+    """
+    conditions = []
+    params: list = []
+
+    if event_type:
+        conditions.append("event_type = ?")
+        params.append(event_type)
+
+    if repo_filter:
+        conditions.append("LOWER(repo) LIKE ?")
+        params.append(f"%{repo_filter.lower()}%")
+
+    if min_age_days is not None:
+        conditions.append("created_at <= CAST(strftime('%s', 'now') AS REAL) - ?")
+        params.append(float(min_age_days) * 86400)
+
+    where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+
+    if dry_run:
+        row = connection.execute(
+            f"SELECT COUNT(*) AS matched_count FROM lifecycle_events {where_clause}", params
+        ).fetchone()
+        return int(row["matched_count"])
+
+    cursor = connection.execute(f"DELETE FROM lifecycle_events {where_clause}", params)
+    connection.commit()
+    return cursor.rowcount
+
+
+def purge_job_queue_rows(connection, status=None, repo_filter=None, min_age_days=None, dry_run=False):
+    """Delete terminal (non-PENDING) job_queue rows matching the given filters.
+
+    PENDING jobs are always excluded, regardless of filters, so an active
+    queue can never be purged by accident. Deleting a job_queue row cascades
+    to its job_skip_details rows via ON DELETE CASCADE. min_age_days=0
+    matches every terminal job up to now (no age floor). When dry_run is
+    True, no rows are deleted - the matching count is returned instead.
+    """
+    conditions = ["status != 'PENDING'"]
+    params: list = []
+
+    if status:
+        conditions.append("status = ?")
+        params.append(status)
+
+    if repo_filter:
+        conditions.append("LOWER(repo) LIKE ?")
+        params.append(f"%{repo_filter.lower()}%")
+
+    if min_age_days is not None:
+        conditions.append("COALESCE(completed_at, updated_at, created_at) <= CAST(strftime('%s', 'now') AS REAL) - ?")
+        params.append(float(min_age_days) * 86400)
+
+    where_clause = f"WHERE {' AND '.join(conditions)}"
+
+    if dry_run:
+        row = connection.execute(
+            f"SELECT COUNT(*) AS matched_count FROM job_queue {where_clause}", params
+        ).fetchone()
+        return int(row["matched_count"])
+
+    cursor = connection.execute(f"DELETE FROM job_queue {where_clause}", params)
+    connection.commit()
+    return cursor.rowcount

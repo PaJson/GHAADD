@@ -1,11 +1,14 @@
 import argparse
 import json
+import os
 import sys
 from typing import Callable
 
 from db_manager import (
     get_jobs_by_ids,
+    get_state_db_path,
     open_database,
+    purge_job_queue_rows,
     purge_state_database,
     supersede_pending_jobs_by_ids,
 )
@@ -13,7 +16,8 @@ from asset_downloader import (
     move_complete_folders_to_mapped_destinations,
 )
 from doctor_checks import run_doctor
-from lifecycle_logger import list_lifecycle_events
+from dry_run_mode import is_dry_run
+from lifecycle_logger import list_lifecycle_events, purge_lifecycle_events
 from mapping_manager import validate_mapping_schema
 from queue_reports import build_queue_status_options, print_queue_status
 from queue_worker import process_selected_pending_jobs
@@ -41,8 +45,9 @@ def parse_cli_args(args: list[str], version: str) -> argparse.Namespace:
         "--dry-run",
         action="store_true",
         help=(
-            "Modifier for --single/--once/--poll/--drain-queue: preview actions without any writes/deletes "
-            "(no emails marked/deleted, no files downloaded, no state.db/mapping.json changes)."
+            "Modifier for --single/--once/--poll/--drain-queue/--purge-state/--purge/--purge-jobs: "
+            "preview actions without any writes/deletes (no emails marked/deleted, no files downloaded, "
+            "no state.db/mapping.json changes; purge commands report matching counts without deleting)."
         ),
     )
     parser.add_argument(
@@ -130,6 +135,53 @@ def parse_cli_args(args: list[str], version: str) -> argparse.Namespace:
     lifecycle_group.add_argument(
         "--lifecycle-repo-filter",
         help="Filter lifecycle events by repository name substring (case-insensitive).",
+    )
+
+    purge_group = parser.add_argument_group("lifecycle purge options")
+    purge_group.add_argument(
+        "--purge",
+        action="store_true",
+        help=(
+            "Delete lifecycle events (completed moves, superseded partial moves, warnings, "
+            "cycle summaries) from state.db. Combine with --purge-type/--purge-repository to "
+            "narrow it down; requires --purge-age."
+        ),
+    )
+    purge_group.add_argument(
+        "--purge-type",
+        choices=("COMPLETED_MOVE", "PARTIAL_MOVE", "WARNING", "CYCLE_SUMMARY"),
+        help="Limit --purge to one lifecycle event type. Omit to match every type.",
+    )
+    purge_group.add_argument(
+        "--purge-jobs",
+        action="store_true",
+        help=(
+            "Delete terminal job_queue rows (COMPLETED/FAILED/SUPERSEDED - PENDING jobs are never "
+            "touched) from state.db. Combine with --purge-status/--purge-repository to narrow it "
+            "down; requires --purge-age."
+        ),
+    )
+    purge_group.add_argument(
+        "--purge-status",
+        choices=("COMPLETED", "FAILED", "SUPERSEDED"),
+        help="Limit --purge-jobs to one job status. Omit to match every terminal status.",
+    )
+    purge_group.add_argument(
+        "--purge-repository",
+        help=(
+            "Limit --purge/--purge-jobs to a repository name substring (case-insensitive). "
+            "Omit to match every repository."
+        ),
+    )
+    purge_group.add_argument(
+        "--purge-age",
+        type=int,
+        metavar="DAYS",
+        help=(
+            "Required with --purge/--purge-jobs: only delete rows at least this many days old "
+            "(lifecycle events use created_at, job_queue rows use completed_at). "
+            "Use 0 to delete every matching row regardless of age."
+        ),
     )
 
     return parser.parse_args(args)
@@ -296,11 +348,76 @@ def handle_cli_command(parsed_args: argparse.Namespace, run_smoke_tests: Callabl
         return True
 
     if parsed_args.purge_state:
+        if is_dry_run():
+            if os.path.exists(get_state_db_path()):
+                print("[DRY-RUN] Would delete local state database: state.db")
+            else:
+                print("[DRY-RUN] No local state database found to delete.")
+            return True
+
         deleted = purge_state_database()
         if deleted:
             print("Deleted local state database: state.db")
         else:
             print("No local state database found to delete.")
+        return True
+
+    if parsed_args.purge:
+        if parsed_args.purge_age is None:
+            print(
+                "Purge option error: --purge-age is required (use --purge-age 0 to delete "
+                "every matching event regardless of age).",
+                file=sys.stderr,
+            )
+            return True
+        if parsed_args.purge_age < 0:
+            print("Purge option error: --purge-age must be >= 0.", file=sys.stderr)
+            return True
+
+        matched_count = purge_lifecycle_events(
+            event_type=parsed_args.purge_type,
+            repo_filter=parsed_args.purge_repository,
+            min_age_days=parsed_args.purge_age,
+            dry_run=is_dry_run(),
+        )
+
+        filter_bits = [
+            f"type={parsed_args.purge_type}" if parsed_args.purge_type else "type=ALL",
+            f"repository~='{parsed_args.purge_repository}'" if parsed_args.purge_repository else "repository=ALL",
+            f"age>={parsed_args.purge_age}d",
+        ]
+        action_label = "[DRY-RUN] Would purge" if is_dry_run() else "Purged"
+        print(f"{action_label} {matched_count} lifecycle event(s) ({', '.join(filter_bits)}).")
+        return True
+
+    if parsed_args.purge_jobs:
+        if parsed_args.purge_age is None:
+            print(
+                "Purge option error: --purge-age is required (use --purge-age 0 to delete "
+                "every matching job regardless of age).",
+                file=sys.stderr,
+            )
+            return True
+        if parsed_args.purge_age < 0:
+            print("Purge option error: --purge-age must be >= 0.", file=sys.stderr)
+            return True
+
+        with open_database() as connection:
+            matched_count = purge_job_queue_rows(
+                connection,
+                status=parsed_args.purge_status,
+                repo_filter=parsed_args.purge_repository,
+                min_age_days=parsed_args.purge_age,
+                dry_run=is_dry_run(),
+            )
+
+        filter_bits = [
+            f"status={parsed_args.purge_status}" if parsed_args.purge_status else "status=ALL (terminal only, PENDING never touched)",
+            f"repository~='{parsed_args.purge_repository}'" if parsed_args.purge_repository else "repository=ALL",
+            f"age>={parsed_args.purge_age}d",
+        ]
+        action_label = "[DRY-RUN] Would purge" if is_dry_run() else "Purged"
+        print(f"{action_label} {matched_count} job_queue row(s) ({', '.join(filter_bits)}).")
         return True
 
     if parsed_args.move_complete_to_destination:
