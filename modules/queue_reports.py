@@ -5,8 +5,8 @@ import time
 from datetime import datetime, timedelta
 from typing import Optional
 
-from db_manager import open_database
-from payload_types import (
+from modules.db_manager import open_database
+from modules.payload_types import (
     NextPendingJobPayload,
     QueueJobPayload,
     QueueReportPayload,

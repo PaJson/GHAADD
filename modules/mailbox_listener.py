@@ -1,9 +1,9 @@
 import os
 import re
 import time
-from config_manager import get_gmail_folder
+from modules.config_manager import get_gmail_folder
 from dotenv import load_dotenv
-from dry_run_mode import is_dry_run
+from modules.dry_run_mode import is_dry_run
 from email.header import decode_header
 from imapclient import IMAPClient
 

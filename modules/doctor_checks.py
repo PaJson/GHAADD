@@ -3,7 +3,7 @@ import re
 import sys
 from typing import TypedDict
 
-from mapping_manager import find_missing_mapped_destinations, validate_mapping_schema
+from modules.mapping_manager import find_missing_mapped_destinations, validate_mapping_schema
 
 
 class DoctorReport(TypedDict):
@@ -19,12 +19,12 @@ _WINDOWS_DRIVE_RELATIVE_RE = re.compile(r"^[A-Za-z]:(?![\\/])")
 
 
 def _config_file_path() -> str:
-    app_dir = os.path.dirname(os.path.abspath(__file__))
+    app_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(app_dir, "config.json")
 
 
 def _mapping_file_path() -> str:
-    app_dir = os.path.dirname(os.path.abspath(__file__))
+    app_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(app_dir, "mapping.json")
 
 

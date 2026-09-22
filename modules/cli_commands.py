@@ -4,7 +4,7 @@ import os
 import sys
 from typing import Callable
 
-from db_manager import (
+from modules.db_manager import (
     get_jobs_by_ids,
     get_state_db_path,
     open_database,
@@ -12,15 +12,15 @@ from db_manager import (
     purge_state_database,
     supersede_pending_jobs_by_ids,
 )
-from asset_downloader import (
+from modules.asset_downloader import (
     move_complete_folders_to_mapped_destinations,
 )
-from doctor_checks import run_doctor
-from dry_run_mode import is_dry_run
-from lifecycle_logger import list_lifecycle_events, purge_lifecycle_events
-from mapping_manager import validate_mapping_schema
-from queue_reports import build_queue_status_options, print_queue_status
-from queue_worker import process_selected_pending_jobs
+from modules.doctor_checks import run_doctor
+from modules.dry_run_mode import is_dry_run
+from modules.lifecycle_logger import list_lifecycle_events, purge_lifecycle_events
+from modules.mapping_manager import validate_mapping_schema
+from modules.queue_reports import build_queue_status_options, print_queue_status
+from modules.queue_worker import process_selected_pending_jobs
 
 
 def parse_cli_args(args: list[str], version: str) -> argparse.Namespace:

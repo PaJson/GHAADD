@@ -4,10 +4,10 @@ import re
 import requests
 import shutil
 import time
-from db_manager import open_database, load_release_state, save_state_entry, prune_release_state
+from modules.db_manager import open_database, load_release_state, save_state_entry, prune_release_state
 from dotenv import load_dotenv
-from dry_run_mode import is_dry_run
-from config_manager import (
+from modules.dry_run_mode import is_dry_run
+from modules.config_manager import (
     get_all_download_dirs,
     get_default_download_dir,
     get_download_dir_for_release,
@@ -16,14 +16,14 @@ from config_manager import (
     load_config,
 )
 from email.utils import parsedate_tz, mktime_tz
-from lifecycle_logger import log_warning
-from mapping_manager import (
+from modules.lifecycle_logger import log_warning
+from modules.mapping_manager import (
     build_default_foldername,
     get_repository_limit_release_type_folders,
     get_repository_mapping,
     load_mapping,
 )
-from payload_types import DownloadReleaseResult, DownloadResultPayload, ReleaseAssetQueueItem, SkippedItemPayload
+from modules.payload_types import DownloadReleaseResult, DownloadResultPayload, ReleaseAssetQueueItem, SkippedItemPayload
 from requests.exceptions import ChunkedEncodingError, ConnectionError, Timeout
 from typing import Literal, Optional, cast
 from urllib.parse import urljoin

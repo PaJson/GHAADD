@@ -78,7 +78,7 @@ def _normalize_configured_path(path_value: str) -> str:
 
 def load_config() -> Dict[str, Any]:
     """Load and return config.json as a dictionary, or an empty dict on failure."""
-    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+    config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config.json")
     try:
         with open(config_path, "r", encoding="utf-8") as config_file:
             data = json.load(config_file)

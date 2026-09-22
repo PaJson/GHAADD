@@ -3,7 +3,7 @@ import random
 import sys
 import time
 from contextlib import nullcontext
-from config_manager import (
+from modules.config_manager import (
     get_default_download_dir,
     get_destination_check_every_n_polls,
     get_polling_settings,
@@ -20,14 +20,14 @@ load_dotenv()
 GITHUB_TOKEN = os.getenv("GITHUB_PAT")
 
 # Import application modules.
-from cli_commands import handle_cli_command, parse_cli_args
-from daemon_lock import acquire_daemon_lock
-from db_manager import get_next_pending_job, open_database
-from asset_downloader import download_release
-from dry_run_mode import set_dry_run
-from lifecycle_logger import log_cycle_summary
-from mapping_manager import warn_about_missing_mapped_destinations
-from queue_worker import process_queue_once, run_ingest_and_queue_cycle, run_single_cycle
+from modules.cli_commands import handle_cli_command, parse_cli_args
+from modules.daemon_lock import acquire_daemon_lock
+from modules.db_manager import get_next_pending_job, open_database
+from modules.asset_downloader import download_release
+from modules.dry_run_mode import set_dry_run
+from modules.lifecycle_logger import log_cycle_summary
+from modules.mapping_manager import warn_about_missing_mapped_destinations
+from modules.queue_worker import process_queue_once, run_ingest_and_queue_cycle, run_single_cycle
 
 
 _ORIGINAL_STDOUT = sys.stdout

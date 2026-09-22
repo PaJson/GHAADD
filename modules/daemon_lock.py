@@ -19,13 +19,13 @@ class DaemonStatus(TypedDict):
 
 def get_daemon_lock_path() -> str:
     """Return the daemon singleton lock file path beside the app files."""
-    app_dir = os.path.dirname(os.path.abspath(__file__))
+    app_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(app_dir, _LOCK_FILE_NAME)
 
 
 def get_daemon_status_path() -> str:
     """Return the daemon status sidecar file path beside the app files."""
-    app_dir = os.path.dirname(os.path.abspath(__file__))
+    app_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(app_dir, _STATUS_FILE_NAME)
 
 

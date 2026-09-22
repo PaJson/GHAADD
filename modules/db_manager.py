@@ -7,7 +7,7 @@ STATE_DB_NAME = "state.db"
 
 def get_state_db_path():
     """Return the SQLite state database path beside the app files."""
-    app_dir = os.path.dirname(os.path.abspath(__file__))
+    app_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(app_dir, STATE_DB_NAME)
 
 

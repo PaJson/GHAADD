@@ -5,9 +5,9 @@ import shutil
 from datetime import datetime
 from typing import Any, Optional, TypedDict
 
-from config_manager import get_recheck_intervals_minutes
-from dry_run_mode import is_dry_run
-from lifecycle_logger import log_warning
+from modules.config_manager import get_recheck_intervals_minutes
+from modules.dry_run_mode import is_dry_run
+from modules.lifecycle_logger import log_warning
 
 
 DEFAULT_LIMIT_RELEASE_TYPE_FOLDERS = ["Release", "Pre-release"]
@@ -39,7 +39,7 @@ class MappingValidationResult(TypedDict):
 
 def _mapping_file_path() -> str:
     """Return absolute path to mapping.json beside application files."""
-    app_dir = os.path.dirname(os.path.abspath(__file__))
+    app_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(app_dir, "mapping.json")
 
 
