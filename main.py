@@ -13,7 +13,7 @@ from modules.config_manager import (
 from datetime import datetime
 from dotenv import load_dotenv
 
-__version__ = "1.0-RC5"
+__version__ = "1.0-RC6"
 
 # Load environment variables from .env.
 load_dotenv()

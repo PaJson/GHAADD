@@ -8,6 +8,8 @@ from typing import Optional
 from modules.db_manager import open_database
 from modules.payload_types import (
     NextPendingJobPayload,
+    PurgeableJobAgeSummary,
+    PurgeAgePreviewEntry,
     QueueJobPayload,
     QueueReportPayload,
     QueueStatusOptions,
@@ -18,6 +20,9 @@ from modules.payload_types import (
     TopSkippedItemPayload,
     TopSuccessfulRepoPayload,
 )
+
+# Age thresholds (days) used to preview how many jobs a --purge-age value would remove.
+PURGE_AGE_PREVIEW_THRESHOLDS_DAYS = (7, 30, 90, 180, 365)
 
 
 def _format_timestamp(unix_timestamp):
@@ -144,6 +149,23 @@ def _build_skip_reason_payload(row) -> SkipReasonPayload:
     return {"reason": row["reason"], "count": int(row["count"])}
 
 
+def _build_purgeable_job_age_summary(row, now_timestamp: float) -> Optional[PurgeableJobAgeSummary]:
+    """Build a typed age summary for a purgeable (non-PENDING) job row."""
+    if row is None:
+        return None
+    effective_timestamp = float(row["effective_age_ts"])
+    return {
+        "id": int(row["id"]),
+        "repo": row["repo"],
+        "tag": row["tag"],
+        "release_type": row["release_type"] or "Release",
+        "status": row["status"],
+        "age_days": round((now_timestamp - effective_timestamp) / 86400, 1),
+        "effective_timestamp": effective_timestamp,
+        "effective_timestamp_readable": _format_timestamp(effective_timestamp),
+    }
+
+
 def _build_queue_report_payload(
     total_jobs: int,
     summary_rows,
@@ -158,6 +180,9 @@ def _build_queue_report_payload(
     successful_repo_rows,
     top_skipped_items,
     skip_reason_rows,
+    oldest_purgeable_job: Optional[PurgeableJobAgeSummary] = None,
+    newest_purgeable_job: Optional[PurgeableJobAgeSummary] = None,
+    purge_age_preview: Optional[list[PurgeAgePreviewEntry]] = None,
 ) -> QueueReportPayload:
     """Build the typed queue-report payload from aggregated query rows."""
     success_rate = None
@@ -184,6 +209,9 @@ def _build_queue_report_payload(
         "top_successful_repos": [_build_top_successful_repo_payload(row) for row in successful_repo_rows],
         "top_skipped_items": [_build_top_skipped_item_payload(row) for row in top_skipped_items],
         "skip_reasons": [_build_skip_reason_payload(row) for row in skip_reason_rows],
+        "oldest_purgeable_job": oldest_purgeable_job,
+        "newest_purgeable_job": newest_purgeable_job,
+        "purge_age_preview": purge_age_preview or [],
     }
 
 
@@ -731,6 +759,50 @@ def _collect_queue_status_data(
             supersede_finalized_jobs = int(terminal_counts["supersede_finalized_jobs"] or 0)
             supersede_incomplete_moved_jobs = int(terminal_counts["supersede_incomplete_moved_jobs"] or 0)
 
+            # "Purgeable" here matches --purge-jobs' own scope: every non-PENDING status
+            # (COMPLETED/FAILED/SUPERSEDED), not just the narrower COMPLETED/FAILED "terminal_jobs" above.
+            purgeable_where = (
+                f"{scope_where} AND status != 'PENDING'" if scope_where else "WHERE status != 'PENDING'"
+            )
+            oldest_purgeable_row = connection.execute(
+                f"""
+                SELECT id, repo, tag, release_type, status,
+                       COALESCE(completed_at, updated_at, created_at) AS effective_age_ts
+                FROM job_queue
+                {purgeable_where}
+                ORDER BY effective_age_ts ASC, id ASC
+                LIMIT 1
+                """,
+                tuple(scope_params),
+            ).fetchone()
+            newest_purgeable_row = connection.execute(
+                f"""
+                SELECT id, repo, tag, release_type, status,
+                       COALESCE(completed_at, updated_at, created_at) AS effective_age_ts
+                FROM job_queue
+                {purgeable_where}
+                ORDER BY effective_age_ts DESC, id DESC
+                LIMIT 1
+                """,
+                tuple(scope_params),
+            ).fetchone()
+
+            purge_age_preview: list[PurgeAgePreviewEntry] = []
+            for threshold_days in PURGE_AGE_PREVIEW_THRESHOLDS_DAYS:
+                cutoff_ts = now_timestamp - (threshold_days * 86400)
+                preview_row = connection.execute(
+                    f"""
+                    SELECT COUNT(*) AS count
+                    FROM job_queue
+                    {purgeable_where}
+                      AND COALESCE(completed_at, updated_at, created_at) <= ?
+                    """,
+                    tuple(scope_params) + (cutoff_ts,),
+                ).fetchone()
+                purge_age_preview.append(
+                    {"age_days": threshold_days, "would_purge_count": int(preview_row["count"])}
+                )
+
             report_payload = _build_queue_report_payload(
                 total_jobs=total_jobs,
                 summary_rows=summary_rows,
@@ -745,6 +817,9 @@ def _collect_queue_status_data(
                 successful_repo_rows=successful_repo_rows,
                 top_skipped_items=top_skipped_items,
                 skip_reason_rows=skip_reason_rows,
+                oldest_purgeable_job=_build_purgeable_job_age_summary(oldest_purgeable_row, now_timestamp),
+                newest_purgeable_job=_build_purgeable_job_age_summary(newest_purgeable_row, now_timestamp),
+                purge_age_preview=purge_age_preview,
             )
 
     status_counts = {row["status"]: int(row["count"]) for row in summary_rows}
@@ -896,6 +971,27 @@ def print_queue_status(
         else:
             print(f"Success rate: {report_data['success_rate_percent']}%")
             print(f"Hard failure rate: {report_data['hard_failure_rate_percent']}%")
+
+        oldest_purgeable = report_data["oldest_purgeable_job"]
+        newest_purgeable = report_data["newest_purgeable_job"]
+        if oldest_purgeable is None:
+            print("Purgeable jobs (COMPLETED/FAILED/SUPERSEDED): none")
+        else:
+            print(
+                "Oldest purgeable job: "
+                f"#{oldest_purgeable['id']} {oldest_purgeable['status']} {oldest_purgeable['repo']} "
+                f"{oldest_purgeable['tag']} (age={oldest_purgeable['age_days']}d, "
+                f"as of {oldest_purgeable['effective_timestamp_readable']})"
+            )
+            print(
+                "Newest purgeable job: "
+                f"#{newest_purgeable['id']} {newest_purgeable['status']} {newest_purgeable['repo']} "
+                f"{newest_purgeable['tag']} (age={newest_purgeable['age_days']}d, "
+                f"as of {newest_purgeable['effective_timestamp_readable']})"
+            )
+            print("Purge-age preview (how many jobs --purge-age N would remove):")
+            for entry in report_data["purge_age_preview"]:
+                print(f"- --purge-age {entry['age_days']}: {entry['would_purge_count']} job(s)")
 
         if report_data["top_failed_repos"]:
             print("Top failed repos:")

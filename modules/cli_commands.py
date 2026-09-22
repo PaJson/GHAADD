@@ -178,9 +178,22 @@ def parse_cli_args(args: list[str], version: str) -> argparse.Namespace:
         type=int,
         metavar="DAYS",
         help=(
-            "Required with --purge/--purge-jobs: only delete rows at least this many days old "
-            "(lifecycle events use created_at, job_queue rows use completed_at). "
-            "Use 0 to delete every matching row regardless of age."
+            "Required with --purge, and one of --purge-age/--purge-oldest required with "
+            "--purge-jobs: only delete rows at least this many days old (lifecycle events use "
+            "created_at, job_queue rows use completed_at). Use 0 to delete every matching row "
+            "regardless of age."
+        ),
+    )
+    purge_group.add_argument(
+        "--purge-oldest",
+        type=int,
+        metavar="N",
+        help=(
+            "Alternative to --purge-age, --purge-jobs only: delete the N oldest matching "
+            "job_queue rows (by completed_at/updated_at/created_at) regardless of their age. "
+            "Useful when you know how many rows you want gone (for example, to shrink a large "
+            "state.db) but don't know what --purge-age value that corresponds to - check "
+            "--queue-status --queue-report for an age preview first."
         ),
     )
 
@@ -363,6 +376,12 @@ def handle_cli_command(parsed_args: argparse.Namespace, run_smoke_tests: Callabl
         return True
 
     if parsed_args.purge:
+        if parsed_args.purge_oldest is not None:
+            print(
+                "Purge option error: --purge-oldest is only supported with --purge-jobs, not --purge.",
+                file=sys.stderr,
+            )
+            return True
         if parsed_args.purge_age is None:
             print(
                 "Purge option error: --purge-age is required (use --purge-age 0 to delete "
@@ -391,15 +410,25 @@ def handle_cli_command(parsed_args: argparse.Namespace, run_smoke_tests: Callabl
         return True
 
     if parsed_args.purge_jobs:
-        if parsed_args.purge_age is None:
+        has_purge_age = parsed_args.purge_age is not None
+        has_purge_oldest = parsed_args.purge_oldest is not None
+
+        if has_purge_age and has_purge_oldest:
+            print("Purge option error: use only one of --purge-age or --purge-oldest, not both.", file=sys.stderr)
+            return True
+        if not has_purge_age and not has_purge_oldest:
             print(
-                "Purge option error: --purge-age is required (use --purge-age 0 to delete "
-                "every matching job regardless of age).",
+                "Purge option error: --purge-age or --purge-oldest is required (use --purge-age 0 "
+                "to delete every matching job regardless of age, or --purge-oldest N to delete the "
+                "N oldest matching jobs).",
                 file=sys.stderr,
             )
             return True
-        if parsed_args.purge_age < 0:
+        if has_purge_age and parsed_args.purge_age < 0:
             print("Purge option error: --purge-age must be >= 0.", file=sys.stderr)
+            return True
+        if has_purge_oldest and parsed_args.purge_oldest <= 0:
+            print("Purge option error: --purge-oldest must be a positive integer.", file=sys.stderr)
             return True
 
         with open_database() as connection:
@@ -407,14 +436,15 @@ def handle_cli_command(parsed_args: argparse.Namespace, run_smoke_tests: Callabl
                 connection,
                 status=parsed_args.purge_status,
                 repo_filter=parsed_args.purge_repository,
-                min_age_days=parsed_args.purge_age,
+                min_age_days=parsed_args.purge_age if has_purge_age else None,
+                oldest_count=parsed_args.purge_oldest if has_purge_oldest else None,
                 dry_run=is_dry_run(),
             )
 
         filter_bits = [
             f"status={parsed_args.purge_status}" if parsed_args.purge_status else "status=ALL (terminal only, PENDING never touched)",
             f"repository~='{parsed_args.purge_repository}'" if parsed_args.purge_repository else "repository=ALL",
-            f"age>={parsed_args.purge_age}d",
+            f"age>={parsed_args.purge_age}d" if has_purge_age else f"oldest {parsed_args.purge_oldest}",
         ]
         action_label = "[DRY-RUN] Would purge" if is_dry_run() else "Purged"
         print(f"{action_label} {matched_count} job_queue row(s) ({', '.join(filter_bits)}).")

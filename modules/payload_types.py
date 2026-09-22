@@ -104,6 +104,22 @@ class SkipReasonPayload(TypedDict):
     count: int
 
 
+class PurgeableJobAgeSummary(TypedDict):
+    id: int
+    repo: str
+    tag: str
+    release_type: str
+    status: str
+    age_days: float
+    effective_timestamp: float
+    effective_timestamp_readable: str
+
+
+class PurgeAgePreviewEntry(TypedDict):
+    age_days: int
+    would_purge_count: int
+
+
 class QueueReportPayload(TypedDict):
     window_total_jobs: int
     status_breakdown: dict[str, int]
@@ -120,6 +136,9 @@ class QueueReportPayload(TypedDict):
     top_successful_repos: list[TopSuccessfulRepoPayload]
     top_skipped_items: list[TopSkippedItemPayload]
     skip_reasons: list[SkipReasonPayload]
+    oldest_purgeable_job: Optional[PurgeableJobAgeSummary]
+    newest_purgeable_job: Optional[PurgeableJobAgeSummary]
+    purge_age_preview: list[PurgeAgePreviewEntry]
 
 
 class QueueStatusPayload(TypedDict):

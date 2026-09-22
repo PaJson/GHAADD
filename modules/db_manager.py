@@ -1159,14 +1159,18 @@ def purge_lifecycle_events(connection, event_type=None, repo_filter=None, min_ag
     return cursor.rowcount
 
 
-def purge_job_queue_rows(connection, status=None, repo_filter=None, min_age_days=None, dry_run=False):
+def purge_job_queue_rows(connection, status=None, repo_filter=None, min_age_days=None, oldest_count=None, dry_run=False):
     """Delete terminal (non-PENDING) job_queue rows matching the given filters.
 
     PENDING jobs are always excluded, regardless of filters, so an active
     queue can never be purged by accident. Deleting a job_queue row cascades
-    to its job_skip_details rows via ON DELETE CASCADE. min_age_days=0
-    matches every terminal job up to now (no age floor). When dry_run is
-    True, no rows are deleted - the matching count is returned instead.
+    to its job_skip_details rows via ON DELETE CASCADE. Exactly one of
+    min_age_days or oldest_count is expected to be provided by the caller:
+    min_age_days deletes rows at least that many days old (by
+    completed_at/updated_at/created_at, 0 matches every terminal job up to
+    now), while oldest_count deletes the N oldest matching rows by that same
+    age fallback regardless of age. When dry_run is True, no rows are
+    deleted - the matching count is returned instead.
     """
     conditions = ["status != 'PENDING'"]
     params: list = []
@@ -1184,6 +1188,22 @@ def purge_job_queue_rows(connection, status=None, repo_filter=None, min_age_days
         params.append(float(min_age_days) * 86400)
 
     where_clause = f"WHERE {' AND '.join(conditions)}"
+
+    if oldest_count is not None:
+        oldest_ids_query = (
+            f"SELECT id FROM job_queue {where_clause} "
+            "ORDER BY COALESCE(completed_at, updated_at, created_at) ASC, id ASC LIMIT ?"
+        )
+        oldest_params = params + [int(oldest_count)]
+        if dry_run:
+            row = connection.execute(
+                f"SELECT COUNT(*) AS matched_count FROM ({oldest_ids_query})", oldest_params
+            ).fetchone()
+            return int(row["matched_count"])
+
+        cursor = connection.execute(f"DELETE FROM job_queue WHERE id IN ({oldest_ids_query})", oldest_params)
+        connection.commit()
+        return cursor.rowcount
 
     if dry_run:
         row = connection.execute(

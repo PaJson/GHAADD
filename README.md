@@ -216,7 +216,8 @@ CLI options:
 	- Add --queue-date YYYY-MM-DD to filter to jobs created on a specific date.
 	- Add --queue-repo-filter TEXT to filter by repository substring (case-insensitive, example: --queue-repo-filter <repository>).
 	- Add --queue-status-filter STATUS to filter by status (PENDING, COMPLETED, FAILED, SUPERSEDED).
-	- Add --queue-report to print a compact summary report (rates, top repos, top skipped items, and skip reasons).
+	- Add --queue-report to print a compact summary report (rates, top repos, top skipped items, skip reasons, and a purge-age preview - see below).
+		- The purge-age preview shows the oldest/newest purgeable (COMPLETED/FAILED/SUPERSEDED) job's age plus, for common day thresholds (7/30/90/180/365), how many jobs a matching `--purge-jobs --purge-age N` would remove - use this to pick a `--purge-age`/`--purge-oldest` value for `--purge-jobs` before running it for real. Any `--queue-hours`/`--queue-date`/`--queue-repo-filter`/`--queue-status-filter` scoping applies to this preview too.
 	- Add --queue-report-only to print only the summary report section.
 	- Add --queue-report-csv [PATH] to export the report section to a CSV file.
 		- When PATH is omitted, a timestamped filename is auto-generated in the current working directory.
@@ -239,12 +240,15 @@ CLI options:
 	- Examples:
 		- python main.py --purge --purge-type WARNING --purge-repository my-repo --purge-age 10 (delete warnings for `my-repo` older than 10 days)
 		- python main.py --purge --purge-type WARNING --purge-age 0 (delete every warning for every repository right now)
-- --purge-jobs: Delete terminal job_queue rows (COMPLETED/FAILED/SUPERSEDED) from state.db; PENDING jobs are never touched, so the active queue can't be purged by accident. Deleting a job also removes its job_skip_details rows. Requires --purge-age.
+- --purge-jobs: Delete terminal job_queue rows (COMPLETED/FAILED/SUPERSEDED) from state.db; PENDING jobs are never touched, so the active queue can't be purged by accident. Deleting a job also removes its job_skip_details rows. Requires exactly one of --purge-age or --purge-oldest.
 	- Add --purge-status STATUS to limit the purge to one status (COMPLETED, FAILED, SUPERSEDED). Omit to match every terminal status.
 	- Add --purge-repository TEXT to limit the purge to a repository substring (case-insensitive). Omit to match every repository.
-	- --purge-age DAYS is required, same semantics as --purge (based on each job's completed_at, falling back to updated_at/created_at). Use --purge-age 0 to remove every matching terminal job right now.
+	- --purge-age DAYS: only delete rows at least this many days old, same semantics as --purge (based on each job's completed_at, falling back to updated_at/created_at). Use --purge-age 0 to remove every matching terminal job right now.
+	- --purge-oldest N: alternative to --purge-age - delete the N oldest matching rows (by the same completed_at/updated_at/created_at fallback) regardless of their age. Useful when you know how many rows you want gone (for example, to shrink a state.db that has grown to 10,000+ jobs) but don't know what --purge-age value achieves that - check --queue-status --queue-report first for an age preview, or just use --purge-oldest directly.
 	- Add --dry-run to preview the matching count without deleting anything.
-	- Example: python main.py --purge-jobs --purge-status COMPLETED --purge-age 30 (delete completed jobs older than 30 days)
+	- Examples:
+		- python main.py --purge-jobs --purge-status COMPLETED --purge-age 30 (delete completed jobs older than 30 days)
+		- python main.py --purge-jobs --purge-oldest 2000 --dry-run (preview deleting the 2,000 oldest terminal jobs)
 - --once: Force single-run mode even when polling is enabled.
 - --single: Ingest at most one new notification and process at most one queue item, then exit. Prefers the just-ingested item if a new notification exists; otherwise falls back to the single oldest due job already in the queue. Useful for controlled verification against real data instead of risking hundreds of items in one run.
 - --dry-run: Modifier for --single/--once/--poll/--drain-queue/--purge-state/--purge/--purge-jobs. For run modes, previews what would happen with no writes/deletes: no emails marked as read or moved to Trash, no files downloaded, no changes to state.db (job_queue/asset_state/lifecycle_events) or mapping.json. GitHub API and IMAP reads still happen (read-only) so the preview reflects real data. Fully repeatable - re-running leaves the same state every time. For purge commands, prints the matching count instead of deleting anything. Example: python main.py --single --dry-run.
