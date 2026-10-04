@@ -167,6 +167,7 @@ class UpdateRepositoryFieldsTests(MappingWriteTestCase):
         """The lost-update case: daemon writes between GUI load and GUI save."""
         mapping_manager.upsert_repository_mapping("owner/repo", "2026-01-01_00-00")
         gui_copy = mapping_manager.get_repository_mapping("owner/repo")  # GUI loads, then edits...
+        assert gui_copy is not None
 
         mapping_manager.mark_repository_finalized("owner/repo", "2026-02-02_00-00")  # ...daemon writes
         mapping_manager.upsert_repository_mapping("owner/repo", "2026-02-03_00-00")
