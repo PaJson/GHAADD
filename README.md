@@ -26,7 +26,7 @@ Automated Python utility that reads GitHub release notification emails from Gmai
 
 ## Requirements
 
-- Python 3.10+ (the codebase uses PEP 604 `X | Y` union type annotations)
+- Python 3.10+ (code minimum per `vermin` is 3.9; 3.9 is end-of-life, developed and tested on 3.14)
 - Gmail App Password for IMAP access
 - GitHub PAT (recommended to avoid rate limits)
 

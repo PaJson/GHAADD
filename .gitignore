@@ -10,20 +10,18 @@ modules/__pycache__/
 # --- 2. Volatile Daemon Runtime & Status States ---
 ghaadd.lock
 ghaadd.daemon.status.json
+mapping.json.lock
+mapping.json.*.tmp
 
 # --- 3. SQLite Local Write Records & Engine Caches ---
 *.db
 *.db-shm
 *.db-wal
-# Note: Keep 'state.db' unignored if you want to track changes via Git.
-# If 'state.db' is strictly a local testing file, add 'state.db' here too.
 
 # --- 4. Environment Variables & Credentials ---
 .env
 
 # --- 5. AI Workspace Exclusions ---
-.claudeignore
-.copilotignore
 CLAUDE.md
 
 # --- 6. Local and personal config files ---

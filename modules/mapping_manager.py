@@ -1,9 +1,14 @@
+import copy
 import json
 import os
 import re
 import shutil
+import tempfile
+import time
 from datetime import datetime
-from typing import Any, Optional, TypedDict
+from typing import Any, Callable, Optional, TypedDict, TypeVar
+
+from filelock import FileLock, Timeout
 
 from modules.config_manager import get_recheck_intervals_minutes
 from modules.dry_run_mode import is_dry_run
@@ -27,6 +32,19 @@ _MAPPING_FIELD_ORDER = (
     "paused",
 )
 
+
+_MAPPING_LOCK_TIMEOUT_SECONDS = 10.0
+_REPLACE_RETRY_ATTEMPTS = 10
+_REPLACE_RETRY_DELAY_SECONDS = 0.05
+
+# Fields the daemon maintains. Other writers (GUI/CLI) must not set them, and
+# "name" is the entry's identity.
+_DAEMON_OWNED_FIELDS = frozenset({"last_notification_seen", "last_finalized"})
+_IDENTITY_FIELDS = frozenset({"name"})
+
+_REPOSITORY_NAME_PATTERN = re.compile(r"^[^/\s]+/[^/\s]+$")
+
+_T = TypeVar("_T")
 
 _BACKED_UP_INVALID_MAPPING_SIGNATURES: set[tuple[str, int, int]] = set()
 
@@ -265,12 +283,25 @@ def _order_mapping_entry(entry: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def save_mapping(mapping_payload: dict[str, list[dict[str, Any]]]) -> None:
-    """Persist mapping payload to mapping.json."""
-    if is_dry_run():
-        return
+class MappingLockTimeout(RuntimeError):
+    """Raised when mapping.json could not be locked for writing in time."""
 
-    file_path = _mapping_file_path()
+
+class MappingValidationError(ValueError):
+    """Raised when a requested mapping change would be invalid; nothing was written."""
+
+    def __init__(self, errors: list[str]) -> None:
+        super().__init__("; ".join(errors))
+        self.errors = list(errors)
+
+
+def _mapping_lock_path() -> str:
+    """Return the lock file path guarding mapping.json read-modify-write cycles."""
+    return f"{_mapping_file_path()}.lock"
+
+
+def _serialize_mapping_payload(mapping_payload: dict[str, list[dict[str, Any]]]) -> str:
+    """Return the sorted, normalized, human-formatted mapping.json text."""
     normalized_payload = _normalize_mapping_payload(mapping_payload)
     normalized_payload["repositories"] = sorted(
         [_order_mapping_entry(entry) for entry in normalized_payload["repositories"]],
@@ -281,9 +312,86 @@ def save_mapping(mapping_payload: dict[str, list[dict[str, Any]]]) -> None:
     serialized_payload = _collapse_recheck_intervals_arrays(serialized_payload)
     serialized_payload = _collapse_limit_release_type_folders_arrays(serialized_payload)
     serialized_payload = _collapse_skiplist_arrays(serialized_payload)
-    with open(file_path, "w", encoding="utf-8") as mapping_file:
-        mapping_file.write(serialized_payload)
-        mapping_file.write("\n")
+    return serialized_payload + "\n"
+
+
+def _write_mapping_atomically(file_path: str, serialized_payload: str) -> None:
+    """Write mapping text to a temp file beside the target, then swap it in.
+
+    Readers therefore see either the old or the new file, never a partial one.
+    """
+    temp_handle = tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        dir=os.path.dirname(file_path),
+        prefix="mapping.json.",
+        suffix=".tmp",
+        delete=False,
+    )
+    temp_path = temp_handle.name
+    try:
+        with temp_handle:
+            temp_handle.write(serialized_payload)
+            temp_handle.flush()
+            os.fsync(temp_handle.fileno())
+
+        # On Windows os.replace raises PermissionError while another process
+        # briefly has the target open (e.g. a reader), so retry a few times.
+        for attempt in range(_REPLACE_RETRY_ATTEMPTS):
+            try:
+                os.replace(temp_path, file_path)
+                return
+            except PermissionError:
+                if attempt == _REPLACE_RETRY_ATTEMPTS - 1:
+                    raise
+                time.sleep(_REPLACE_RETRY_DELAY_SECONDS)
+    except BaseException:
+        try:
+            os.remove(temp_path)
+        except OSError:
+            pass
+        raise
+
+
+def update_mapping(mutator: Callable[[dict[str, list[dict[str, Any]]]], _T]) -> _T:
+    """Apply one change to mapping.json safely and return the mutator's result.
+
+    The single write path for every writer (daemon, CLI, GUI). Under a
+    cross-process lock it re-reads the file fresh, lets `mutator` change the
+    payload in place, then writes the sorted result atomically. Because the
+    payload is always re-read inside the lock, a writer only ever changes what
+    its mutator touches and cannot overwrite another process's updates. The
+    file is not rewritten when the mutator changes nothing.
+
+    The mutator must be quick and must not call update_mapping itself (the
+    lock is not re-entrant across calls). In dry-run mode the mutator still
+    runs on the loaded payload so results are accurate, but nothing is locked
+    or written.
+
+    Raises MappingLockTimeout when the lock cannot be taken in time.
+    """
+    if is_dry_run():
+        return mutator(load_mapping())
+
+    file_path = _mapping_file_path()
+    lock = FileLock(_mapping_lock_path(), timeout=_MAPPING_LOCK_TIMEOUT_SECONDS)
+    try:
+        lock.acquire()
+    except Timeout as exc:
+        raise MappingLockTimeout(
+            f"Timed out after {_MAPPING_LOCK_TIMEOUT_SECONDS:.0f}s waiting for the "
+            "mapping.json lock; another GHAADD process may be stuck writing it."
+        ) from exc
+
+    try:
+        mapping_payload = load_mapping()
+        snapshot = copy.deepcopy(mapping_payload)
+        result = mutator(mapping_payload)
+        if mapping_payload != snapshot:
+            _write_mapping_atomically(file_path, _serialize_mapping_payload(mapping_payload))
+        return result
+    finally:
+        lock.release()
 
 
 def build_default_foldername(repo: str) -> str:
@@ -390,51 +498,9 @@ def _current_mapping_stamp() -> str:
     return datetime.now().strftime("%Y-%m-%d_%H-%M")
 
 
-def upsert_repository_mapping(
-    repo: str,
-    notification_seen_stamp: Optional[str] = None,
-) -> tuple[bool, bool]:
-    """Upsert one repository mapping and return (created, updated)."""
-    mapping_payload = load_mapping()
-    repositories = mapping_payload["repositories"]
-    effective_notification_seen_stamp = (
-        notification_seen_stamp or _current_mapping_stamp()
-    )
-
-    for entry in repositories:
-        if not _is_same_repository_identity(entry, repo):
-            continue
-
-        updated = False
-        if entry.get("last_notification_seen") != effective_notification_seen_stamp:
-            entry["last_notification_seen"] = effective_notification_seen_stamp
-            updated = True
-
-        if "last_finalized" not in entry:
-            entry["last_finalized"] = ""
-            updated = True
-
-        if "recheck_intervals_minutes" not in entry:
-            entry["recheck_intervals_minutes"] = []
-            updated = True
-
-        if "limit_release_type_folders" not in entry:
-            entry["limit_release_type_folders"] = _default_limit_release_type_folders()
-            updated = True
-
-        if "skiplist" not in entry:
-            entry["skiplist"] = []
-            updated = True
-
-        if "paused" not in entry:
-            entry["paused"] = False
-            updated = True
-
-        if updated:
-            save_mapping(mapping_payload)
-        return (False, updated)
-
-    skeleton_entry = {
+def _build_skeleton_entry(repo: str, notification_seen_stamp: str) -> dict[str, Any]:
+    """Return a new repository entry with default values."""
+    return {
         "name": repo,
         "destination": "",
         "foldername": build_default_foldername(repo),
@@ -443,17 +509,66 @@ def upsert_repository_mapping(
         "limit_release_type_folders": _default_limit_release_type_folders(),
         "recheck_intervals_minutes": [],
         "skiplist": [],
-        "last_notification_seen": effective_notification_seen_stamp,
+        "last_notification_seen": notification_seen_stamp,
         "last_finalized": "",
         "paused": False,
     }
-    repositories.append(skeleton_entry)
-    save_mapping(mapping_payload)
-    log_warning(
-        "MAPPING",
-        f"Repository '{repo}' was added without a configured destination; it will use default routing until mapped.",
+
+
+def upsert_repository_mapping(
+    repo: str,
+    notification_seen_stamp: Optional[str] = None,
+) -> tuple[bool, bool]:
+    """Upsert one repository mapping and return (created, updated)."""
+    effective_notification_seen_stamp = (
+        notification_seen_stamp or _current_mapping_stamp()
     )
-    return (True, False)
+
+    def _apply(mapping_payload: dict[str, list[dict[str, Any]]]) -> tuple[bool, bool]:
+        repositories = mapping_payload["repositories"]
+        for entry in repositories:
+            if not _is_same_repository_identity(entry, repo):
+                continue
+
+            updated = False
+            if entry.get("last_notification_seen") != effective_notification_seen_stamp:
+                entry["last_notification_seen"] = effective_notification_seen_stamp
+                updated = True
+
+            if "last_finalized" not in entry:
+                entry["last_finalized"] = ""
+                updated = True
+
+            if "recheck_intervals_minutes" not in entry:
+                entry["recheck_intervals_minutes"] = []
+                updated = True
+
+            if "limit_release_type_folders" not in entry:
+                entry["limit_release_type_folders"] = _default_limit_release_type_folders()
+                updated = True
+
+            if "skiplist" not in entry:
+                entry["skiplist"] = []
+                updated = True
+
+            if "paused" not in entry:
+                entry["paused"] = False
+                updated = True
+
+            return (False, updated)
+
+        repositories.append(
+            _build_skeleton_entry(repo, effective_notification_seen_stamp)
+        )
+        return (True, False)
+
+    created, updated = update_mapping(_apply)
+    if created:
+        log_warning(
+            "MAPPING",
+            f"Repository '{repo}' was added without a configured destination; it will use default routing until mapped.",
+        )
+    return (created, updated)
 
 
 def mark_repository_finalized(
@@ -465,18 +580,136 @@ def mark_repository_finalized(
     if not normalized_repo:
         return False
 
-    mapping_payload = load_mapping()
     finalized_value = finalized_stamp or _current_mapping_stamp()
-    for entry in mapping_payload["repositories"]:
-        if not _is_same_repository_identity(entry, normalized_repo):
-            continue
-        if entry.get("last_finalized") == finalized_value:
+
+    def _apply(mapping_payload: dict[str, list[dict[str, Any]]]) -> bool:
+        for entry in mapping_payload["repositories"]:
+            if not _is_same_repository_identity(entry, normalized_repo):
+                continue
+            if entry.get("last_finalized") == finalized_value:
+                return False
+            entry["last_finalized"] = finalized_value
+            return True
+
+        return False
+
+    return update_mapping(_apply)
+
+
+def _reject_non_editable_fields(fields: dict[str, Any]) -> None:
+    """Raise ValueError when fields include daemon-owned fields or the entry name."""
+    forbidden = (_DAEMON_OWNED_FIELDS | _IDENTITY_FIELDS) & set(fields)
+    if forbidden:
+        raise ValueError(f"Fields cannot be set by GUI/CLI edits: {sorted(forbidden)}")
+
+
+def _apply_validated(
+    mapping_payload: dict[str, list[dict[str, Any]]],
+    change: Callable[[], _T],
+) -> _T:
+    """Run `change` on the payload; raise MappingValidationError if it adds errors.
+
+    Only errors the change introduces count, so a pre-existing problem in an
+    unrelated entry never blocks a valid edit. Raising inside an update_mapping
+    mutator leaves the file untouched.
+    """
+    errors_before = set(validate_mapping_payload(mapping_payload)["errors"])
+    result = change()
+    new_errors = [
+        error
+        for error in validate_mapping_payload(mapping_payload)["errors"]
+        if error not in errors_before
+    ]
+    if new_errors:
+        raise MappingValidationError(new_errors)
+    return result
+
+
+def update_repository_fields(repo: str, changes: dict[str, Any]) -> bool:
+    """Change only the given fields of one repository entry (GUI/CLI edit path).
+
+    Re-reads mapping.json under the lock, so the daemon's own updates to other
+    fields are preserved. Returns True when the file changed. Raises ValueError
+    for daemon-owned fields or the entry name, KeyError when the repository is
+    not mapped, and MappingValidationError (nothing written) when the new
+    values would make the entry invalid.
+    """
+    _reject_non_editable_fields(changes)
+    normalized_repo = str(repo or "").strip()
+
+    def _apply(mapping_payload: dict[str, list[dict[str, Any]]]) -> bool:
+        for entry in mapping_payload["repositories"]:
+            if not _is_same_repository_identity(entry, normalized_repo):
+                continue
+
+            def _change() -> bool:
+                changed = any(entry.get(key) != value for key, value in changes.items())
+                entry.update(changes)
+                return changed
+
+            return _apply_validated(mapping_payload, _change)
+
+        raise KeyError(f"Repository '{normalized_repo}' is not in mapping.json")
+
+    return update_mapping(_apply)
+
+
+def add_repository(repo: str, fields: Optional[dict[str, Any]] = None) -> None:
+    """Add a new repository entry with default values plus optional `fields`.
+
+    `repo` must look like 'owner/repo'. Raises MappingValidationError when the
+    name is malformed, already mapped (case-insensitive), or the resulting entry
+    is invalid, and ValueError for daemon-owned fields in `fields`. The entry's
+    last_notification_seen starts empty because no notification was seen yet.
+    """
+    extra_fields = dict(fields or {})
+    _reject_non_editable_fields(extra_fields)
+
+    normalized_repo = str(repo or "").strip()
+    if not _REPOSITORY_NAME_PATTERN.match(normalized_repo):
+        raise MappingValidationError(
+            [f"Repository name '{normalized_repo}' must look like 'owner/repo'."]
+        )
+
+    def _apply(mapping_payload: dict[str, list[dict[str, Any]]]) -> None:
+        if any(
+            _is_same_repository_identity(entry, normalized_repo)
+            for entry in mapping_payload["repositories"]
+        ):
+            raise MappingValidationError(
+                [f"Repository '{normalized_repo}' is already in mapping.json."]
+            )
+
+        def _change() -> None:
+            entry = _build_skeleton_entry(normalized_repo, "")
+            entry.update(extra_fields)
+            mapping_payload["repositories"].append(entry)
+
+        _apply_validated(mapping_payload, _change)
+
+    update_mapping(_apply)
+
+
+def remove_repository(repo: str) -> bool:
+    """Remove a repository entry. Returns False when it was not mapped.
+
+    Only the mapping entry is removed; queued jobs in state.db are untouched,
+    and a new notification for the repository re-creates a skeleton entry.
+    """
+    normalized_repo = str(repo or "").strip()
+
+    def _apply(mapping_payload: dict[str, list[dict[str, Any]]]) -> bool:
+        repositories = mapping_payload["repositories"]
+        remaining = [
+            entry for entry in repositories
+            if not _is_same_repository_identity(entry, normalized_repo)
+        ]
+        if len(remaining) == len(repositories):
             return False
-        entry["last_finalized"] = finalized_value
-        save_mapping(mapping_payload)
+        mapping_payload["repositories"] = remaining
         return True
 
-    return False
+    return update_mapping(_apply)
 
 
 def _normalize_destination_root_for_comparison(destination: str) -> str:
@@ -557,17 +790,21 @@ def warn_about_missing_mapped_destinations() -> int:
 
 def validate_mapping_schema() -> MappingValidationResult:
     """Validate mapping.json structure and return errors/warnings."""
-    errors: list[str] = []
-    warnings: list[str] = []
-
     raw_payload = load_mapping_raw()
     if raw_payload is None:
-        errors.append("mapping.json is missing or contains invalid JSON.")
         return {
             "ok": False,
-            "errors": errors,
-            "warnings": warnings,
+            "errors": ["mapping.json is missing or contains invalid JSON."],
+            "warnings": [],
         }
+
+    return validate_mapping_payload(raw_payload)
+
+
+def validate_mapping_payload(raw_payload: Any) -> MappingValidationResult:
+    """Validate an in-memory mapping payload and return errors/warnings."""
+    errors: list[str] = []
+    warnings: list[str] = []
 
     if not isinstance(raw_payload, dict):
         errors.append("Root JSON value must be an object.")
