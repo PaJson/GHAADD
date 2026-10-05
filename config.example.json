@@ -7,7 +7,9 @@
     "logs": "Logs"
   },
   "terminal_log": {
-    "enabled": false
+    "enabled": false,
+    "max_file_mb": 10,
+    "keep_files": 30
   },
   "mailbox": {
     "folder": "GitHubNotifications"

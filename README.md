@@ -295,7 +295,9 @@ Example:
 		"logs": "Logs"
 	},
 	"terminal_log": {
-		"enabled": false
+		"enabled": false,
+		"max_file_mb": 10,
+		"keep_files": 30
 	},
 	"paths": {
 		"default_download_dir": "D:"
@@ -334,8 +336,12 @@ Key behavior:
 	- false disables terminal output logging.
 	- true writes all terminal output (stdout and stderr) to a .log file for this run.
 	- Log files are written under: paths.default_download_dir/folders.ghaadd_root/folders.logs.
-	- Each run creates a new log file named with app start time (format: YYYYMMDD_HHMMSS.log).
+	- Each run creates a new log file named with app start time (format: YYYYMMDD_HHMMSS.log). This includes short CLI commands such as --queue-status, so they count towards keep_files.
 	- This setting only affects the terminal-output mirror. Lifecycle events (completed moves, superseded partial moves, typed warnings such as API, destination, move, sanity-check, supersede, and premature-finalize) are always recorded in state.db regardless of this setting, and are viewable with --lifecycle-log.
+- terminal_log.max_file_mb
+	- Size limit per log file in MB (default 10). When the current file reaches it, the daemon continues in a new, newer-named log file (the first line says which file it continues). Lines are never split across files. 0 disables rollover.
+- terminal_log.keep_files
+	- Number of log files to keep (default 30, including the current one). The oldest GHAADD log files (names matching YYYYMMDD_HHMMSS.log) beyond this are deleted when the polling daemon starts and after every rollover. 0 keeps everything. Never applied in --dry-run.
 
 ## Download Path Routing
 

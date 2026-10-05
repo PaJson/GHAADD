@@ -12,6 +12,8 @@ DEFAULT_DESTINATION_CHECK_EVERY_N_POLLS = 10
 DEFAULT_DISABLE_STATE_PERSISTENCE = False
 DEFAULT_GMAIL_FOLDER = "GitHubNotifications"
 DEFAULT_ENABLE_TERMINAL_LOG = False
+DEFAULT_TERMINAL_LOG_MAX_FILE_MB = 10
+DEFAULT_TERMINAL_LOG_KEEP_FILES = 30
 DEFAULT_GHAADD_ROOT_FOLDER = "GHAADD"
 DEFAULT_PROCESSING_FOLDER = "Processing"
 DEFAULT_COMPLETE_FOLDER = "Complete"
@@ -30,6 +32,8 @@ class FolderSettings(TypedDict):
 class TerminalLogSettings(TypedDict):
     enabled: bool
     directory: str
+    max_file_mb: int
+    keep_files: int
 
 
 def _as_bool(value, default=False):
@@ -189,6 +193,12 @@ def get_terminal_log_settings(config: Optional[Dict[str, Any]] = None) -> Termin
     return {
         "enabled": _as_bool(enabled, DEFAULT_ENABLE_TERMINAL_LOG),
         "directory": normalized_log_dir,
+        "max_file_mb": max(
+            0, _as_int(_get_nested(config, "terminal_log", "max_file_mb"), DEFAULT_TERMINAL_LOG_MAX_FILE_MB)
+        ),
+        "keep_files": max(
+            0, _as_int(_get_nested(config, "terminal_log", "keep_files"), DEFAULT_TERMINAL_LOG_KEEP_FILES)
+        ),
     }
 
 

@@ -13,7 +13,7 @@ from modules.config_manager import (
 from datetime import datetime
 from dotenv import load_dotenv
 
-__version__ = "1.0"
+__version__ = "1.1"
 
 # Load environment variables from .env.
 load_dotenv()
@@ -27,6 +27,7 @@ from modules.db_manager import get_next_pending_job, open_database
 from modules.asset_downloader import download_release
 from modules.dry_run_mode import is_dry_run, set_dry_run
 from modules.lifecycle_logger import log_cycle_summary
+from modules.log_files import RollingLogFile
 from modules.mapping_manager import ensure_mapping_file, warn_about_missing_mapped_destinations
 from modules.queue_worker import process_queue_once, run_ingest_and_queue_cycle, run_single_cycle
 
@@ -95,16 +96,18 @@ def setup_terminal_logging(config):
 
     try:
         os.makedirs(log_dir, exist_ok=True)
-        filename = datetime.now().strftime("%Y%m%d_%H%M%S") + ".log"
-        log_path = os.path.join(log_dir, filename)
-        log_stream = open(log_path, "a", encoding="utf-8", buffering=1)
+        log_stream = RollingLogFile(
+            log_dir,
+            max_bytes=settings["max_file_mb"] * 1024 * 1024,
+            keep_files=settings["keep_files"],
+        )
     except OSError as exc:
         print(f"Logging setup failed: {exc}", file=sys.stderr)
         return None
 
     sys.stdout = TeeStream(_ORIGINAL_STDOUT, log_stream)
     sys.stderr = TeeStream(_ORIGINAL_STDERR, log_stream)
-    print(f"Logging enabled. Writing terminal output to: {log_path}")
+    print(f"Logging enabled. Writing terminal output to: {log_stream.path}")
     return log_stream
 
 
@@ -276,6 +279,11 @@ def main():
             interval_seconds = polling_settings["interval_seconds"]
             jitter_min_seconds = polling_settings["jitter_min_seconds"]
             jitter_max_seconds = polling_settings["jitter_max_seconds"]
+
+            if log_stream is not None:
+                removed_logs = log_stream.prune()
+                if removed_logs:
+                    print(f"Removed {removed_logs} old log file(s) (terminal_log.keep_files).")
 
             try:
                 run_polling_loop(interval_seconds, jitter_min_seconds, jitter_max_seconds)
