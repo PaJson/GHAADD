@@ -1,0 +1,4 @@
+requests>=2.31
+python-dotenv>=1.0
+imapclient>=3.0
+filelock>=3.12

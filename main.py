@@ -13,7 +13,7 @@ from modules.config_manager import (
 from datetime import datetime
 from dotenv import load_dotenv
 
-__version__ = "1.0-RC8"
+__version__ = "1.0"
 
 # Load environment variables from .env.
 load_dotenv()
@@ -27,7 +27,7 @@ from modules.db_manager import get_next_pending_job, open_database
 from modules.asset_downloader import download_release
 from modules.dry_run_mode import is_dry_run, set_dry_run
 from modules.lifecycle_logger import log_cycle_summary
-from modules.mapping_manager import warn_about_missing_mapped_destinations
+from modules.mapping_manager import ensure_mapping_file, warn_about_missing_mapped_destinations
 from modules.queue_worker import process_queue_once, run_ingest_and_queue_cycle, run_single_cycle
 
 
@@ -247,6 +247,9 @@ def main():
         # blocks on (or is blocked by) another running instance.
         lock_context = nullcontext() if parsed_args.dry_run else acquire_daemon_lock()
         with lock_context:
+            if ensure_mapping_file():
+                print("Created an empty mapping.json (fresh install).")
+
             if parsed_args.drain_queue:
                 try:
                     run_drain_queue_loop(GITHUB_TOKEN)

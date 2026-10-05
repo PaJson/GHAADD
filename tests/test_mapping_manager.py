@@ -290,5 +290,38 @@ class AddRemoveRepositoryTests(MappingWriteTestCase):
         self.assertEqual([r["name"] for r in self.read_mapping()], ["owner/two"])
 
 
+class EnsureMappingFileTests(MappingWriteTestCase):
+    def test_creates_empty_mapping_on_fresh_install(self) -> None:
+        self.assertFalse(os.path.exists(self.mapping_path))
+
+        self.assertTrue(mapping_manager.ensure_mapping_file())
+
+        self.assertEqual(self.read_mapping(), [])
+        self.assertFalse(mapping_manager.ensure_mapping_file())
+
+    def test_leaves_existing_file_untouched(self) -> None:
+        self.write_mapping([{"name": "amy/apple"}])
+
+        self.assertFalse(mapping_manager.ensure_mapping_file())
+
+        self.assertEqual(self.read_mapping(), [{"name": "amy/apple"}])
+
+    def test_does_not_replace_invalid_file(self) -> None:
+        with open(self.mapping_path, "w", encoding="utf-8") as handle:
+            handle.write("{not json")
+
+        self.assertFalse(mapping_manager.ensure_mapping_file())
+
+        with open(self.mapping_path, "r", encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), "{not json")
+
+    def test_dry_run_creates_nothing(self) -> None:
+        dry_run_mode.set_dry_run(True)
+
+        self.assertFalse(mapping_manager.ensure_mapping_file())
+
+        self.assertFalse(os.path.exists(self.mapping_path))
+
+
 if __name__ == "__main__":
     unittest.main()

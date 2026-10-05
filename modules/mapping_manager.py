@@ -260,6 +260,38 @@ def load_mapping_raw() -> Any:
         return None
 
 
+def ensure_mapping_file() -> bool:
+    """Create an empty mapping.json on a fresh install; return True if it was created.
+
+    An existing file (even an invalid one, which load_mapping backs up when it is
+    read) is never touched. Does nothing in dry-run mode.
+    """
+    if is_dry_run():
+        return False
+
+    file_path = _mapping_file_path()
+    if os.path.exists(file_path):
+        return False
+
+    lock = FileLock(_mapping_lock_path(), timeout=_MAPPING_LOCK_TIMEOUT_SECONDS)
+    try:
+        lock.acquire()
+    except Timeout as exc:
+        raise MappingLockTimeout(
+            f"Timed out after {_MAPPING_LOCK_TIMEOUT_SECONDS:.0f}s waiting for the "
+            "mapping.json lock; another GHAADD process may be stuck writing it."
+        ) from exc
+
+    try:
+        # Re-check under the lock: another process may have created it meanwhile.
+        if os.path.exists(file_path):
+            return False
+        _write_mapping_atomically(file_path, _serialize_mapping_payload(_default_mapping_payload()))
+        return True
+    finally:
+        lock.release()
+
+
 def _repository_sort_key(entry: dict[str, Any]) -> tuple[str, str]:
     """Return a stable sort key for a repository mapping entry by repo name only."""
     name_value = str(entry.get("name") or entry.get("foldername") or "").strip()

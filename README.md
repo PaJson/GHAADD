@@ -59,7 +59,7 @@ Default value:
 2. Install dependencies:
 
 ```bash
-pip install requests python-dotenv imapclient filelock
+pip install -r requirements.txt
 ```
 
 ## Local Configuration Files
