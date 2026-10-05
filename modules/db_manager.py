@@ -240,7 +240,20 @@ def open_database():
         WHERE updated_at IS NULL
         """
     )
-    
+
+    # Single-row control channel for the running polling daemon (pause and
+    # forced polls). Written by the GUI/CLI, read by the daemon; see
+    # daemon_control.py for the semantics.
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS daemon_control (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            paused INTEGER NOT NULL DEFAULT 0,
+            poll_now_request REAL
+        )
+        """
+    )
+
     connection.commit()
     return connection
 
@@ -1214,3 +1227,51 @@ def purge_job_queue_rows(connection, status=None, repo_filter=None, min_age_days
     cursor = connection.execute(f"DELETE FROM job_queue {where_clause}", params)
     connection.commit()
     return cursor.rowcount
+
+
+# Daemon control helpers (single row, id = 1).
+def get_daemon_control(connection):
+    """Return (paused, poll_now_request); defaults when the row doesn't exist yet."""
+    row = connection.execute(
+        "SELECT paused, poll_now_request FROM daemon_control WHERE id = 1"
+    ).fetchone()
+    if row is None:
+        return False, None
+    return bool(row["paused"]), row["poll_now_request"]
+
+
+def set_daemon_paused(connection, paused: bool):
+    """Set the pause flag, leaving any pending poll-now request untouched."""
+    connection.execute(
+        """
+        INSERT INTO daemon_control (id, paused) VALUES (1, ?)
+        ON CONFLICT(id) DO UPDATE SET paused = excluded.paused
+        """,
+        (1 if paused else 0,),
+    )
+    connection.commit()
+
+
+def set_daemon_poll_now_request(connection, stamp: float) -> float:
+    """Store a poll-now request stamp, guaranteed to differ from the previous one.
+
+    Returns the stamp actually stored.
+    """
+    connection.execute("INSERT OR IGNORE INTO daemon_control (id) VALUES (1)")
+    connection.execute(
+        """
+        UPDATE daemon_control
+        SET poll_now_request = CASE
+            WHEN poll_now_request = ? THEN ? + 0.000001
+            ELSE ?
+        END
+        WHERE id = 1
+        """,
+        (stamp, stamp, stamp),
+    )
+    stored = connection.execute(
+        "SELECT poll_now_request FROM daemon_control WHERE id = 1"
+    ).fetchone()[0]
+    connection.commit()
+    return stored
+

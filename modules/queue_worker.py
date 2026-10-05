@@ -49,7 +49,7 @@ from modules.payload_types import (
     QueueCycleStats,
     SkippedItemPayload,
 )
-from typing import Literal, Optional, Tuple, Union, cast, overload
+from typing import Callable, Literal, Optional, Tuple, Union, cast, overload
 
 
 GITHUB_API_VERSION = "2022-11-28"
@@ -469,11 +469,15 @@ def ingest_notifications_once(
     connection,
     github_token: Optional[str],
     notification_limit: Optional[int] = None,
+    should_pause: Optional[Callable[[], bool]] = None,
 ) -> Tuple[IngestCycleStats, Optional[QueuedItemInfo]]:
     """Ingest unseen notifications into job_queue and delete emails immediately.
 
     notification_limit, when given, overrides processing.max_emails_to_process
     for this call only (used by --single to fetch at most one notification).
+    should_pause is checked before each notification; when it returns True the
+    remaining notifications are left untouched in the mailbox for the next poll
+    (the ones already handled are still cleaned up normally).
     Returns cycle stats plus the identity of the one item just queued, if any
     (used by --single to immediately process that same item).
     """
@@ -547,6 +551,13 @@ def ingest_notifications_once(
         now_timestamp = time.time()
 
         for idx, notification in enumerate(unique_notifications, 1):
+            if should_pause is not None and should_pause():
+                print(
+                    f"⏸️ Pause requested; leaving {len(unique_notifications) - idx + 1} "
+                    "notification(s) in the mailbox for after resume.\n"
+                )
+                break
+
             repo = notification.get("repo")
             tag = notification.get("tag")
             release_type = notification.get("release_type")
@@ -1038,8 +1049,13 @@ def process_queue_once(
     github_token: Optional[str],
     limit: Optional[int] = None,
     job_filter_ids: Optional[list[int]] = None,
+    should_pause: Optional[Callable[[], bool]] = None,
 ) -> QueueCycleStats:
     """Process due queue rows and re-check each job using configured intervals.
+
+    should_pause is checked before each job; when it returns True the cycle
+    stops there. A job already running always finishes, and the unprocessed
+    jobs stay PENDING and due, so the next poll picks them up.
 
     limit caps how many due jobs are fetched this call (ignored when
     job_filter_ids is given). job_filter_ids, when given, processes exactly
@@ -1076,6 +1092,13 @@ def process_queue_once(
     skipped_files_total = 0
 
     for index, job in enumerate(due_jobs, 1):
+        if should_pause is not None and should_pause():
+            print(
+                f"⏸️ Pause requested; stopping before job #{job['id']} "
+                f"({len(due_jobs) - index + 1} of {len(due_jobs)} job(s) left for after resume)."
+            )
+            break
+
         job_id = job["id"]
         repo = job["repo"]
         tag = job["tag"]
@@ -1361,10 +1384,23 @@ def process_queue_once(
     }
 
 
-def run_ingest_and_queue_cycle(connection, github_token: Optional[str]) -> None:
-    """Run one full cycle: ingest new emails, then process due queue jobs."""
-    ingest_stats, _queued_item_info = ingest_notifications_once(connection, github_token)
-    queue_stats = process_queue_once(connection, github_token)
+def run_ingest_and_queue_cycle(
+    connection,
+    github_token: Optional[str],
+    should_pause: Optional[Callable[[], bool]] = None,
+) -> None:
+    """Run one full cycle: ingest new emails, then process due queue jobs.
+
+    should_pause (see ingest_notifications_once / process_queue_once) lets a
+    pause request end the cycle at the next safe boundary.
+    """
+    ingest_stats, _queued_item_info = ingest_notifications_once(
+        connection, github_token, should_pause=should_pause
+    )
+    if should_pause is not None and should_pause():
+        queue_stats = _empty_queue_cycle_stats()
+    else:
+        queue_stats = process_queue_once(connection, github_token, should_pause=should_pause)
 
     summary_message = log_cycle_summary(ingest_stats, queue_stats)
     print(f"📋 {summary_message}")

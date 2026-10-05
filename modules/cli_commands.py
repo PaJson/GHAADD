@@ -1,9 +1,12 @@
 import argparse
 import json
 import os
+import sqlite3
 import sys
 from typing import Callable
 
+from modules.daemon_control import request_poll_now, set_paused
+from modules.daemon_lock import is_daemon_running
 from modules.db_manager import (
     get_jobs_by_ids,
     get_state_db_path,
@@ -75,6 +78,11 @@ def parse_cli_args(args: list[str], version: str) -> argparse.Namespace:
         metavar="JOB",
         help="Run the selected pending jobs immediately without changing their retry schedule.",
     )
+
+    control_group = parser.add_argument_group("running-daemon control options")
+    control_group.add_argument("--pause", action="store_true", help="Pause polling in the running daemon (the countdown freezes).")
+    control_group.add_argument("--resume", action="store_true", help="Resume polling in the running daemon.")
+    control_group.add_argument("--poll-now", action="store_true", help="Make the running daemon poll right away (resets its countdown).")
 
     queue_group = parser.add_argument_group("queue status/reporting options")
     queue_group.add_argument("--queue-status", action="store_true", help="Print current queue counts and scheduling details.")
@@ -253,6 +261,30 @@ def handle_cli_command(parsed_args: argparse.Namespace, run_smoke_tests: Callabl
             for warning_text in validation_result["warnings"]:
                 print(f"- {warning_text}")
 
+        return True
+
+    if parsed_args.pause or parsed_args.resume or parsed_args.poll_now:
+        if parsed_args.pause and parsed_args.resume:
+            print("Control option error: --pause and --resume cannot be combined.", file=sys.stderr)
+            return True
+
+        # A stopped daemon clears pause on startup and ignores older requests, so writing would mislead.
+        if not is_daemon_running():
+            print("No GHAADD daemon is running; nothing to control.", file=sys.stderr)
+            return True
+
+        try:
+            if parsed_args.pause:
+                set_paused(True)
+                print("Pause requested. The daemon freezes its countdown within about a second.")
+            if parsed_args.resume:
+                set_paused(False)
+                print("Resume requested.")
+            if parsed_args.poll_now:
+                request_poll_now()
+                print("Forced poll requested. It runs when the daemon is not paused.")
+        except sqlite3.OperationalError as error:
+            print(f"Could not update the control state ({error}); try again.", file=sys.stderr)
         return True
 
     if parsed_args.run_pending:

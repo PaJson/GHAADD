@@ -13,7 +13,7 @@ from modules.config_manager import (
 from datetime import datetime
 from dotenv import load_dotenv
 
-__version__ = "1.0-RC7"
+__version__ = "1.0-RC8"
 
 # Load environment variables from .env.
 load_dotenv()
@@ -21,10 +21,11 @@ GITHUB_TOKEN = os.getenv("GITHUB_PAT")
 
 # Import application modules.
 from modules.cli_commands import handle_cli_command, parse_cli_args
-from modules.daemon_lock import acquire_daemon_lock
+from modules.daemon_control import ControlWatcher, reset_paused_on_startup
+from modules.daemon_lock import acquire_daemon_lock, update_daemon_status
 from modules.db_manager import get_next_pending_job, open_database
 from modules.asset_downloader import download_release
-from modules.dry_run_mode import set_dry_run
+from modules.dry_run_mode import is_dry_run, set_dry_run
 from modules.lifecycle_logger import log_cycle_summary
 from modules.mapping_manager import warn_about_missing_mapped_destinations
 from modules.queue_worker import process_queue_once, run_ingest_and_queue_cycle, run_single_cycle
@@ -143,12 +144,34 @@ def run_polling_loop(interval_seconds, jitter_min_seconds, jitter_max_seconds):
 
     destination_check_every_n_polls = get_destination_check_every_n_polls()
 
+    # Dry-run holds no daemon lock, so it neither reads the control state nor writes the status file.
+    control_enabled = not is_dry_run()
+
+    announced_paused = False
+
+    def publish_wait_state(paused, next_poll_at):
+        nonlocal announced_paused
+        if control_enabled:
+            update_daemon_status(paused=paused, next_poll_at=next_poll_at)
+        if paused != announced_paused:
+            announced_paused = paused
+            if paused:
+                print("⏸️  Polling paused (countdown frozen). Use --resume to continue.")
+            else:
+                print("▶️  Polling resumed.")
+
     cycle = 1
     with open_database() as connection:
+        if control_enabled:
+            reset_paused_on_startup(connection)
+            update_daemon_status(paused=False, next_poll_at=None, last_forced_poll_handled=None)
+        watcher = ControlWatcher(connection=connection, enabled=control_enabled)
+
         while True:
             started = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             print(f"=== Poll cycle {cycle} @ {started} ===")
-            run_ingest_and_queue_cycle(connection, GITHUB_TOKEN)
+            watcher.begin_cycle()
+            run_ingest_and_queue_cycle(connection, GITHUB_TOKEN, should_pause=watcher.checkpoint)
 
             if destination_check_every_n_polls > 0 and cycle % destination_check_every_n_polls == 0:
                 print(f"🔎 Periodic check ({destination_check_every_n_polls}-poll interval): verifying mapped destinations still exist...")
@@ -156,13 +179,21 @@ def run_polling_loop(interval_seconds, jitter_min_seconds, jitter_max_seconds):
                 if missing_count == 0:
                     print("   ✅ All mapped destinations are present.")
 
-            jitter = random.randint(jitter_min_seconds, jitter_max_seconds)
-            sleep_seconds = interval_seconds + jitter
-            next_poll_at = datetime.fromtimestamp(time.time() + sleep_seconds).strftime("%Y-%m-%d %H:%M:%S")
-            print(
-                f"Next poll in {sleep_seconds}s ({interval_seconds}s + {jitter}s jitter) @ {next_poll_at}.\n"
-            )
-            time.sleep(sleep_seconds)
+            if watcher.cycle_interrupted:
+                # Work was left over: no countdown, poll again as soon as polling resumes.
+                sleep_seconds = 0
+                print("Cycle interrupted by pause; polling again as soon as it is resumed.\n")
+            else:
+                jitter = random.randint(jitter_min_seconds, jitter_max_seconds)
+                sleep_seconds = interval_seconds + jitter
+                next_poll_at = datetime.fromtimestamp(time.time() + sleep_seconds).strftime("%Y-%m-%d %H:%M:%S")
+                print(
+                    f"Next poll in {sleep_seconds}s ({interval_seconds}s + {jitter}s jitter) @ {next_poll_at}.\n"
+                )
+            if watcher.wait(sleep_seconds, on_change=publish_wait_state) == "forced":
+                print("⏩ Forced poll requested; polling now.")
+                if control_enabled:
+                    update_daemon_status(last_forced_poll_handled=watcher.last_handled_request)
             cycle += 1
 
 
