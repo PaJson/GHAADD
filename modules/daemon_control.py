@@ -1,4 +1,4 @@
-"""Control channel for a running daemon: global pause/resume and forced polls.
+"""Control channel for a running daemon: pause/resume, forced polls, log switch.
 
 The state lives in the single-row ``daemon_control`` table of ``state.db``
 (accessed through ``db_manager``). The GUI and CLI write it; the polling loop
@@ -9,6 +9,10 @@ instead, so each piece of state has a single owner.
 ``poll_now_request`` is the epoch time of the latest forced-poll request. The
 daemon acts when it *differs* from the last value it handled (not when it is
 later), so a clock stepping backwards cannot swallow a request.
+
+``log_override`` switches terminal log mirroring on or off while the daemon
+runs: None follows ``terminal_log.enabled`` in config.json, True/False force it.
+It is a session setting, cleared when a daemon starts.
 """
 
 import sqlite3
@@ -19,6 +23,7 @@ from typing import Callable, Literal, Optional, TypedDict
 from modules.db_manager import (
     get_daemon_control,
     open_database,
+    set_daemon_log_override,
     set_daemon_paused,
     set_daemon_poll_now_request,
 )
@@ -31,22 +36,29 @@ WaitResult = Literal["elapsed", "forced"]
 class ControlState(TypedDict):
     paused: bool
     poll_now_request: Optional[float]
+    log_override: Optional[bool]
 
 
 def _default_state() -> ControlState:
-    return {"paused": False, "poll_now_request": None}
+    return {"paused": False, "poll_now_request": None, "log_override": None}
 
 
 def read_control_state(connection: sqlite3.Connection) -> ControlState:
     """Return the current control state (defaults until a row exists)."""
-    paused, poll_now_request = get_daemon_control(connection)
-    return {"paused": paused, "poll_now_request": poll_now_request}
+    paused, poll_now_request, log_override = get_daemon_control(connection)
+    return {"paused": paused, "poll_now_request": poll_now_request, "log_override": log_override}
 
 
 def set_paused(paused: bool) -> None:
     """Pause or resume polling in the running daemon."""
     with closing(open_database()) as connection:
         set_daemon_paused(connection, paused)
+
+
+def set_log_override(override: Optional[bool]) -> None:
+    """Force terminal logging on/off in the running daemon (None = follow config.json)."""
+    with closing(open_database()) as connection:
+        set_daemon_log_override(connection, override)
 
 
 def request_poll_now() -> float:
@@ -61,6 +73,12 @@ def reset_paused_on_startup(connection: sqlite3.Connection) -> None:
         set_daemon_paused(connection, False)
 
 
+def reset_log_override_on_startup(connection: sqlite3.Connection) -> None:
+    """Start from config.json: a log switch left behind by a previous run must not stick."""
+    if read_control_state(connection)["log_override"] is not None:
+        set_daemon_log_override(connection, None)
+
+
 class ControlWatcher:
     """Waits out a polling interval while honouring pause and forced-poll requests."""
 
@@ -73,6 +91,7 @@ class ControlWatcher:
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
         tick_seconds: float = DEFAULT_TICK_SECONDS,
+        on_log_override: Optional[Callable[[Optional[bool]], None]] = None,
     ) -> None:
         if not enabled:
             # Disabled (dry-run): never react to the real daemon's control state.
@@ -83,6 +102,9 @@ class ControlWatcher:
         self._clock = clock
         self._sleep = sleep
         self._tick_seconds = tick_seconds
+        # Fires with the new log_override whenever it changes; None means "follow config".
+        self._on_log_override = on_log_override
+        self._last_log_override: Optional[bool] = None
         # True once a checkpoint() during work saw a pause (cleared by begin_cycle()).
         self.cycle_interrupted = False
         # Whatever is already in the file at startup counts as handled.
@@ -91,6 +113,14 @@ class ControlWatcher:
     def begin_cycle(self) -> None:
         """Mark the start of a poll cycle, clearing any earlier interruption."""
         self.cycle_interrupted = False
+        self._sync_log_override(self._read_state())
+
+    def _sync_log_override(self, state: ControlState) -> None:
+        override = state.get("log_override")
+        if override != self._last_log_override:
+            self._last_log_override = override
+            if self._on_log_override is not None:
+                self._on_log_override(override)
 
     def checkpoint(self) -> bool:
         """Return True if work should stop now because polling is paused.
@@ -98,7 +128,9 @@ class ControlWatcher:
         Meant to be passed as should_pause to the ingest/queue loops, which call
         it at safe boundaries (between emails and between jobs).
         """
-        if self._read_state()["paused"]:
+        state = self._read_state()
+        self._sync_log_override(state)
+        if state["paused"]:
             self.cycle_interrupted = True
             return True
         return False
@@ -136,6 +168,7 @@ class ControlWatcher:
 
         while True:
             state = self._read_state()
+            self._sync_log_override(state)
             paused = state["paused"]
             now = self._clock()
             elapsed = now - last_tick

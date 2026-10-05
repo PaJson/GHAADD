@@ -13,7 +13,7 @@ from modules.config_manager import (
 from datetime import datetime
 from dotenv import load_dotenv
 
-__version__ = "1.1"
+__version__ = "1.1.1"
 
 # Load environment variables from .env.
 load_dotenv()
@@ -21,7 +21,7 @@ GITHUB_TOKEN = os.getenv("GITHUB_PAT")
 
 # Import application modules.
 from modules.cli_commands import handle_cli_command, parse_cli_args
-from modules.daemon_control import ControlWatcher, reset_paused_on_startup
+from modules.daemon_control import ControlWatcher, reset_log_override_on_startup, reset_paused_on_startup
 from modules.daemon_lock import acquire_daemon_lock, update_daemon_status
 from modules.db_manager import get_next_pending_job, open_database
 from modules.asset_downloader import download_release
@@ -85,30 +85,85 @@ class TeeStream:
         return getattr(self.primary_stream, "encoding", "utf-8")
 
 
+class TerminalLog:
+    """Switchable mirror of the console output to a timestamped log file.
+
+    stdout/stderr always go through TeeStream; the file is attached on start()
+    and detached on stop(), so logging can be turned on and off while the
+    daemon runs (each start() opens a new file).
+    """
+
+    def __init__(self, settings, tees):
+        self.settings = settings
+        self._tees = tees
+        self._log_file = None
+
+    @property
+    def active(self):
+        return self._log_file is not None and all(tee.secondary_stream is not None for tee in self._tees)
+
+    def start(self):
+        """Open a new log file and mirror output into it; return True if logging is on."""
+        if self.active:
+            return True
+        self.stop()
+
+        log_dir = self.settings["directory"] or ""
+        log_dir = os.path.expandvars(os.path.expanduser(log_dir))
+        try:
+            os.makedirs(log_dir, exist_ok=True)
+            self._log_file = RollingLogFile(
+                log_dir,
+                max_bytes=self.settings["max_file_mb"] * 1024 * 1024,
+                keep_files=self.settings["keep_files"],
+            )
+        except OSError as exc:
+            print(f"Logging setup failed: {exc}", file=sys.stderr)
+            self._log_file = None
+            return False
+
+        for tee in self._tees:
+            tee.secondary_stream = self._log_file
+        print(f"Logging enabled. Writing terminal output to: {self._log_file.path}")
+        return True
+
+    def stop(self):
+        """Stop mirroring and close the log file (no-op when logging is off)."""
+        if self._log_file is None:
+            return
+        log_file, self._log_file = self._log_file, None
+        for tee in self._tees:
+            tee.secondary_stream = None
+        try:
+            log_file.flush()
+            log_file.close()
+        except (OSError, ValueError):
+            pass
+
+    def prune(self):
+        """Apply the retention limit; returns how many old files were removed."""
+        return self._log_file.prune() if self._log_file is not None else 0
+
+    def apply_override(self, override):
+        """Follow a live switch: True/False force logging on/off, None returns to config.json."""
+        want = self.settings["enabled"] if override is None else override
+        if want and not self.active:
+            if self.start():
+                print("📝 Terminal logging switched on" + (" (config default)." if override is None else "."))
+                self.prune()
+        elif not want and self.active:
+            print("📝 Terminal logging switched off" + (" (config default)." if override is None else "."))
+            self.stop()
+
+
 def setup_terminal_logging(config):
-    """Enable terminal-output mirroring to a timestamped per-run log file."""
-    settings = get_terminal_log_settings(config)
-    if not settings["enabled"]:
-        return None
-
-    log_dir = settings["directory"] or get_default_download_dir(config)
-    log_dir = os.path.expandvars(os.path.expanduser(log_dir))
-
-    try:
-        os.makedirs(log_dir, exist_ok=True)
-        log_stream = RollingLogFile(
-            log_dir,
-            max_bytes=settings["max_file_mb"] * 1024 * 1024,
-            keep_files=settings["keep_files"],
-        )
-    except OSError as exc:
-        print(f"Logging setup failed: {exc}", file=sys.stderr)
-        return None
-
-    sys.stdout = TeeStream(_ORIGINAL_STDOUT, log_stream)
-    sys.stderr = TeeStream(_ORIGINAL_STDERR, log_stream)
-    print(f"Logging enabled. Writing terminal output to: {log_stream.path}")
-    return log_stream
+    """Route console output through TeeStream and start the log file if enabled in config."""
+    tees = (TeeStream(_ORIGINAL_STDOUT, None), TeeStream(_ORIGINAL_STDERR, None))
+    sys.stdout, sys.stderr = tees
+    terminal_log = TerminalLog(get_terminal_log_settings(config), tees)
+    if terminal_log.settings["enabled"]:
+        terminal_log.start()
+    return terminal_log
 
 
 def run_internal_smoke_tests():
@@ -135,7 +190,7 @@ def run_internal_smoke_tests():
     print("\n🎉 Smoke tests complete.")
 
 
-def run_polling_loop(interval_seconds, jitter_min_seconds, jitter_max_seconds):
+def run_polling_loop(interval_seconds, jitter_min_seconds, jitter_max_seconds, terminal_log=None):
     """Run processing continuously with randomized jitter between cycles."""
     if jitter_min_seconds > jitter_max_seconds:
         jitter_min_seconds, jitter_max_seconds = jitter_max_seconds, jitter_min_seconds
@@ -167,8 +222,13 @@ def run_polling_loop(interval_seconds, jitter_min_seconds, jitter_max_seconds):
     with open_database() as connection:
         if control_enabled:
             reset_paused_on_startup(connection)
+            reset_log_override_on_startup(connection)
             update_daemon_status(paused=False, next_poll_at=None, last_forced_poll_handled=None)
-        watcher = ControlWatcher(connection=connection, enabled=control_enabled)
+        watcher = ControlWatcher(
+            connection=connection,
+            enabled=control_enabled,
+            on_log_override=terminal_log.apply_override if terminal_log is not None else None,
+        )
 
         while True:
             started = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -233,7 +293,7 @@ def main():
     """Run the main orchestration flow for ingest and queue processing."""
     print(f"GHAADD {__version__} is starting...")
     config = load_config()
-    log_stream = setup_terminal_logging(config)
+    terminal_log = setup_terminal_logging(config)
     try:
         parsed_args = parse_cli_args(sys.argv[1:], __version__)
         set_dry_run(parsed_args.dry_run)
@@ -280,21 +340,19 @@ def main():
             jitter_min_seconds = polling_settings["jitter_min_seconds"]
             jitter_max_seconds = polling_settings["jitter_max_seconds"]
 
-            if log_stream is not None:
-                removed_logs = log_stream.prune()
+            if terminal_log.active:
+                removed_logs = terminal_log.prune()
                 if removed_logs:
                     print(f"Removed {removed_logs} old log file(s) (terminal_log.keep_files).")
 
             try:
-                run_polling_loop(interval_seconds, jitter_min_seconds, jitter_max_seconds)
+                run_polling_loop(interval_seconds, jitter_min_seconds, jitter_max_seconds, terminal_log)
             except KeyboardInterrupt:
                 print("\nPolling stopped by user.")
     finally:
-        if log_stream is not None:
-            sys.stdout = _ORIGINAL_STDOUT
-            sys.stderr = _ORIGINAL_STDERR
-            log_stream.flush()
-            log_stream.close()
+        sys.stdout = _ORIGINAL_STDOUT
+        sys.stderr = _ORIGINAL_STDERR
+        terminal_log.stop()
 
 if __name__ == "__main__":
     main()

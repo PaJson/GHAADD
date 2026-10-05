@@ -253,6 +253,14 @@ def open_database():
         )
         """
     )
+    # Session override for terminal log mirroring: NULL = follow config.json,
+    # 1 = force on, 0 = force off. Added in v1.1.1.
+    control_columns = {
+        row["name"]
+        for row in connection.execute("PRAGMA table_info(daemon_control)").fetchall()
+    }
+    if "log_override" not in control_columns:
+        connection.execute("ALTER TABLE daemon_control ADD COLUMN log_override INTEGER")
 
     connection.commit()
     return connection
@@ -1231,13 +1239,29 @@ def purge_job_queue_rows(connection, status=None, repo_filter=None, min_age_days
 
 # Daemon control helpers (single row, id = 1).
 def get_daemon_control(connection):
-    """Return (paused, poll_now_request); defaults when the row doesn't exist yet."""
+    """Return (paused, poll_now_request, log_override); defaults when the row doesn't exist yet.
+
+    log_override is None (follow config.json), True (force on) or False (force off).
+    """
     row = connection.execute(
-        "SELECT paused, poll_now_request FROM daemon_control WHERE id = 1"
+        "SELECT paused, poll_now_request, log_override FROM daemon_control WHERE id = 1"
     ).fetchone()
     if row is None:
-        return False, None
-    return bool(row["paused"]), row["poll_now_request"]
+        return False, None, None
+    log_override = row["log_override"]
+    return bool(row["paused"]), row["poll_now_request"], None if log_override is None else bool(log_override)
+
+
+def set_daemon_log_override(connection, override: Optional[bool]):
+    """Set the terminal-log override (None = follow config.json), leaving the rest untouched."""
+    connection.execute(
+        """
+        INSERT INTO daemon_control (id, log_override) VALUES (1, ?)
+        ON CONFLICT(id) DO UPDATE SET log_override = excluded.log_override
+        """,
+        (None if override is None else int(override),),
+    )
+    connection.commit()
 
 
 def set_daemon_paused(connection, paused: bool):

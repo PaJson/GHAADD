@@ -197,6 +197,7 @@ CLI options:
 - --drain-queue: Skip email ingestion entirely and repeatedly process only due queue jobs (sleeping until the next pending job's scheduled re-check time between cycles) until the pending queue is fully empty, then exit. Takes precedence over --once and --poll when provided.
 - --run-pending JOB [JOB ...]: Immediately run one or more specific pending jobs by ID, without changing their retry schedule (unlike automatic rechecks, this completes `release_not_found`/SKIP results right away). Example: python main.py --run-pending 23 27.
 - --pause / --resume / --poll-now: Control a running polling daemon from a second terminal (or the future GUI). --pause freezes the countdown to the next poll and no poll runs until --resume (a poll cycle already in progress stops at the next safe boundary: the running job or email finishes, the rest wait, and polling restarts immediately on resume); --poll-now makes the daemon poll right away and then restart its countdown (a request made while paused fires on resume). They write a single-row `daemon_control` table in `state.db`; a daemon that is not running reports "nothing to control". Pause is always cleared when a daemon starts.
+- --log-on / --log-off: Switch terminal logging on or off in a running polling daemon without restarting it (same control channel and "nothing to control" behaviour as --pause). --log-on starts a new .log file from that moment (it does not contain earlier output), --log-off closes the file; console output is unaffected. Each --log-on gets its own file, and retention (terminal_log.keep_files) is applied when it starts. The switch overrides terminal_log.enabled for the running session only and is cleared when a daemon starts, so the config value decides again after a restart.
 - --purge-state: Delete local state.db and exit. Add --dry-run to preview whether it would delete anything without doing so.
 - --smoke-test: Run internal smoke tests and exit.
 - --doctor: Run environment and cross-platform diagnostics.
@@ -335,6 +336,7 @@ Key behavior:
 - terminal_log.enabled
 	- false disables terminal output logging.
 	- true writes all terminal output (stdout and stderr) to a .log file for this run.
+	- Can be overridden while a polling daemon runs with --log-on / --log-off (or the GUI toggle); the override lasts until the daemon stops.
 	- Log files are written under: paths.default_download_dir/folders.ghaadd_root/folders.logs.
 	- Each run creates a new log file named with app start time (format: YYYYMMDD_HHMMSS.log). This includes short CLI commands such as --queue-status, so they count towards keep_files.
 	- This setting only affects the terminal-output mirror. Lifecycle events (completed moves, superseded partial moves, typed warnings such as API, destination, move, sanity-check, supersede, and premature-finalize) are always recorded in state.db regardless of this setting, and are viewable with --lifecycle-log.

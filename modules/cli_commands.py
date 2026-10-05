@@ -5,7 +5,7 @@ import sqlite3
 import sys
 from typing import Callable
 
-from modules.daemon_control import request_poll_now, set_paused
+from modules.daemon_control import request_poll_now, set_log_override, set_paused
 from modules.daemon_lock import is_daemon_running
 from modules.db_manager import (
     get_jobs_by_ids,
@@ -83,6 +83,9 @@ def parse_cli_args(args: list[str], version: str) -> argparse.Namespace:
     control_group.add_argument("--pause", action="store_true", help="Pause polling in the running daemon (the countdown freezes).")
     control_group.add_argument("--resume", action="store_true", help="Resume polling in the running daemon.")
     control_group.add_argument("--poll-now", action="store_true", help="Make the running daemon poll right away (resets its countdown).")
+
+    control_group.add_argument("--log-on", action="store_true", help="Start writing terminal output to a new .log file in the running daemon (until it stops or --log-off).")
+    control_group.add_argument("--log-off", action="store_true", help="Stop writing the .log file in the running daemon.")
 
     queue_group = parser.add_argument_group("queue status/reporting options")
     queue_group.add_argument("--queue-status", action="store_true", help="Print current queue counts and scheduling details.")
@@ -263,9 +266,12 @@ def handle_cli_command(parsed_args: argparse.Namespace, run_smoke_tests: Callabl
 
         return True
 
-    if parsed_args.pause or parsed_args.resume or parsed_args.poll_now:
+    if parsed_args.pause or parsed_args.resume or parsed_args.poll_now or parsed_args.log_on or parsed_args.log_off:
         if parsed_args.pause and parsed_args.resume:
             print("Control option error: --pause and --resume cannot be combined.", file=sys.stderr)
+            return True
+        if parsed_args.log_on and parsed_args.log_off:
+            print("Control option error: --log-on and --log-off cannot be combined.", file=sys.stderr)
             return True
 
         # A stopped daemon clears pause on startup and ignores older requests, so writing would mislead.
@@ -280,6 +286,12 @@ def handle_cli_command(parsed_args: argparse.Namespace, run_smoke_tests: Callabl
             if parsed_args.resume:
                 set_paused(False)
                 print("Resume requested.")
+            if parsed_args.log_on:
+                set_log_override(True)
+                print("Log on requested. The daemon starts a new .log file within about a second.")
+            if parsed_args.log_off:
+                set_log_override(False)
+                print("Log off requested. The daemon closes its .log file within about a second.")
             if parsed_args.poll_now:
                 request_poll_now()
                 print("Forced poll requested. It runs when the daemon is not paused.")
