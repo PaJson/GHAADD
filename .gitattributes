@@ -1,0 +1,12 @@
+# Normalise line endings: LF in the repository and in every working copy,
+# regardless of OS or the contributor's core.autocrlf setting.
+* text=auto eol=lf
+
+# Windows-only scripts must keep CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Never touch binary data.
+*.db binary
+*.png binary
+*.ico binary
