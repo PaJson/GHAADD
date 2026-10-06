@@ -6,6 +6,7 @@ import json
 import os
 import tempfile
 import unittest
+from contextlib import closing
 from unittest import mock
 
 from modules import config_manager, db_manager, gui_data, mapping_manager, status_tabs
@@ -64,6 +65,27 @@ class ModelTests(unittest.TestCase):
     def test_titles_show_unread_counts_only_when_there_are_some(self) -> None:
         self.assertEqual(format_title("Warnings", 0), "Warnings")
         self.assertEqual(format_title("Warnings", 3), "Warnings (3)")
+
+    def test_folder_limit_tab_shows_only_the_newest_warning_per_repository(self) -> None:
+        known = {"o/app": "o/app", "o/lib": "o/lib"}
+        for count in (30, 31, 32):
+            self.events.add("WARNING", "LIMIT", message=f"Folder limit warning: o/app currently has {count} folder(s)")
+        self.events.add("WARNING", "LIMIT", message="Folder limit warning: o/lib currently has 12 folder(s)")
+        model = self.model(known_repos=lambda: known)
+        model.refresh()
+        self.events.add("WARNING", "LIMIT", message="Folder limit warning: o/lib currently has 13 folder(s)")
+        model.refresh()
+
+        rows = model.rows("limits")
+        self.assertEqual([(r.repo, r.earlier) for r in rows], [("o/lib", 1), ("o/app", 2)])  # newest first
+        self.assertIn("32 folder", next(r.message for r in rows if r.repo == "o/app"))
+        self.assertEqual(rows[1].kind, "Limit (+2 earlier)")
+        warnings_tab = self.model(known_repos=lambda: known)
+        warnings_tab.refresh()
+        self.assertEqual(warnings_tab.rows("warnings"), [])  # other tabs keep every row
+
+        model.drop_repo("limits", "o/app")
+        self.assertEqual([r.repo for r in model.rows("limits")], ["o/lib"])
 
     def test_a_fresh_gui_starts_with_everything_read(self) -> None:
         for _ in range(5):
@@ -247,6 +269,21 @@ class DatabaseQueryTests(unittest.TestCase):
         left = db_manager.get_events_for_tab(self.connection, ("WARNING", "COMPLETED_MOVE", "PARTIAL_MOVE"))
         self.assertEqual({(e["event_type"], e["category"]) for e in left}, {("WARNING", "LIMIT"), ("COMPLETED_MOVE", None)})
 
+    def test_purge_for_one_repository_matches_its_own_warnings_only(self) -> None:
+        def limit(repo):
+            self.add("WARNING", "LIMIT", f"Folder limit warning: {repo} currently has 30 folder(s) in 'x' (limit=25).")
+        limit("o/my_app")
+        limit("O/MY_APP")
+        limit("o/myXapp")  # "_" must not act as a wildcard
+        limit("o/my_app2")  # a longer name is a different repository
+        self.add("WARNING", "API", "Could not resolve o/my_app")
+
+        self.assertEqual(db_manager.purge_limit_warnings_for_repo(self.connection, "o/my_app", dry_run=True), 2)
+        self.assertEqual(db_manager.purge_limit_warnings_for_repo(self.connection, "o/my_app"), 2)
+        left = [e["message"] for e in db_manager.get_events_for_tab(self.connection, ("WARNING",))]
+        self.assertEqual(len(left), 3)
+        self.assertEqual(db_manager.get_repos_with_limit_warnings(self.connection), {"o/myxapp", "o/my_app2"})
+
     def test_max_event_id(self) -> None:
         self.assertEqual(db_manager.get_max_event_id(self.connection), 0)
         self.add("WARNING", "API")
@@ -347,6 +384,20 @@ class FeedTests(unittest.TestCase):
             json.dump({"repositories": [{"name": "o/new", "destination": "K:\\Apps"}]}, handle)
         os.utime(self.mapping_path, ns=(1, 2_000_000_000_000_000_000))  # make the change visible to the stat cache
         self.assertEqual(feed.unmapped(), [])
+
+    def test_events_deleted_elsewhere_disappear_from_the_tabs(self) -> None:
+        self.event("WARNING", "LIMIT", "Folder limit warning: o/app currently has 30 folder(s)")
+        self.event("WARNING", "LIMIT", "Folder limit warning: o/app currently has 31 folder(s)")
+        self.event("WARNING", "API", "keep me")
+        feed = gui_data.StatusFeed()
+        feed.refresh()
+        self.assertEqual(len(feed.model.rows("limits")), 1)
+
+        with closing(db_manager.open_database()) as other:  # the daemon cleaning up after the folder shrank
+            db_manager.purge_limit_warnings_for_repo(other, "o/app")
+        self.assertEqual(feed.refresh(), {"limits"})
+        self.assertEqual(feed.model.rows("limits"), [])
+        self.assertEqual(len(feed.model.rows("warnings")), 1)
 
     def test_a_config_that_cannot_be_saved_does_not_break_the_feed(self) -> None:
         with open(self.config_path, "w", encoding="utf-8") as handle:

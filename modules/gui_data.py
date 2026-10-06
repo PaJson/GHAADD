@@ -41,6 +41,14 @@ def _load_summaries() -> dict[str, Any]:
         connection.close()
 
 
+def _load_limit_warned() -> frozenset[str]:
+    connection = db_manager.open_database()
+    try:
+        return frozenset(db_manager.get_repos_with_limit_warnings(connection))
+    finally:
+        connection.close()
+
+
 def _state_db_files() -> list[str]:
     path = db_manager.get_state_db_path()
     return [path, f"{path}-wal"]  # in WAL mode the daemon's commits land in the -wal file first
@@ -50,6 +58,8 @@ def _state_db_files() -> list[str]:
 # state.db, so it is recomputed only when the db or its WAL file changed (or after 30 s as a
 # safety net). Rows are still rebuilt every time: Queued vs Waiting depends on the clock.
 _summaries_cache: StatCache[dict[str, Any]] = StatCache(_state_db_files, _load_summaries, max_age=30.0)
+
+_limit_cache: StatCache[frozenset[str]] = StatCache(_state_db_files, _load_limit_warned, max_age=30.0)
 
 
 def load_repo_table(now: Optional[float] = None) -> RepoTable:
@@ -65,6 +75,12 @@ def load_repo_table(now: Optional[float] = None) -> RepoTable:
     except Exception as exc:  # a locked/corrupt db must not blank the mapping list
         db_error = f"state.db unavailable: {exc}"
 
+    limit_warned: frozenset[str] = frozenset()
+    try:
+        limit_warned = _limit_cache.get()
+    except Exception:  # only the warning marker is lost
+        pass
+
     running_repo: Optional[str] = None
     try:
         current_job = daemon_lock.get_daemon_status()["current_job"]
@@ -79,6 +95,7 @@ def load_repo_table(now: Optional[float] = None) -> RepoTable:
         now,
         lambda entry: _recheck_step_count(entry, len(default_recheck)),
         running_repo=running_repo,
+        limit_warned=limit_warned,
     )
     return RepoTable(rows=rows, entries=entries, default_recheck=default_recheck, db_error=db_error)
 
@@ -155,6 +172,7 @@ class StatusFeed:
         self.model = status_tabs.StatusTabsModel(
             defs, self._fetch, self._max_id, store if store is not None else ConfigSeenStore(),
             known_repos=self._known_repos,
+            existing_ids=self._existing_ids,
         )
         self.defs = defs
 
@@ -176,6 +194,23 @@ class StatusFeed:
             self._connection = None
         self._signature, self._refreshed_at = signature, now
         return changed
+
+    def count_repo_limit_warnings(self, repo: str) -> int:
+        return self._purge_repo(repo, dry_run=True)
+
+    def clear_repo_limit_warnings(self, repo: str) -> int:
+        """Delete one repository's folder-limit warnings and drop them from the Folder limits tab."""
+        removed = self._purge_repo(repo, dry_run=False)
+        self.model.drop_repo("limits", repo)
+        self._signature = None
+        return removed
+
+    def _purge_repo(self, repo: str, dry_run: bool) -> int:
+        connection = db_manager.open_database()
+        try:
+            return db_manager.purge_limit_warnings_for_repo(connection, repo, dry_run=dry_run)
+        finally:
+            connection.close()
 
     def count_tab(self, key: str) -> int:
         """How many stored events the tab lists (all of them, not only the rows on screen)."""
@@ -207,6 +242,9 @@ class StatusFeed:
         return db_manager.get_events_for_tab(
             self._connection, tab.event_types, tab.categories, tab.exclude_categories, after_id, limit
         )
+
+    def _existing_ids(self, ids: list[int]) -> set[int]:
+        return db_manager.get_existing_event_ids(self._connection, ids)
 
     def _max_id(self) -> int:
         return db_manager.get_max_event_id(self._connection)

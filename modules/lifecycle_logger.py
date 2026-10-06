@@ -5,7 +5,9 @@ from modules.db_manager import (
     get_lifecycle_events,
     insert_lifecycle_event,
     open_database,
+    get_repos_with_limit_warnings,
     purge_lifecycle_events as _purge_lifecycle_events,
+    purge_limit_warnings_for_repo,
 )
 from modules.dry_run_mode import is_dry_run
 from modules.payload_types import IngestCycleStats, QueueCycleStats
@@ -43,6 +45,34 @@ def _record_lifecycle_event(
         )
     except Exception:
         return
+    finally:
+        if connection is not None:
+            connection.close()
+
+
+def clear_limit_warnings(repo: str) -> int:
+    """Delete one repository's folder-limit warnings (it is back under its limit); never raises."""
+    if is_dry_run():
+        return 0
+    connection = None
+    try:
+        connection = open_database()
+        return purge_limit_warnings_for_repo(connection, repo)
+    except Exception:
+        return 0
+    finally:
+        if connection is not None:
+            connection.close()
+
+
+def repos_with_limit_warnings() -> set[str]:
+    """Lower-cased names of the repositories that have folder-limit warnings on record; never raises."""
+    connection = None
+    try:
+        connection = open_database()
+        return get_repos_with_limit_warnings(connection)
+    except Exception:
+        return set()
     finally:
         if connection is not None:
             connection.close()

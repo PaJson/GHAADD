@@ -170,7 +170,8 @@ FIELD_HELP = {
     "paused": "Temporarily stop new downloads for this repository. Notification emails stay unread in the "
               "mailbox; jobs already queued still finish.",
     "open_folder": "Open this repository's folder in the file manager: destination + folder name + subfolder. "
-                   "If that folder does not exist yet, the closest existing parent opens.",
+                   "If that folder does not exist yet, the closest existing parent opens. "
+                   "Double-clicking a row in the table does the same.",
 }
 
 
@@ -485,6 +486,7 @@ class MappingsTab(ttk.Frame):
         yscroll.grid(row=0, column=1, sticky="ns")
         self._xscroll.grid(row=1, column=0, sticky="ew")
         self.tree.tag_configure("odd", background=COLOR_STRIPE)
+        self.tree.tag_configure("limit_warn", foreground=COLOR_WARNING)
         self.tree.bind("<<TreeviewSelect>>", self._on_select)
         # Re-fit the "..." truncation after the user drags a column or the window is resized.
         self.tree.bind("<ButtonRelease-1>", lambda _event: self._schedule_refit())
@@ -493,6 +495,13 @@ class MappingsTab(ttk.Frame):
         self.tree.bind("<Leave>", lambda _event: self._hide_tip())
         self.tree.bind("<ButtonPress>", lambda _event: self._hide_tip())
         self.tree.bind("<MouseWheel>", lambda _event: self._hide_tip())
+        self.tree.bind("<Double-1>", self._on_double_click)
+
+    def _on_double_click(self, event: tk.Event) -> None:
+        """Double-clicking a row (any column) opens its folder, like the Open folder button."""
+        repo = self.tree.identify_row(event.y)  # "" on the column headings and empty space
+        if repo and repo == self._current_repo:  # not the current one = the unsaved-changes prompt was declined
+            self._open_folder()
 
     def _build_form(self) -> None:
         self.form_frame = ttk.LabelFrame(self, text="Selected repository", padding=10)
@@ -626,7 +635,11 @@ class MappingsTab(ttk.Frame):
 
     @staticmethod
     def _cell_text(row: Any, key: str) -> str:
-        return STATUS_ICONS.get(row.status, "") if key == "icon" else str(getattr(row, key))
+        if key == "icon":
+            return STATUS_ICONS.get(row.status, "")
+        if key == "limit" and row.limit_warning:
+            return f"⚠ {row.limit}".rstrip()  # a folder-limit warning is on record
+        return str(getattr(row, key))
 
     def _cell_display(self, row: Any, key: str) -> str:
         """Cell text, shortened with an ellipsis when it does not fit the column."""
@@ -728,6 +741,8 @@ class MappingsTab(ttk.Frame):
             for index, row in enumerate(visible):
                 values = [self._cell_display(row, key) for key, *_ in self.TABLE_COLUMNS]
                 tags = ("odd",) if index % 2 else ()  # zebra striping follows the row's position
+                if row.limit_warning:
+                    tags += ("limit_warn",)
                 if row.repo not in existing:
                     self.tree.insert("", index, iid=row.repo, values=values, tags=tags)
                 elif self._shown.get(row.repo) != (values, tags):  # untouched rows cost nothing
@@ -1158,6 +1173,7 @@ class StatusTab(ttk.Frame):
         hint: str = "",
         on_mark_read: Optional[Callable[[], None]] = None,
         on_clear: Optional[Callable[[], None]] = None,
+        on_clear_repo: Optional[Callable[[str], None]] = None,
         detail: bool = False,
     ) -> None:
         super().__init__(master, padding=10)
@@ -1211,6 +1227,16 @@ class StatusTab(ttk.Frame):
             self.clear_button = ttk.Button(bottom, text="Clear…", command=on_clear)
             self.clear_button.grid(row=0, column=3, padx=(6, 0))
             attach_tooltip(self.clear_button, "Permanently delete the events this tab lists from the database.")
+        self.clear_repo_button: Optional[ttk.Button] = None  # deletes one repository's events
+        if on_clear_repo is not None:
+            self._clear_repo = on_clear_repo
+            self.clear_repo_button = ttk.Button(bottom, text="Clear selected", command=self._on_clear_repo, state="disabled")
+            self.clear_repo_button.grid(row=0, column=2, padx=(0, 6))
+            attach_tooltip(
+                self.clear_repo_button,
+                "Delete every warning of the selected row's repository. They also clear themselves once the "
+                "folder is back under its limit (checked every poll).",
+            )
 
         font_spec = ttk.Style(self).lookup("Treeview", "font") or "TkDefaultFont"
         try:
@@ -1219,6 +1245,7 @@ class StatusTab(ttk.Frame):
             self._cell_font = tkfont.nametofont("TkDefaultFont")
         self._tooltip = Tooltip(self.tree)
         self.tree.bind("<<TreeviewSelect>>", self._show_detail)
+        self.tree.bind("<<TreeviewSelect>>", lambda _event: self._update_clear_repo_button(), add="+")
         self.tree.bind("<Double-1>", self._on_double_click)
         self.tree.bind("<Return>", self._on_double_click)
         self.tree.bind("<Motion>", self._on_motion)
@@ -1385,6 +1412,19 @@ class StatusTab(ttk.Frame):
         self._hide_tip()
 
     # ----- actions -----
+
+    def _update_clear_repo_button(self) -> None:
+        if self.clear_repo_button is not None:
+            self.clear_repo_button.state(["!disabled"] if self.selected_repo() else ["disabled"])
+
+    def _on_clear_repo(self) -> None:
+        repo = self.selected_repo()
+        if repo:
+            self._clear_repo(repo)
+
+    def selected_repo(self) -> str:
+        selection = self.tree.selection()
+        return self._repos[int(selection[0])] if selection else ""
 
     def _on_double_click(self, _event: object = None) -> None:
         selection = self.tree.selection()
@@ -1587,6 +1627,7 @@ class MainWindow(tk.Tk):
             hint="Double-click a row to open its repository in the Mappings tab.",
             on_mark_read=(lambda key=definition.key: self._mark_status_read(key)) if definition.counter else None,
             on_clear=lambda key=definition.key: self._clear_status_tab(key),
+            on_clear_repo=(lambda repo: self._clear_repo_limit_warnings(repo)) if definition.key == "limits" else None,
             detail=True,
         )
 
@@ -1684,6 +1725,31 @@ class MainWindow(tk.Tk):
         self._show_event_rows(key, None)
         self._set_status_title(key, self.status_feed.model.title(key))
         self.set_status(f"Cleared {removed:,} {title.lower()} event(s).")
+
+    def _clear_repo_limit_warnings(self, repo: str) -> None:
+        """Delete one repository's folder-limit warnings (after a confirmation that names the number)."""
+        try:
+            count = self.status_feed.count_repo_limit_warnings(repo)
+        except Exception as exc:
+            self.set_status(f"Cannot read the database: {describe_error(exc)}")
+            return
+        if count == 0:
+            self.set_status(f"No folder-limit warnings for {repo}.")
+            return
+        if not messagebox.askyesno(
+            "Clear folder-limit warnings",
+            f"Delete {count:,} folder-limit warning(s) for {repo}?\n\n"
+            "They also clear themselves once the folder is back under its limit.",
+            icon="warning", default="no", parent=self,
+        ):
+            return
+        try:
+            removed = self.status_feed.clear_repo_limit_warnings(repo)
+        except Exception as exc:
+            self.set_status(f"Could not clear the warnings: {describe_error(exc)}")
+            return
+        self._show_event_rows("limits", None)
+        self.set_status(f"Cleared {removed:,} folder-limit warning(s) for {repo}.")
 
     def _live_log_active(self) -> bool:
         """True when somebody can see the Live log tab (window not minimized, its tab selected)."""

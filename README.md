@@ -154,6 +154,8 @@ Destination behavior:
 If `limit` is `0`, no folder-count warning is applied for that repository.
 If `limit` is greater than `0`, the app warns when the repository destination appears to contain too many folders. The warning also reports the total on-disk size of that destination folder (computed only when the warning actually fires, not on every move), to help decide whether to raise or lower the limit.
 
+Limit warnings clear themselves: on every poll the daemon re-counts the folders of each repository that has stored limit warnings, and deletes those warnings once the count is back at or under the limit (or the limit is set to 0). A repository whose folder cannot be found keeps its warnings.
+
 Limit-count folder scope behavior:
 
 - If `limit_release_type_folders` is configured with one or more values, only those top-level folders are counted for the repository limit warning.

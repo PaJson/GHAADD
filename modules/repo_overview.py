@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Callable, Mapping, Optional
+from typing import Any, Callable, Collection, Mapping, Optional
 
 STATUS_QUEUED = "Queued"
 STATUS_WAITING = "Waiting"
@@ -37,6 +37,7 @@ class RepoRow:
     files: str  # files held for the latest release: downloaded + already-present; "n / total" while incomplete
     limit: str
     last_activity: float  # epoch seconds; 0 = never worked on
+    limit_warning: bool = False  # a folder-limit warning is on record (Folder limits tab)
 
 
 def format_timestamp(epoch: Optional[float]) -> str:
@@ -85,12 +86,14 @@ def build_rows(
     now: float,
     intervals_for: Callable[[Mapping[str, Any]], int],
     running_repo: Optional[str] = None,
+    limit_warned: Collection[str] = frozenset(),
 ) -> list[RepoRow]:
     """Return table rows, most recently worked-on first, then by folder name.
 
     `summaries` is keyed by lower-cased owner/repo. `intervals_for(entry)` returns
     how many recheck steps the repo has (own list or the global default).
     `running_repo` is the owner/repo the daemon is processing right now, if any.
+    `limit_warned` holds the lower-cased names that have a folder-limit warning on record.
     """
     running_key = running_repo.lower() if running_repo else None
     rows: list[RepoRow] = []
@@ -124,6 +127,7 @@ def build_rows(
                 files=files,
                 limit=str(entry.get("limit", "")),
                 last_activity=float(summary.get("last_activity") or 0) if summary else 0.0,
+                limit_warning=repo.lower() in limit_warned,
             )
         )
 

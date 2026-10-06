@@ -16,7 +16,7 @@ from modules.config_manager import (
     load_config,
 )
 from email.utils import parsedate_tz, mktime_tz
-from modules.lifecycle_logger import log_warning
+from modules.lifecycle_logger import clear_limit_warnings, log_warning, repos_with_limit_warnings
 from modules.mapping_manager import (
     build_default_foldername,
     get_repository_limit_release_type_folders,
@@ -281,10 +281,52 @@ def _compute_directory_size_bytes(path: str) -> int:
     return total_size
 
 
+def _clear_resolved_limit_warnings(repo: Optional[str], reason: str) -> None:
+    """Drop the stored folder-limit warnings of a repository that is no longer over its limit."""
+    if not repo:
+        return
+    removed = clear_limit_warnings(repo)
+    if removed:
+        print(f"   ✅ {repo} is within its folder limit again ({reason}); cleared {removed} old warning(s).")
+
+
+def clear_all_resolved_limit_warnings() -> int:
+    """Re-check every repository that has folder-limit warnings on record and clear the resolved ones.
+
+    Called once per poll cycle, so cleaning a folder up clears its warning without waiting for the
+    repository's next release. A repository whose folder cannot be found keeps its warnings.
+    """
+    warned = repos_with_limit_warnings()
+    if not warned:
+        return 0
+    cleared = 0
+    for entry in load_mapping().get("repositories", []):
+        repo = str(entry.get("name") or "").strip()
+        if not repo or repo.lower() not in warned:
+            continue
+        folder_limit = _resolve_repository_limit(repo)
+        if folder_limit > 0:
+            base_dir, uses_mapping, _warning = _resolve_finalized_base_directory(repo, "")
+            if not uses_mapping or not os.path.isdir(base_dir):
+                continue
+            count = _count_repository_release_folders(base_dir, _resolve_tracked_release_type_folders(repo))
+            if count > folder_limit:
+                continue
+            reason = f"{count} folder(s), limit {folder_limit}"
+        else:
+            reason = "its limit is switched off"
+        before = clear_limit_warnings(repo)
+        if before:
+            cleared += before
+            print(f"   ✅ {repo} is within its folder limit again ({reason}); cleared {before} old warning(s).")
+    return cleared
+
+
 def _warn_if_destination_limit_exceeded(repo: Optional[str], repo_destination_root: str) -> None:
     """Emit warning when repository destination exceeds configured folder limit."""
     folder_limit = _resolve_repository_limit(repo)
     if folder_limit <= 0:
+        _clear_resolved_limit_warnings(repo, "its limit is switched off")
         return
 
     tracked_release_type_folders = _resolve_tracked_release_type_folders(repo)
@@ -293,6 +335,7 @@ def _warn_if_destination_limit_exceeded(repo: Optional[str], repo_destination_ro
         tracked_release_type_folders,
     )
     if release_folder_count <= folder_limit:
+        _clear_resolved_limit_warnings(repo, f"{release_folder_count} folder(s), limit {folder_limit}")
         return
 
     repo_label = str(repo or "unknown")

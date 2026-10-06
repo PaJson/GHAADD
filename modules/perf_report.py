@@ -155,6 +155,7 @@ def collect(repeat: int = DEFAULT_REPEAT) -> dict[str, Any]:
 
     def table_cold() -> Any:
         gui_data._summaries_cache.invalidate()
+        gui_data._limit_cache.invalidate()
         return gui_data.load_repo_table()
 
     add("GUI data", "Mappings table rows (changed database)", table_cold)
@@ -163,6 +164,13 @@ def collect(repeat: int = DEFAULT_REPEAT) -> dict[str, Any]:
         lambda: gui_data.StatusFeed(store=_MemoryStore()).refresh())
     add("GUI data", "status tabs (unchanged database)",
         lambda: _lazy(keep, "feed", lambda: gui_data.StatusFeed(store=_MemoryStore())).refresh())
+
+    def tabs_after_change() -> Any:
+        feed = _lazy(keep, "changed_feed", lambda: gui_data.StatusFeed(store=_MemoryStore()))
+        feed._signature = None  # as if state.db had just been written to: the full re-check runs
+        return feed.refresh()
+
+    add("GUI data", "status tabs (database changed, nothing new)", tabs_after_change)
     add("GUI data", "unmapped list",
         lambda: _lazy(keep, "feed", lambda: gui_data.StatusFeed(store=_MemoryStore())).unmapped())
 

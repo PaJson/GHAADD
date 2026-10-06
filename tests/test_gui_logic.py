@@ -306,6 +306,19 @@ class RepoJobSummaryTests(unittest.TestCase):
         failed = summaries["other/failed"]
         self.assertEqual((failed["latest_status"], failed["pending_next_check"]), ("FAILED", None))
 
+    def test_repos_with_a_folder_limit_warning_are_found(self) -> None:
+        db_manager.insert_lifecycle_event(
+            self.connection, "WARNING", "Folder limit warning: Owner/Repo currently has 30 folder(s) in 'K:/x' (limit=25).",
+            category="LIMIT",
+        )
+        db_manager.insert_lifecycle_event(self.connection, "WARNING", "a", category="API", repo="o/other")
+        self.assertEqual(db_manager.get_repos_with_limit_warnings(self.connection), {"owner/repo"})
+
+    def test_rows_flag_the_repositories_with_a_limit_warning(self) -> None:
+        entries = [{"name": "Owner/Repo", "limit": 25}, {"name": "o/other", "limit": 5}]
+        rows = repo_overview.build_rows(entries, {}, 0.0, lambda entry: 5, limit_warned={"owner/repo"})
+        self.assertEqual({row.repo: row.limit_warning for row in rows}, {"Owner/Repo": True, "o/other": False})
+
     def test_empty_database_gives_empty_summary(self) -> None:
         self.assertEqual(db_manager.get_repo_job_summaries(self.connection), {})
 

@@ -18,7 +18,7 @@ callables, which keeps it testable.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any, Callable, Iterable, Mapping, Optional, Protocol
 
@@ -44,6 +44,7 @@ class TabDef:
     counter: bool = True  # show an unread count in the title
     type_source: str = TYPE_CATEGORY
     type_text: str = ""  # used when type_source == TYPE_FIXED
+    latest_per_repo: bool = False  # one row per repository (the newest), older ones are only counted
 
 
 # Adding a tab is adding a definition here.
@@ -61,6 +62,7 @@ TAB_DEFS: tuple[TabDef, ...] = (
         event_types=("WARNING",),
         categories=("LIMIT",),
         counter=False,  # repeats while a folder stays over its limit: a list to consult, not an inbox
+        latest_per_repo=True,  # only the newest warning per repository says anything new
         type_source=TYPE_FIXED,
         type_text="Limit",
     ),
@@ -75,6 +77,7 @@ class StatusRow:
     repo: str
     kind: str
     message: str
+    earlier: int = 0  # older rows of the same repository folded into this one
 
 
 @dataclass(frozen=True)
@@ -165,6 +168,7 @@ class StatusTabsModel:
         store: SeenStore,
         known_repos: Callable[[], Mapping[str, str]] = lambda: {},
         limit: int = DEFAULT_ROW_LIMIT,
+        existing_ids: Optional[Callable[[list[int]], set[int]]] = None,
     ) -> None:
         self._defs = {tab.key: tab for tab in defs}
         self._fetch = fetch
@@ -172,6 +176,7 @@ class StatusTabsModel:
         self._store = store
         self._known_repos = known_repos
         self._limit = limit
+        self._existing_ids = existing_ids  # which of these event ids still exist (None = never check)
         self._states = {key: _TabState() for key, tab in self._defs.items() if tab.kind == KIND_EVENTS}
         self._seen: dict[str, int] = {}
         self._started = False
@@ -187,6 +192,11 @@ class StatusTabsModel:
         known = self._known_repos()
         changed: set[str] = set()
         for key, state in self._states.items():
+            if self._existing_ids is not None and state.rows:
+                alive = self._existing_ids([row.id for row in state.rows])  # the daemon or the CLI may have deleted some
+                if len(alive) != len(state.rows):
+                    state.rows = [row for row in state.rows if row.id in alive]
+                    changed.add(key)
             raw = self._fetch(self._defs[key], state.newest_id, self._limit)
             if not raw:
                 continue
@@ -197,7 +207,31 @@ class StatusTabsModel:
         return changed
 
     def rows(self, key: str) -> list[StatusRow]:
-        return list(self._states[key].rows)
+        rows = list(self._states[key].rows)
+        if not self._defs[key].latest_per_repo:
+            return rows
+        newest: dict[str, StatusRow] = {}
+        older: dict[str, int] = {}
+        for row in rows:  # newest first, so the first one seen per repository is the newest
+            if not row.repo:
+                continue
+            if row.repo in newest:
+                older[row.repo] = older.get(row.repo, 0) + 1
+            else:
+                newest[row.repo] = row
+        folded = []
+        for row in rows:
+            if not row.repo:
+                folded.append(row)
+            elif newest[row.repo] is row:
+                count = older.get(row.repo, 0)
+                folded.append(replace(row, earlier=count, kind=f"{row.kind} (+{count} earlier)" if count else row.kind))
+        return folded
+
+    def drop_repo(self, key: str, repo: str) -> None:
+        """Forget one repository's rows in a tab (its events were deleted)."""
+        state = self._states[key]
+        state.rows = [row for row in state.rows if row.repo != repo]
 
     def seen_id(self, key: str) -> int:
         return self._seen.get(key, 0)

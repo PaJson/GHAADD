@@ -63,7 +63,8 @@ class CollectTests(PerfReportTestCase):
             self.assertIn(key, report)
         names = {timing["name"] for timing in report["timings"]}
         for expected in ("load config.json", "queue summary per repo", "Mappings table rows (changed database)",
-                         "status tabs (unchanged database)", "GUI daemon snapshot (every 1 s tick)"):
+                         "status tabs (unchanged database)", "status tabs (database changed, nothing new)",
+                         "GUI daemon snapshot (every 1 s tick)"):
             self.assertIn(expected, names)
         self.assertTrue(all("median_ms" in t for t in report["timings"]), [t for t in report["timings"] if "error" in t])
         json.dumps(report)  # --json must work

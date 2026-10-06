@@ -1,3 +1,4 @@
+import re
 import os
 import sqlite3
 from typing import Iterable, Optional
@@ -610,6 +611,42 @@ def get_next_pending_job(connection):
     ).fetchone()
 
 
+_LIMIT_WARNING_REPO = re.compile(r"Folder limit warning: (\S+) currently has ")
+
+
+def purge_limit_warnings_for_repo(connection, repo, dry_run=False):
+    """Delete the folder-limit warnings written for one repository; returns the count.
+
+    The rows hold the repository only in their text, so they are matched on the message's fixed
+    start (case-insensitive, no wildcard characters involved: repo names contain "_").
+    """
+    prefix = f"Folder limit warning: {repo} currently has "
+    where = "category = 'LIMIT' AND LOWER(SUBSTR(message, 1, ?)) = LOWER(?)"
+    params = (len(prefix), prefix)
+    if dry_run:
+        return int(connection.execute(f"SELECT COUNT(*) FROM lifecycle_events WHERE {where}", params).fetchone()[0])
+    cursor = connection.execute(f"DELETE FROM lifecycle_events WHERE {where}", params)
+    connection.commit()
+    return cursor.rowcount
+
+
+def get_repos_with_limit_warnings(connection):
+    """Lower-cased owner/repo names that have at least one folder-limit warning stored (read-only).
+
+    The warning rows carry the repository only in their text ("Folder limit warning: owner/repo currently
+    has ..."), so it is read from there.
+    """
+    rows = connection.execute(
+        "SELECT DISTINCT message FROM lifecycle_events WHERE category = 'LIMIT' AND message IS NOT NULL"
+    ).fetchall()
+    found = set()
+    for (message,) in rows:
+        match = _LIMIT_WARNING_REPO.match(message)
+        if match:
+            found.add(match.group(1).lower())
+    return found
+
+
 def get_repo_job_summaries(connection):
     """Return one read-only job_queue summary per repo, keyed by lower-cased owner/repo.
 
@@ -1209,6 +1246,19 @@ def get_lifecycle_events(connection, limit: Optional[int] = 20, event_type=None,
         {limit_clause}
     """
     return connection.execute(query, params).fetchall()
+
+
+def get_existing_event_ids(connection, ids):
+    """The subset of `ids` that still exists in lifecycle_events (read-only primary-key lookup)."""
+    ids = [int(i) for i in ids]
+    found = set()
+    for start in range(0, len(ids), 500):
+        chunk = ids[start:start + 500]
+        rows = connection.execute(
+            f"SELECT id FROM lifecycle_events WHERE id IN ({','.join('?' * len(chunk))})", chunk
+        ).fetchall()
+        found.update(row[0] for row in rows)
+    return found
 
 
 def _tab_event_filter(event_types, categories, exclude_categories):

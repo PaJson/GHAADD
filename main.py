@@ -24,7 +24,7 @@ from modules.cli_commands import handle_cli_command, parse_cli_args
 from modules.daemon_control import ControlWatcher, reset_log_override_on_startup, reset_paused_on_startup
 from modules.daemon_lock import acquire_daemon_lock, update_daemon_status
 from modules.db_manager import get_next_pending_job, open_database
-from modules.asset_downloader import download_release
+from modules.asset_downloader import clear_all_resolved_limit_warnings, download_release
 from modules.dry_run_mode import is_dry_run, set_dry_run
 from modules.lifecycle_logger import log_cycle_summary
 from modules.log_files import RollingLogFile
@@ -269,6 +269,11 @@ def run_polling_loop(interval_seconds, jitter_min_seconds, jitter_max_seconds, t
             if watcher.stop_requested:
                 print("⏹️  Stop requested; exiting after the work in progress.")
                 return
+
+            try:
+                clear_all_resolved_limit_warnings()  # a cleaned-up folder clears its own warnings
+            except Exception as exc:  # housekeeping must never stop the daemon
+                print(f"   ⚠️ Could not re-check folder-limit warnings: {exc}")
 
             if destination_check_every_n_polls > 0 and cycle % destination_check_every_n_polls == 0:
                 print(f"🔎 Periodic check ({destination_check_every_n_polls}-poll interval): verifying mapped destinations still exist...")
