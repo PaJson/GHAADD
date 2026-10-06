@@ -11,7 +11,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Optional
 
-from modules import config_manager, db_manager, mapping_manager, repo_overview
+from modules import config_manager, daemon_lock, db_manager, mapping_manager, repo_overview
+from modules.file_cache import StatCache
 
 
 @dataclass
@@ -32,6 +33,25 @@ def _recheck_step_count(entry: Mapping[str, Any], default_count: int) -> int:
     return default_count
 
 
+def _load_summaries() -> dict[str, Any]:
+    connection = db_manager.open_database()
+    try:
+        return db_manager.get_repo_job_summaries(connection)
+    finally:
+        connection.close()
+
+
+def _state_db_files() -> list[str]:
+    path = db_manager.get_state_db_path()
+    return [path, f"{path}-wal"]  # in WAL mode the daemon's commits land in the -wal file first
+
+
+# The queue summary (the costly part of a refresh) only changes when the daemon writes to
+# state.db, so it is recomputed only when the db or its WAL file changed (or after 30 s as a
+# safety net). Rows are still rebuilt every time: Queued vs Waiting depends on the clock.
+_summaries_cache: StatCache[dict[str, Any]] = StatCache(_state_db_files, _load_summaries, max_age=30.0)
+
+
 def load_repo_table(now: Optional[float] = None) -> RepoTable:
     """Load rows for the Mappings table, most recently worked-on repository first."""
     now = time.time() if now is None else now
@@ -41,13 +61,16 @@ def load_repo_table(now: Optional[float] = None) -> RepoTable:
     summaries: dict[str, Any] = {}
     db_error: Optional[str] = None
     try:
-        connection = db_manager.open_database()
-        try:
-            summaries = db_manager.get_repo_job_summaries(connection)
-        finally:
-            connection.close()
+        summaries = _summaries_cache.get()
     except Exception as exc:  # a locked/corrupt db must not blank the mapping list
         db_error = f"state.db unavailable: {exc}"
+
+    running_repo: Optional[str] = None
+    try:
+        current_job = daemon_lock.get_daemon_status()["current_job"]
+        running_repo = current_job.get("repo") if isinstance(current_job, dict) else None
+    except Exception:  # a status hiccup must not blank the mapping list
+        pass
 
     entries = {str(e.get("name") or "").strip(): e for e in mapping["repositories"] if e.get("name")}
     rows = repo_overview.build_rows(
@@ -55,6 +78,7 @@ def load_repo_table(now: Optional[float] = None) -> RepoTable:
         summaries,
         now,
         lambda entry: _recheck_step_count(entry, len(default_recheck)),
+        running_repo=running_repo,
     )
     return RepoTable(rows=rows, entries=entries, default_recheck=default_recheck, db_error=db_error)
 

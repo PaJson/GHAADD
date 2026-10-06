@@ -9,6 +9,8 @@ from typing import Optional, TypedDict
 from filelock import FileLock, Timeout
 
 _LOCK_FILE_NAME = "ghaadd.lock"
+# True only inside acquire_daemon_lock(): status fields may be published only by the lock holder.
+_lock_held = False
 _STATUS_FILE_NAME = "ghaadd.daemon.status.json"
 
 
@@ -19,6 +21,8 @@ class DaemonStatus(TypedDict):
     paused: bool
     next_poll_at: Optional[float]
     last_forced_poll_handled: Optional[float]
+    current_job: Optional[dict]  # {"repo", "tag", "since"} while a job is being processed
+    config_fingerprint: Optional[str]  # config_manager.get_config_fingerprint() the daemon started with
 
 
 def get_daemon_lock_path() -> str:
@@ -114,6 +118,8 @@ def get_daemon_status() -> DaemonStatus:
             "paused": False,
             "next_poll_at": None,
             "last_forced_poll_handled": None,
+            "current_job": None,
+            "config_fingerprint": None,
         }
 
     payload = _read_status_payload()
@@ -124,7 +130,26 @@ def get_daemon_status() -> DaemonStatus:
         "paused": payload.get("paused") is True,
         "next_poll_at": payload.get("next_poll_at"),
         "last_forced_poll_handled": payload.get("last_forced_poll_handled"),
+        "current_job": payload.get("current_job") if isinstance(payload.get("current_job"), dict) else None,
+        "config_fingerprint": payload.get("config_fingerprint") if isinstance(payload.get("config_fingerprint"), str) else None,
     }
+
+
+@contextmanager
+def publishing_current_job(repo: str, tag: str):
+    """Publish the job being processed so the GUI can show it as "Running".
+
+    A no-op unless this process holds the daemon lock (tests, dry-run and
+    read-only commands never touch the status file).
+    """
+    if not _lock_held:
+        yield
+        return
+    update_daemon_status(current_job={"repo": repo, "tag": tag, "since": time.time()})
+    try:
+        yield
+    finally:
+        update_daemon_status(current_job=None)
 
 
 @contextmanager
@@ -145,9 +170,12 @@ def acquire_daemon_lock():
         )
         sys.exit(1)
 
+    global _lock_held
     _write_daemon_status()
+    _lock_held = True
     try:
         yield
     finally:
+        _lock_held = False
         _clear_daemon_status()
         lock.release()

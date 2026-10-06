@@ -4,6 +4,7 @@ import time
 import os
 
 from modules.config_manager import get_folder_settings, get_max_emails_to_process, get_recheck_intervals_minutes
+from modules.daemon_lock import publishing_current_job
 from modules.dry_run_mode import is_dry_run
 from modules.db_manager import (
     enqueue_job,
@@ -886,7 +887,8 @@ def process_selected_pending_jobs(connection, github_token: Optional[str], job_i
 
         result: DownloadReleaseResult
         try:
-            result = download_release(repo, tag, release_type, include_stats=True)
+            with publishing_current_job(repo, tag):
+                result = download_release(repo, tag, release_type, include_stats=True)
         except Exception as exc:
             print(f"   ❌ Processor error while downloading: {exc}")
             result = {
@@ -1216,7 +1218,8 @@ def process_queue_once(
 
         result: DownloadReleaseResult
         try:
-            result = download_release(repo, tag, release_type, include_stats=True)
+            with publishing_current_job(repo, tag):
+                result = download_release(repo, tag, release_type, include_stats=True)
         except Exception as exc:
             print(f"   ❌ Processor error while downloading: {exc}")
             result = {

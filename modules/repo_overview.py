@@ -62,8 +62,13 @@ def format_files(summary: Optional[Mapping[str, Any]]) -> str:
     return str(accounted) if accounted >= total else f"{accounted} / {total}"
 
 
-def derive_status(paused: bool, summary: Optional[Mapping[str, Any]], now: float) -> str:
-    """Paused wins; else Queued/Waiting from a pending job, Failed from the latest job, else Idle."""
+def derive_status(
+    paused: bool, summary: Optional[Mapping[str, Any]], now: float, running: bool = False
+) -> str:
+    """Running (job in progress) wins, then Paused; else Queued/Waiting from a pending job,
+    Failed from the latest job, else Idle."""
+    if running:
+        return STATUS_RUNNING
     if paused:
         return STATUS_PAUSED
     if summary:
@@ -79,12 +84,15 @@ def build_rows(
     summaries: Mapping[str, Mapping[str, Any]],
     now: float,
     intervals_for: Callable[[Mapping[str, Any]], int],
+    running_repo: Optional[str] = None,
 ) -> list[RepoRow]:
     """Return table rows, most recently worked-on first, then by folder name.
 
     `summaries` is keyed by lower-cased owner/repo. `intervals_for(entry)` returns
     how many recheck steps the repo has (own list or the global default).
+    `running_repo` is the owner/repo the daemon is processing right now, if any.
     """
+    running_key = running_repo.lower() if running_repo else None
     rows: list[RepoRow] = []
     for entry in mapping_entries:
         repo = str(entry.get("name") or "").strip()
@@ -92,7 +100,7 @@ def build_rows(
             continue
         summary = summaries.get(repo.lower())
         paused = entry.get("paused") is True
-        status = derive_status(paused, summary, now)
+        status = derive_status(paused, summary, now, running=repo.lower() == running_key)
 
         pending_check = summary.get("pending_next_check") if summary else None
         if summary and pending_check is not None:

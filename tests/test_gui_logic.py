@@ -218,6 +218,8 @@ class OverviewTests(unittest.TestCase):
         self.assertEqual(derive(False, self.summary(latest_status="FAILED"), self.NOW), "Failed")
         self.assertEqual(derive(False, self.summary(), self.NOW), "Idle")
         self.assertEqual(derive(False, None, self.NOW), "Idle")
+        self.assertEqual(derive(True, self.summary(), self.NOW, running=True), "Running")
+        self.assertEqual(derive(False, None, self.NOW, running=True), "Running")
 
     def test_rows_order_by_recent_activity_then_folder_name(self) -> None:
         entries = [
@@ -234,6 +236,13 @@ class OverviewTests(unittest.TestCase):
         rows = repo_overview.build_rows(entries, summaries, self.NOW, lambda entry: 5)
 
         self.assertEqual([row.repo for row in rows], ["o/new", "o/old", "o/never-a", "o/never-b"])
+
+    def test_running_repo_is_matched_case_insensitively(self) -> None:
+        entries = [{"name": "Owner/Repo", "foldername": "A"}, {"name": "o/other", "foldername": "B"}]
+
+        rows = repo_overview.build_rows(entries, {}, self.NOW, lambda entry: 5, running_repo="owner/repo")
+
+        self.assertEqual({row.repo: row.status for row in rows}, {"Owner/Repo": "Running", "o/other": "Idle"})
 
     def test_row_values_for_a_waiting_repo(self) -> None:
         entries = [{"name": "Owner/Repo", "foldername": "", "destination": "K:\\Apps", "limit": 10}]

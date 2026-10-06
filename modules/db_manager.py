@@ -261,6 +261,9 @@ def open_database():
     }
     if "log_override" not in control_columns:
         connection.execute("ALTER TABLE daemon_control ADD COLUMN log_override INTEGER")
+    # Epoch stamp of the latest graceful-stop request (GUI/CLI --stop).
+    if "stop_request" not in control_columns:
+        connection.execute("ALTER TABLE daemon_control ADD COLUMN stop_request REAL")
 
     connection.commit()
     return connection
@@ -1363,3 +1366,27 @@ def set_daemon_poll_now_request(connection, stamp: float) -> float:
     connection.commit()
     return stored
 
+
+def get_daemon_stop_request(connection):
+    """Return the epoch stamp of the latest graceful-stop request, or None when never requested."""
+    row = connection.execute("SELECT stop_request FROM daemon_control WHERE id = 1").fetchone()
+    return None if row is None else row["stop_request"]
+
+
+def set_daemon_stop_request(connection, stamp: float) -> float:
+    """Store a stop request stamp, guaranteed to differ from the previous one. Returns the stored stamp."""
+    connection.execute("INSERT OR IGNORE INTO daemon_control (id) VALUES (1)")
+    connection.execute(
+        """
+        UPDATE daemon_control
+        SET stop_request = CASE
+            WHEN stop_request = ? THEN ? + 0.000001
+            ELSE ?
+        END
+        WHERE id = 1
+        """,
+        (stamp, stamp, stamp),
+    )
+    stored = connection.execute("SELECT stop_request FROM daemon_control WHERE id = 1").fetchone()[0]
+    connection.commit()
+    return stored

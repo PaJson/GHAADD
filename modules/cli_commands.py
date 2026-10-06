@@ -5,7 +5,7 @@ import sqlite3
 import sys
 from typing import Callable
 
-from modules.daemon_control import request_poll_now, set_log_override, set_paused
+from modules.daemon_control import request_poll_now, request_stop, set_log_override, set_paused
 from modules.daemon_lock import is_daemon_running
 from modules.db_manager import (
     get_jobs_by_ids,
@@ -82,6 +82,7 @@ def parse_cli_args(args: list[str], version: str) -> argparse.Namespace:
     control_group = parser.add_argument_group("running-daemon control options")
     control_group.add_argument("--pause", action="store_true", help="Pause polling in the running daemon (the countdown freezes).")
     control_group.add_argument("--resume", action="store_true", help="Resume polling in the running daemon.")
+    control_group.add_argument("--stop", action="store_true", help="Stop the running polling daemon gracefully (the job in progress finishes first).")
     control_group.add_argument("--poll-now", action="store_true", help="Make the running daemon poll right away (resets its countdown).")
 
     control_group.add_argument("--log-on", action="store_true", help="Start writing terminal output to a new .log file in the running daemon (until it stops or --log-off).")
@@ -266,7 +267,10 @@ def handle_cli_command(parsed_args: argparse.Namespace, run_smoke_tests: Callabl
 
         return True
 
-    if parsed_args.pause or parsed_args.resume or parsed_args.poll_now or parsed_args.log_on or parsed_args.log_off:
+    if (
+        parsed_args.pause or parsed_args.resume or parsed_args.poll_now or parsed_args.stop
+        or parsed_args.log_on or parsed_args.log_off
+    ):
         if parsed_args.pause and parsed_args.resume:
             print("Control option error: --pause and --resume cannot be combined.", file=sys.stderr)
             return True
@@ -295,6 +299,9 @@ def handle_cli_command(parsed_args: argparse.Namespace, run_smoke_tests: Callabl
             if parsed_args.poll_now:
                 request_poll_now()
                 print("Forced poll requested. It runs when the daemon is not paused.")
+            if parsed_args.stop:
+                request_stop()
+                print("Stop requested. The daemon exits after the job in progress finishes.")
         except sqlite3.OperationalError as error:
             print(f"Could not update the control state ({error}); try again.", file=sys.stderr)
         return True

@@ -13,12 +13,13 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import time
 import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import filedialog, messagebox, ttk
 from typing import Any, Callable, Literal, Optional
 
-from modules import config_manager, gui_data, gui_forms, gui_state, mapping_manager
+from modules import config_manager, gui_daemon, gui_data, gui_forms, gui_state, mapping_manager
 from modules.app_info import APP_NAME, __version__
 
 Anchor = Literal["nw", "n", "ne", "w", "center", "e", "sw", "s", "se"]
@@ -29,6 +30,12 @@ ICON_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
 WINDOWS_APP_ID = "GHAADD.GUI"  # own taskbar identity, so the taskbar shows our icon instead of Python's
 REFRESH_INTERVAL_MS = 3000
 STATUS_MESSAGE_MS = 6000
+DAEMON_REFRESH_INTERVAL_MS = 1000
+RESTART_HINT = (
+    "Settings changed since the daemon started.\n"
+    "Click to restart it: the job in progress finishes, the daemon stops,\n"
+    "then starts again with the new settings."
+)
 DEFAULT_STATUS_TEXT = "config.json · mapping.json · state.db"
 
 COLOR_ERROR = "#b3261e"
@@ -142,36 +149,74 @@ def fit_text(text: str, max_pixels: int, measure: Callable[[str], int]) -> str:
 
 
 class ControlBar(ttk.Frame):
-    """Daemon status indicator and controls (static until step 3)."""
+    """Daemon status indicator and controls; MainWindow feeds it a gui_daemon.ControlBarView."""
+
+    DOT_COLORS = {
+        gui_daemon.DOT_RUNNING: "#2e9e4f",
+        gui_daemon.DOT_PAUSED: "#d89a00",
+        gui_daemon.DOT_STOPPED: "#8a8a8a",
+    }
 
     def __init__(self, master: tk.Misc) -> None:
         super().__init__(master, padding=(10, 8))
 
-        self.status_dot = tk.Label(self, text="●", fg="#2e9e4f", font=("Segoe UI", 14))
+        self.status_dot = tk.Label(self, text="\u25cf", fg=self.DOT_COLORS[gui_daemon.DOT_STOPPED], font=("Segoe UI", 14))
         self.status_dot.grid(row=0, column=0, padx=(0, 4))
-        self.status_label = ttk.Label(self, text="Daemon running (PID 12345)")
+        self.status_label = ttk.Label(self, text="Checking daemon\u2026")
         self.status_label.grid(row=0, column=1, sticky="w")
-        self.countdown_label = ttk.Label(self, text="Next poll in 04:32", foreground=COLOR_MUTED)
+        self.countdown_label = ttk.Label(self, text="", foreground=COLOR_MUTED)
         self.countdown_label.grid(row=0, column=2, padx=(16, 0), sticky="w")
 
         self.columnconfigure(3, weight=1)  # spacer pushes buttons right
 
         buttons = ttk.Frame(self)
         buttons.grid(row=0, column=4, sticky="e")
-        self.start_button = ttk.Button(buttons, text="Start", state="disabled")
+        self.start_button = ttk.Button(buttons, text="Start")
         self.stop_button = ttk.Button(buttons, text="Stop")
         self.pause_button = ttk.Button(buttons, text="Pause")
         self.poll_button = ttk.Button(buttons, text="Poll now")
         self.detailed_log = tk.BooleanVar(value=False)
         self.log_check = ttk.Checkbutton(buttons, text="Detailed log", variable=self.detailed_log)
-        self.settings_button = ttk.Button(buttons, text="Settings…")
+        self.restart_button = ttk.Button(buttons, text="\u21bb Restart")
+        self.settings_button = ttk.Button(buttons, text="Settings\u2026")
+        self._restart_tip = Tooltip(self.restart_button)
+        self.restart_button.bind("<Enter>", self._show_restart_tip)
+        self.restart_button.bind("<Leave>", lambda _event: self._restart_tip.hide())
+        self.restart_button.bind("<ButtonPress>", lambda _event: self._restart_tip.hide())
 
         for column, widget in enumerate(
             (self.start_button, self.stop_button, self.pause_button, self.poll_button)
         ):
             widget.grid(row=0, column=column, padx=(0, 6))
         self.log_check.grid(row=0, column=4, padx=(6, 12))
-        self.settings_button.grid(row=0, column=5)
+        self.restart_button.grid(row=0, column=5, padx=(0, 6))
+        self.settings_button.grid(row=0, column=6)
+        self.apply_view(gui_daemon.build_view(gui_daemon.DaemonSnapshot(), 0.0))
+
+    def _show_restart_tip(self, event: tk.Event) -> None:  # type: ignore[type-arg]
+        self._restart_tip.schedule(RESTART_HINT, event.x_root, event.y_root)
+
+    def apply_view(self, view: gui_daemon.ControlBarView) -> None:
+        """Show the given status text/colors and enable only the buttons that make sense."""
+        self.status_dot.configure(fg=self.DOT_COLORS[view.dot])
+        self.status_label.configure(text=view.status_text)
+        self.countdown_label.configure(text=view.countdown_text)
+        self.pause_button.configure(text=view.pause_text)
+        for widget, enabled in (
+            (self.start_button, view.start_enabled),
+            (self.stop_button, view.stop_enabled),
+            (self.pause_button, view.pause_enabled),
+            (self.poll_button, view.poll_enabled),
+            (self.log_check, view.log_enabled),
+        ):
+            widget.state(["!disabled"] if enabled else ["disabled"])
+        self.detailed_log.set(view.log_checked)
+        if view.restart_visible:
+            self.restart_button.grid()  # restores the remembered grid position
+            self.restart_button.state(["!disabled"] if view.restart_enabled else ["disabled"])
+        else:
+            self.restart_button.grid_remove()
+            self._restart_tip.hide()
 
 
 class AddRepositoryDialog(tk.Toplevel):
@@ -865,9 +910,21 @@ class MainWindow(tk.Tk):
         self._apply_theme(theme)
         self._status_reset_job: Optional[str] = None
 
+        self._snapshot = gui_daemon.DaemonSnapshot()
+        self._reader = gui_daemon.SnapshotReader()
+        self._starting_since: Optional[float] = None  # set by Start/Stop until the daemon appears/disappears
+        self._stopping_since: Optional[float] = None
+        self._restart_pending = False  # a restart was requested: start again once the daemon has exited
+
         self.control_bar = ControlBar(self)
         self.control_bar.pack(fill="x")
         self.control_bar.settings_button.configure(command=self._open_settings)
+        self.control_bar.start_button.configure(command=self._on_start)
+        self.control_bar.stop_button.configure(command=self._on_stop)
+        self.control_bar.pause_button.configure(command=self._on_pause)
+        self.control_bar.poll_button.configure(command=self._on_poll_now)
+        self.control_bar.log_check.configure(command=self._on_log_toggle)
+        self.control_bar.restart_button.configure(command=self._on_restart)
         ttk.Separator(self).pack(fill="x")
 
         self.status_bar = ttk.Label(self, text=DEFAULT_STATUS_TEXT, anchor="w", padding=(10, 3))
@@ -883,7 +940,11 @@ class MainWindow(tk.Tk):
         for title in STATUS_TABS:
             self.notebook.add(StatusTab(self.notebook), text=title)
 
+        self.notebook.bind("<<NotebookTabChanged>>", lambda _event: self._refresh_mappings_if_visible())
+        self.bind("<Map>", self._on_map)
         self._tick_job: Optional[str] = self.after(REFRESH_INTERVAL_MS, self._tick)
+        self._daemon_job: Optional[str] = None
+        self._update_daemon_view()
 
     def set_status(self, text: str) -> None:
         """Show a message in the status bar for a few seconds, then restore the default."""
@@ -896,11 +957,123 @@ class MainWindow(tk.Tk):
         self._status_reset_job = None
         self.status_bar.configure(text=DEFAULT_STATUS_TEXT)
 
+    def _mappings_visible(self) -> bool:
+        """True when somebody can see the Mappings table (window not minimized, its tab selected)."""
+        return self.state() != "iconic" and self.notebook.select() == str(self.mappings_tab)
+
+    def _refresh_mappings_if_visible(self) -> None:
+        if self._mappings_visible():
+            self.mappings_tab.refresh()
+
+    def _on_map(self, event: tk.Event) -> None:  # type: ignore[type-arg]
+        """The window was restored: catch up immediately instead of waiting for the next tick."""
+        if event.widget is self:
+            self._refresh_mappings_if_visible()
+            self._update_daemon_view()
+
     def _tick(self) -> None:
         try:
-            self.mappings_tab.refresh()
+            self._refresh_mappings_if_visible()
         finally:
             self._tick_job = self.after(REFRESH_INTERVAL_MS, self._tick)
+
+    # ----- daemon status and control -----
+
+    def _daemon_action_pending(self) -> bool:
+        return bool(self._restart_pending or self._starting_since or self._stopping_since)
+
+    def _update_daemon_view(self, force_control: bool = False) -> None:
+        """Read what the daemon publishes, update the control bar, and schedule the next look.
+
+        A minimized window is not looked at, so it is left alone (unless a Start/Stop/Restart is
+        in flight, which must keep running); the first look after restoring happens at once.
+        """
+        try:
+            if self.state() == "iconic" and not self._daemon_action_pending() and not force_control:
+                return
+            self._snapshot = self._reader.read(force_control=force_control)
+            now = time.time()
+            if self._snapshot.running:
+                self._starting_since = None
+                if self._restart_pending and not self._is_stopping(now):
+                    # The stop never completed (e.g. an older daemon ignores it): give up on the restart.
+                    self._restart_pending = False
+                    self.set_status("The daemon did not stop, so it was not restarted.")
+            else:
+                self._stopping_since = None
+                if self._restart_pending:  # the old daemon has exited: bring up a new one
+                    self._restart_pending = False
+                    error = gui_daemon.do_start()
+                    self.set_status(error or "Daemon restarting with the current settings\u2026")
+                    if error is None:
+                        self._starting_since = now
+            self.control_bar.apply_view(
+                gui_daemon.build_view(self._snapshot, now, self._starting_since, self._stopping_since)
+            )
+        except Exception as exc:  # a status hiccup must never kill the GUI loop
+            self.control_bar.status_label.configure(text=f"Daemon status unavailable: {exc}")
+        finally:
+            if self._daemon_job is not None:
+                self.after_cancel(self._daemon_job)
+            self._daemon_job = self.after(DAEMON_REFRESH_INTERVAL_MS, self._update_daemon_view)
+
+    def _is_stopping(self, now: float) -> bool:
+        return self._stopping_since is not None and now - self._stopping_since < gui_daemon.STOPPING_TIMEOUT_SECONDS
+
+    def _report(self, error: Optional[str], success_text: str) -> bool:
+        """Show the outcome of a control action in the status bar; True when it worked."""
+        self.set_status(error or success_text)
+        self._update_daemon_view(force_control=True)  # we just changed something: read it back now
+        return error is None
+
+    def _on_start(self) -> None:
+        if self._report(gui_daemon.do_start(), "Starting the daemon\u2026"):
+            self._starting_since = time.time()
+            self._update_daemon_view()
+
+    def _on_stop(self) -> None:
+        if not messagebox.askyesno(
+            "Stop daemon",
+            "Stop the polling daemon?\n\nThe job in progress finishes first, then the daemon exits. "
+            "Use Start to run it again.",
+            parent=self,
+        ):
+            return
+        if self._report(gui_daemon.do_stop(), "Stop requested; the daemon exits after the current job."):
+            self._stopping_since = time.time()
+            self._restart_pending = False
+            self._update_daemon_view()
+
+    def _on_restart(self) -> None:
+        if not messagebox.askyesno(
+            "Restart daemon",
+            "Restart the polling daemon to apply the changed settings?\n\n"
+            "The job in progress finishes first, then the daemon stops and starts again.",
+            parent=self,
+        ):
+            return
+        if self._report(gui_daemon.do_stop(), "Restart requested; the daemon restarts after the current job."):
+            self._stopping_since = time.time()
+            self._restart_pending = True
+            self._update_daemon_view()
+
+    def _on_pause(self) -> None:
+        pausing = not self._snapshot.paused
+        self._report(
+            gui_daemon.do_set_paused(pausing),
+            "Pause requested; the countdown freezes." if pausing else "Resumed.",
+        )
+
+    def _on_poll_now(self) -> None:
+        self._report(gui_daemon.do_poll_now(), "Poll requested; it runs within a second.")
+
+    def _on_log_toggle(self) -> None:
+        wanted = bool(self.control_bar.detailed_log.get())  # the click has already flipped the box
+        if not self._report(
+            gui_daemon.do_set_log(wanted),
+            "Detailed log switched on (a new .log file)." if wanted else "Detailed log switched off.",
+        ):
+            self.control_bar.detailed_log.set(self._snapshot.log_on)  # show the real state again
 
     def _open_settings(self) -> None:
         SettingsDialog(self, self._after_settings_saved)
@@ -908,6 +1081,7 @@ class MainWindow(tk.Tk):
     def _after_settings_saved(self, message: str) -> None:
         self.set_status(message)
         self.mappings_tab.refresh()  # the default recheck shown in the editor may have changed
+        self._update_daemon_view()  # shows the Restart button right away when a running daemon is affected
 
     def _restore_window_state(self) -> None:
         """Apply the size/position saved in config.json (fitted to the screen), else the default."""
@@ -947,10 +1121,10 @@ class MainWindow(tk.Tk):
 
     def destroy(self) -> None:
         """Cancel pending timers first, so nothing fires into a window that is already gone."""
-        for job in (self._tick_job, self._status_reset_job):
+        for job in (self._tick_job, self._status_reset_job, self._daemon_job):
             if job is not None:
                 self.after_cancel(job)
-        self._tick_job = self._status_reset_job = None
+        self._tick_job = self._status_reset_job = self._daemon_job = None
         self.mappings_tab.shutdown()
         super().destroy()
 

@@ -1,4 +1,4 @@
-"""Control channel for a running daemon: pause/resume, forced polls, log switch.
+"""Control channel for a running daemon: pause/resume, forced polls, log switch, stop.
 
 The state lives in the single-row ``daemon_control`` table of ``state.db``
 (accessed through ``db_manager``). The GUI and CLI write it; the polling loop
@@ -13,40 +13,58 @@ later), so a clock stepping backwards cannot swallow a request.
 ``log_override`` switches terminal log mirroring on or off while the daemon
 runs: None follows ``terminal_log.enabled`` in config.json, True/False force it.
 It is a session setting, cleared when a daemon starts.
+
+``stop_request`` works like ``poll_now_request``: the daemon stops (gracefully:
+the running job finishes first) when it *differs* from the value the daemon saw
+at startup, so a request left over from an earlier run never stops a new one.
 """
 
 import sqlite3
 import time
 from contextlib import closing
-from typing import Callable, Literal, Optional, TypedDict
+from typing import Callable, Literal, NotRequired, Optional, TypedDict
 
 from modules.db_manager import (
     get_daemon_control,
+    get_daemon_stop_request,
     open_database,
     set_daemon_log_override,
     set_daemon_paused,
     set_daemon_poll_now_request,
+    set_daemon_stop_request,
 )
 
 DEFAULT_TICK_SECONDS = 1.0
 
-WaitResult = Literal["elapsed", "forced"]
+WaitResult = Literal["elapsed", "forced", "stop"]
 
 
 class ControlState(TypedDict):
     paused: bool
     poll_now_request: Optional[float]
     log_override: Optional[bool]
+    stop_request: NotRequired[Optional[float]]  # absent in states built by older callers/tests
 
 
 def _default_state() -> ControlState:
-    return {"paused": False, "poll_now_request": None, "log_override": None}
+    return {"paused": False, "poll_now_request": None, "log_override": None, "stop_request": None}
 
 
 def read_control_state(connection: sqlite3.Connection) -> ControlState:
     """Return the current control state (defaults until a row exists)."""
     paused, poll_now_request, log_override = get_daemon_control(connection)
-    return {"paused": paused, "poll_now_request": poll_now_request, "log_override": log_override}
+    return {
+        "paused": paused,
+        "poll_now_request": poll_now_request,
+        "log_override": log_override,
+        "stop_request": get_daemon_stop_request(connection),
+    }
+
+
+def get_control_state() -> ControlState:
+    """Read the current control state with a short-lived connection (for the GUI)."""
+    with closing(open_database()) as connection:
+        return read_control_state(connection)
 
 
 def set_paused(paused: bool) -> None:
@@ -59,6 +77,12 @@ def set_log_override(override: Optional[bool]) -> None:
     """Force terminal logging on/off in the running daemon (None = follow config.json)."""
     with closing(open_database()) as connection:
         set_daemon_log_override(connection, override)
+
+
+def request_stop() -> float:
+    """Ask the running daemon to stop after its current job; returns the request stamp."""
+    with closing(open_database()) as connection:
+        return set_daemon_stop_request(connection, time.time())
 
 
 def request_poll_now() -> float:
@@ -108,12 +132,21 @@ class ControlWatcher:
         # True once a checkpoint() during work saw a pause (cleared by begin_cycle()).
         self.cycle_interrupted = False
         # Whatever is already in the file at startup counts as handled.
-        self.last_handled_request: Optional[float] = self._read_state()["poll_now_request"]
+        initial_state = self._read_state()
+        self.last_handled_request: Optional[float] = initial_state["poll_now_request"]
+        self._initial_stop_request: Optional[float] = initial_state.get("stop_request")
+        # True once a stop request newer than startup was seen; the daemon then winds down.
+        self.stop_requested = False
 
     def begin_cycle(self) -> None:
         """Mark the start of a poll cycle, clearing any earlier interruption."""
         self.cycle_interrupted = False
         self._sync_log_override(self._read_state())
+
+    def _check_stop(self, state: ControlState) -> bool:
+        if state.get("stop_request") != self._initial_stop_request:
+            self.stop_requested = True
+        return self.stop_requested
 
     def _sync_log_override(self, state: ControlState) -> None:
         override = state.get("log_override")
@@ -123,14 +156,14 @@ class ControlWatcher:
                 self._on_log_override(override)
 
     def checkpoint(self) -> bool:
-        """Return True if work should stop now because polling is paused.
+        """Return True if work should stop now because polling is paused or a stop was requested.
 
         Meant to be passed as should_pause to the ingest/queue loops, which call
         it at safe boundaries (between emails and between jobs).
         """
         state = self._read_state()
         self._sync_log_override(state)
-        if state["paused"]:
+        if self._check_stop(state) or state["paused"]:
             self.cycle_interrupted = True
             return True
         return False
@@ -160,6 +193,7 @@ class ControlWatcher:
         pause is not acted on; it stays pending and fires on resume.
         on_change(paused, next_poll_at) fires at the start and whenever the
         paused state flips; next_poll_at is epoch seconds, or None while paused.
+        A stop request ends the wait at once ("stop"), paused or not.
         """
         remaining = float(seconds)
         last_tick = self._clock()
@@ -169,6 +203,8 @@ class ControlWatcher:
         while True:
             state = self._read_state()
             self._sync_log_override(state)
+            if self._check_stop(state):
+                return "stop"
             paused = state["paused"]
             now = self._clock()
             elapsed = now - last_tick

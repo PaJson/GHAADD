@@ -5,6 +5,7 @@ import time
 from contextlib import nullcontext
 from modules.config_manager import (
     get_default_download_dir,
+    get_config_fingerprint,
     get_destination_check_every_n_polls,
     get_polling_settings,
     get_terminal_log_settings,
@@ -190,7 +191,7 @@ def run_internal_smoke_tests():
     print("\n🎉 Smoke tests complete.")
 
 
-def run_polling_loop(interval_seconds, jitter_min_seconds, jitter_max_seconds, terminal_log=None):
+def run_polling_loop(interval_seconds, jitter_min_seconds, jitter_max_seconds, terminal_log=None, config_fingerprint=None):
     """Run processing continuously with randomized jitter between cycles."""
     if jitter_min_seconds > jitter_max_seconds:
         jitter_min_seconds, jitter_max_seconds = jitter_max_seconds, jitter_min_seconds
@@ -223,7 +224,10 @@ def run_polling_loop(interval_seconds, jitter_min_seconds, jitter_max_seconds, t
         if control_enabled:
             reset_paused_on_startup(connection)
             reset_log_override_on_startup(connection)
-            update_daemon_status(paused=False, next_poll_at=None, last_forced_poll_handled=None)
+            update_daemon_status(
+                paused=False, next_poll_at=None, last_forced_poll_handled=None, current_job=None,
+                config_fingerprint=config_fingerprint,
+            )
         watcher = ControlWatcher(
             connection=connection,
             enabled=control_enabled,
@@ -235,6 +239,10 @@ def run_polling_loop(interval_seconds, jitter_min_seconds, jitter_max_seconds, t
             print(f"=== Poll cycle {cycle} @ {started} ===")
             watcher.begin_cycle()
             run_ingest_and_queue_cycle(connection, GITHUB_TOKEN, should_pause=watcher.checkpoint)
+
+            if watcher.stop_requested:
+                print("⏹️  Stop requested; exiting after the work in progress.")
+                return
 
             if destination_check_every_n_polls > 0 and cycle % destination_check_every_n_polls == 0:
                 print(f"🔎 Periodic check ({destination_check_every_n_polls}-poll interval): verifying mapped destinations still exist...")
@@ -253,7 +261,11 @@ def run_polling_loop(interval_seconds, jitter_min_seconds, jitter_max_seconds, t
                 print(
                     f"Next poll in {sleep_seconds}s ({interval_seconds}s + {jitter}s jitter) @ {next_poll_at}.\n"
                 )
-            if watcher.wait(sleep_seconds, on_change=publish_wait_state) == "forced":
+            wait_result = watcher.wait(sleep_seconds, on_change=publish_wait_state)
+            if wait_result == "stop":
+                print("⏹️  Stop requested; exiting.")
+                return
+            if wait_result == "forced":
                 print("⏩ Forced poll requested; polling now.")
                 if control_enabled:
                     update_daemon_status(last_forced_poll_handled=watcher.last_handled_request)
@@ -346,7 +358,10 @@ def main():
                     print(f"Removed {removed_logs} old log file(s) (terminal_log.keep_files).")
 
             try:
-                run_polling_loop(interval_seconds, jitter_min_seconds, jitter_max_seconds, terminal_log)
+                run_polling_loop(
+                    interval_seconds, jitter_min_seconds, jitter_max_seconds, terminal_log,
+                    config_fingerprint=get_config_fingerprint(config),
+                )
             except KeyboardInterrupt:
                 print("\nPolling stopped by user.")
     finally:

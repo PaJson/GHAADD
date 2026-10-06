@@ -27,8 +27,8 @@ class FakeTime:
         self.now += seconds
 
 
-def _state(paused=False, request=None, log_override=None):
-    return {"paused": paused, "poll_now_request": request, "log_override": log_override}
+def _state(paused=False, request=None, log_override=None, stop=None):
+    return {"paused": paused, "poll_now_request": request, "log_override": log_override, "stop_request": stop}
 
 
 class ControlStateTests(unittest.TestCase):
@@ -48,6 +48,28 @@ class ControlStateTests(unittest.TestCase):
 
     def read(self):
         return daemon_control.read_control_state(self.connection)
+
+    def test_stop_request_round_trip_keeps_other_fields(self) -> None:
+        daemon_control.set_paused(True)
+        first = db_manager.set_daemon_stop_request(self.connection, 100.0)
+        second = db_manager.set_daemon_stop_request(self.connection, 100.0)  # same clock reading
+
+        self.assertEqual(first, 100.0)
+        self.assertNotEqual(second, first)  # a repeated request still differs from the previous one
+        self.assertEqual(self.read(), _state(paused=True, stop=second))
+
+    def test_existing_database_gains_stop_request_column(self) -> None:
+        old_path = os.path.join(self._temp_dir.name, "old.db")
+        old = sqlite3.connect(old_path)
+        old.row_factory = sqlite3.Row
+        old.execute("CREATE TABLE daemon_control (id INTEGER PRIMARY KEY CHECK (id = 1), paused INTEGER NOT NULL DEFAULT 0, poll_now_request REAL, log_override INTEGER)")
+        old.execute("INSERT INTO daemon_control (id, paused) VALUES (1, 1)")
+        old.commit()
+        old.close()
+        with mock.patch.object(db_manager, "get_state_db_path", lambda: old_path):
+            upgraded = db_manager.open_database()
+            self.addCleanup(upgraded.close)
+            self.assertEqual(daemon_control.read_control_state(upgraded), _state(paused=True))
 
     def test_defaults_before_any_write(self) -> None:
         self.assertEqual(self.read(), _state())
@@ -199,6 +221,35 @@ class ControlWatcherTests(unittest.TestCase):
         watcher, _ = self.make_watcher(lambda t: _state(paused=2 <= t < 5))
         watcher.wait(8, on_change=lambda paused, next_at: calls.append((paused, next_at is None)))
         self.assertEqual(calls, [(False, False), (True, True), (False, False)])
+
+    def test_stop_request_ends_wait_immediately(self) -> None:
+        watcher, fake = self.make_watcher(lambda t: _state(stop=9.0 if t >= 4 else None))
+        self.assertEqual(watcher.wait(600), "stop")
+        self.assertLess(fake.now, 6)
+        self.assertTrue(watcher.stop_requested)
+
+    def test_stop_request_works_while_paused(self) -> None:
+        watcher, fake = self.make_watcher(lambda t: _state(paused=t >= 1, stop=9.0 if t >= 5 else None))
+        self.assertEqual(watcher.wait(600), "stop")
+        self.assertLess(fake.now, 8)
+
+    def test_stop_request_left_over_from_an_earlier_run_is_ignored(self) -> None:
+        watcher, _ = self.make_watcher(lambda t: _state(stop=7.0))
+        self.assertEqual(watcher.wait(5), "elapsed")
+        self.assertFalse(watcher.stop_requested)
+
+    def test_newer_stop_request_than_the_one_at_startup_stops(self) -> None:
+        watcher, _ = self.make_watcher(lambda t: _state(stop=7.0 if t < 2 else 8.0))
+        self.assertEqual(watcher.wait(600), "stop")
+
+    def test_checkpoint_interrupts_work_when_stop_requested(self) -> None:
+        fake_state = {"stop": None}
+        watcher, _ = self.make_watcher(lambda t: _state(stop=fake_state["stop"]))
+        self.assertFalse(watcher.checkpoint())
+        fake_state["stop"] = 9.0
+        self.assertTrue(watcher.checkpoint())
+        self.assertTrue(watcher.cycle_interrupted)
+        self.assertTrue(watcher.stop_requested)
 
     def test_disabled_watcher_ignores_control_file(self) -> None:
         def explode():

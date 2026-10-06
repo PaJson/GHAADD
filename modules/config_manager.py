@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import json
 import os
 import re
@@ -136,6 +137,14 @@ def _read_config_strict(file_path: str) -> Dict[str, Any]:
     if not isinstance(data, dict):
         raise ConfigUnreadableError("config.json must contain a JSON object; fix it by hand first.")
     return data
+
+
+def read_config_strict() -> Dict[str, Any]:
+    """Return config.json as a dict ({} when missing); raises ConfigUnreadableError when it is broken.
+
+    Unlike load_config(), a half-saved or invalid file is reported instead of looking like "all defaults".
+    """
+    return _read_config_strict(_config_file_path())
 
 
 def _serialize_config(config: Dict[str, Any]) -> str:
@@ -377,6 +386,30 @@ def get_folder_settings(config: Optional[Dict[str, Any]] = None) -> FolderSettin
         "partial": _folder_name("partial", DEFAULT_PARTIAL_FOLDER),
         "logs": _folder_name("logs", DEFAULT_LOGS_FOLDER),
     }
+
+
+def get_config_fingerprint(config: Optional[Dict[str, Any]] = None) -> str:
+    """Return a short hash of the *effective* settings the daemon uses.
+
+    The daemon publishes it at startup and the GUI compares it with the current
+    config.json to tell whether a restart is needed. It is built from the
+    normalized getters, so unrelated edits (the GUI's window size, formatting,
+    a default written out explicitly) do not change it.
+    """
+    config = config if config is not None else load_config()
+    effective = {
+        "polling": get_polling_settings(config),
+        "recheck": get_recheck_intervals_minutes(config),
+        "max_emails": get_max_emails_to_process(config),
+        "destination_check": get_destination_check_every_n_polls(config),
+        "download_dirs": get_all_download_dirs(config),
+        "terminal_log": get_terminal_log_settings(config),
+        "folders": get_folder_settings(config),
+        "gmail_folder": get_gmail_folder(config),
+        "state_persistence_disabled": is_state_persistence_disabled(config),
+    }
+    payload = json.dumps(effective, sort_keys=True, default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
 def get_download_dir_for_release(repo, release_type=None, config=None):
