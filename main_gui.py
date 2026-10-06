@@ -248,7 +248,7 @@ class MappingsTab(ttk.Frame):
         ("files", "Files", 70, "center"),
         ("limit", "Limit", 50, "center"),
     )
-    STRETCH_COLUMNS = ("foldername", "repo", "destination")
+    STRETCH_COLUMNS = ("foldername", "repo", "destination", "tag")
     SHOW_FILTERS = ("All", "Active", "Paused", "Has pending")
     # Editor fields per column (top to bottom): (key, label, kind). kinds: entry, readonly, spin, dest.
     FORM_COLUMNS = (
