@@ -4,7 +4,14 @@ import re
 import requests
 import shutil
 import time
-from modules.db_manager import open_database, load_release_state, save_state_entry, prune_release_state
+from modules.db_manager import (
+    delete_folder_counts,
+    load_release_state,
+    open_database,
+    prune_release_state,
+    save_state_entry,
+    set_folder_count,
+)
 from dotenv import load_dotenv
 from modules.dry_run_mode import is_dry_run
 from modules.config_manager import (
@@ -310,6 +317,7 @@ def clear_all_resolved_limit_warnings() -> int:
             if not uses_mapping or not os.path.isdir(base_dir):
                 continue
             count = _count_repository_release_folders(base_dir, _resolve_tracked_release_type_folders(repo))
+            _record_folder_count(repo, count)
             if count > folder_limit:
                 continue
             reason = f"{count} folder(s), limit {folder_limit}"
@@ -322,6 +330,39 @@ def clear_all_resolved_limit_warnings() -> int:
     return cleared
 
 
+def _record_folder_count(repo: Optional[str], count: Optional[int]) -> None:
+    """Store the latest folder count for the GUI's "12 / 15" (None removes it); never raises, no dry-run writes."""
+    if not repo or is_dry_run():
+        return
+    connection = None
+    try:
+        connection = open_database()
+        if count is None:
+            delete_folder_counts(connection, repo=repo)
+        else:
+            set_folder_count(connection, repo, count, time.time())
+    except Exception:
+        return
+    finally:
+        if connection is not None:
+            connection.close()
+
+
+def _prune_folder_counts(keep_repos: list[str]) -> None:
+    """Forget the counts of repositories that are no longer in mapping.json."""
+    if is_dry_run():
+        return
+    connection = None
+    try:
+        connection = open_database()
+        delete_folder_counts(connection, keep_repos=keep_repos)
+    except Exception:
+        return
+    finally:
+        if connection is not None:
+            connection.close()
+
+
 def check_folder_limits() -> int:
     """Periodic check: warn about repositories over their folder limit that have no warning on record yet.
 
@@ -331,13 +372,24 @@ def check_folder_limits() -> int:
     """
     warned = repos_with_limit_warnings()
     raised = 0
-    for entry in load_mapping().get("repositories", []):
+    entries = load_mapping().get("repositories", [])
+    _prune_folder_counts([str(entry.get("name") or "") for entry in entries])
+    for entry in entries:
         repo = str(entry.get("name") or "").strip()
-        if not repo or repo.lower() in warned or _resolve_repository_limit(repo) <= 0:
+        if not repo:
+            continue
+        if _resolve_repository_limit(repo) <= 0:
+            _record_folder_count(repo, None)
             continue
         base_dir, uses_mapping, _warning = _resolve_finalized_base_directory(repo, "")
-        if uses_mapping and os.path.isdir(base_dir):
-            raised += _warn_if_destination_limit_exceeded(repo, base_dir)
+        if not uses_mapping or not os.path.isdir(base_dir):
+            continue
+        if repo.lower() in warned:  # already on record: only keep its count fresh
+            _record_folder_count(
+                repo, _count_repository_release_folders(base_dir, _resolve_tracked_release_type_folders(repo))
+            )
+        else:
+            raised += _warn_if_destination_limit_exceeded(repo, base_dir)  # also records the count
     return raised
 
 
@@ -345,6 +397,7 @@ def _warn_if_destination_limit_exceeded(repo: Optional[str], repo_destination_ro
     """Emit warning when repository destination exceeds configured folder limit (returns 1 if it did)."""
     folder_limit = _resolve_repository_limit(repo)
     if folder_limit <= 0:
+        _record_folder_count(repo, None)
         _clear_resolved_limit_warnings(repo, "its limit is switched off")
         return 0
 
@@ -353,6 +406,7 @@ def _warn_if_destination_limit_exceeded(repo: Optional[str], repo_destination_ro
         repo_destination_root,
         tracked_release_type_folders,
     )
+    _record_folder_count(repo, release_folder_count)
     if release_folder_count <= folder_limit:
         _clear_resolved_limit_warnings(repo, f"{release_folder_count} folder(s), limit {folder_limit}")
         return 0

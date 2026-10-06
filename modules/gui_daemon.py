@@ -53,6 +53,7 @@ class ControlBarView:
     log_checked: bool
     restart_visible: bool = False
     restart_enabled: bool = False
+    check_enabled: bool = False
 
 
 def _compute_settings() -> tuple[Optional[str], Optional[bool]]:
@@ -231,6 +232,7 @@ def build_view(
         pause_text="Resume" if snapshot.paused else "Pause",
         pause_enabled=not stopping,
         poll_enabled=not snapshot.paused and not stopping,
+        check_enabled=not stopping,  # a folder check is allowed while paused: it only reads folders
         log_enabled=not stopping,
         log_checked=snapshot.log_on,
         restart_visible=snapshot.restart_needed,
@@ -255,6 +257,10 @@ def do_set_paused(paused: bool) -> Optional[str]:
 
 def do_poll_now() -> Optional[str]:
     return _guarded(daemon_control.request_poll_now)
+
+
+def do_check_folders() -> Optional[str]:
+    return _guarded(daemon_control.request_check_folders)
 
 
 def do_set_log(on: bool) -> Optional[str]:

@@ -265,9 +265,59 @@ def open_database():
     # Epoch stamp of the latest graceful-stop request (GUI/CLI --stop).
     if "stop_request" not in control_columns:
         connection.execute("ALTER TABLE daemon_control ADD COLUMN stop_request REAL")
+    # Epoch stamp of the latest "check folders now" request (GUI button / CLI --check-folders).
+    if "check_folders_request" not in control_columns:
+        connection.execute("ALTER TABLE daemon_control ADD COLUMN check_folders_request REAL")
+
+    # Latest folder count per repository (written by the daemon's limit checks, read by the GUI).
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS folder_counts (
+            repo_key TEXT PRIMARY KEY,
+            repo TEXT NOT NULL,
+            folder_count INTEGER NOT NULL,
+            counted_at REAL NOT NULL
+        )
+        """
+    )
 
     connection.commit()
     return connection
+
+
+def set_folder_count(connection, repo, folder_count, counted_at):
+    """Remember how many release folders a repository had when they were last counted."""
+    connection.execute(
+        """
+        INSERT INTO folder_counts (repo_key, repo, folder_count, counted_at) VALUES (?, ?, ?, ?)
+        ON CONFLICT(repo_key) DO UPDATE SET
+            repo = excluded.repo, folder_count = excluded.folder_count, counted_at = excluded.counted_at
+        """,
+        (str(repo).strip().lower(), str(repo).strip(), int(folder_count), float(counted_at)),
+    )
+    connection.commit()
+
+
+def delete_folder_counts(connection, keep_repos=None, repo=None):
+    """Delete one repository's count, or every count except those of `keep_repos` (names, any case)."""
+    if repo is not None:
+        cursor = connection.execute("DELETE FROM folder_counts WHERE repo_key = ?", (str(repo).strip().lower(),))
+    else:
+        keep = sorted({str(name).strip().lower() for name in (keep_repos or [])})
+        if keep:
+            cursor = connection.execute(
+                f"DELETE FROM folder_counts WHERE repo_key NOT IN ({','.join('?' * len(keep))})", keep
+            )
+        else:
+            cursor = connection.execute("DELETE FROM folder_counts")
+    connection.commit()
+    return cursor.rowcount
+
+
+def get_folder_counts(connection):
+    """{lower-cased repo: {"folder_count": int, "counted_at": float}} (read-only)."""
+    rows = connection.execute("SELECT repo_key, folder_count, counted_at FROM folder_counts").fetchall()
+    return {row[0]: {"folder_count": row[1], "counted_at": row[2]} for row in rows}
 
 
 # Asset state helpers.
@@ -1511,6 +1561,31 @@ def set_daemon_poll_now_request(connection, stamp: float) -> float:
     stored = connection.execute(
         "SELECT poll_now_request FROM daemon_control WHERE id = 1"
     ).fetchone()[0]
+    connection.commit()
+    return stored
+
+
+def get_daemon_check_folders_request(connection):
+    """Return the epoch stamp of the latest check-folders request, or None when never requested."""
+    row = connection.execute("SELECT check_folders_request FROM daemon_control WHERE id = 1").fetchone()
+    return None if row is None else row["check_folders_request"]
+
+
+def set_daemon_check_folders_request(connection, stamp: float) -> float:
+    """Store a check-folders request stamp, guaranteed to differ from the previous one. Returns the stored stamp."""
+    connection.execute("INSERT OR IGNORE INTO daemon_control (id) VALUES (1)")
+    connection.execute(
+        """
+        UPDATE daemon_control
+        SET check_folders_request = CASE
+            WHEN check_folders_request = ? THEN ? + 0.000001
+            ELSE ?
+        END
+        WHERE id = 1
+        """,
+        (stamp, stamp, stamp),
+    )
+    stored = connection.execute("SELECT check_folders_request FROM daemon_control WHERE id = 1").fetchone()[0]
     connection.commit()
     return stored
 

@@ -245,6 +245,20 @@ def run_polling_loop(interval_seconds, jitter_min_seconds, jitter_max_seconds, t
             else:
                 print("▶️  Polling resumed.")
 
+    def run_folder_checks(reason: str) -> None:
+        """Destinations still there, folder counts and limit warnings (never stops the daemon)."""
+        print(f"🔎 Folder check ({reason}): verifying mapped destinations and folder limits...")
+        try:
+            if warn_about_missing_mapped_destinations() == 0:
+                print("   ✅ All mapped destinations are present.")
+        except Exception as exc:
+            print(f"   ⚠️ Could not verify the mapped destinations: {exc}")
+        try:
+            if check_folder_limits() == 0:
+                print("   ✅ No new folder-limit warnings.")
+        except Exception as exc:
+            print(f"   ⚠️ Could not check folder limits: {exc}")
+
     cycle = 1
     with open_database() as connection:
         if control_enabled:
@@ -258,7 +272,10 @@ def run_polling_loop(interval_seconds, jitter_min_seconds, jitter_max_seconds, t
             connection=connection,
             enabled=control_enabled,
             on_log_override=apply_log_override if terminal_log is not None else None,
+            on_check_folders=lambda: run_folder_checks("requested"),
         )
+        if destination_check_every_n_polls > 0:
+            run_folder_checks("at start")  # counts and warnings are there right away, not after N polls
 
         while True:
             started = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -276,15 +293,7 @@ def run_polling_loop(interval_seconds, jitter_min_seconds, jitter_max_seconds, t
                 print(f"   ⚠️ Could not re-check folder-limit warnings: {exc}")
 
             if destination_check_every_n_polls > 0 and cycle % destination_check_every_n_polls == 0:
-                print(f"🔎 Periodic check ({destination_check_every_n_polls}-poll interval): verifying mapped destinations still exist...")
-                missing_count = warn_about_missing_mapped_destinations()
-                if missing_count == 0:
-                    print("   ✅ All mapped destinations are present.")
-                try:
-                    if check_folder_limits() == 0:
-                        print("   ✅ No new folder-limit warnings.")
-                except Exception as exc:  # housekeeping must never stop the daemon
-                    print(f"   ⚠️ Could not check folder limits: {exc}")
+                run_folder_checks(f"every {destination_check_every_n_polls} polls")
 
             if watcher.cycle_interrupted:
                 # Work was left over: no countdown, poll again as soon as polling resumes.

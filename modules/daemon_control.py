@@ -17,6 +17,10 @@ It is a session setting, cleared when a daemon starts.
 ``stop_request`` works like ``poll_now_request``: the daemon stops (gracefully:
 the running job finishes first) when it *differs* from the value the daemon saw
 at startup, so a request left over from an earlier run never stops a new one.
+
+``check_folders_request`` also works that way: the daemon runs its destination/folder-limit check
+(inside ``ControlWatcher.wait()``, paused or not) when it differs from the value it saw at startup
+or last handled.
 """
 
 import sqlite3
@@ -25,9 +29,11 @@ from contextlib import closing
 from typing import Callable, Literal, NotRequired, Optional, TypedDict
 
 from modules.db_manager import (
+    get_daemon_check_folders_request,
     get_daemon_control,
     get_daemon_stop_request,
     open_database,
+    set_daemon_check_folders_request,
     set_daemon_log_override,
     set_daemon_paused,
     set_daemon_poll_now_request,
@@ -44,10 +50,14 @@ class ControlState(TypedDict):
     poll_now_request: Optional[float]
     log_override: Optional[bool]
     stop_request: NotRequired[Optional[float]]  # absent in states built by older callers/tests
+    check_folders_request: NotRequired[Optional[float]]
 
 
 def _default_state() -> ControlState:
-    return {"paused": False, "poll_now_request": None, "log_override": None, "stop_request": None}
+    return {
+        "paused": False, "poll_now_request": None, "log_override": None, "stop_request": None,
+        "check_folders_request": None,
+    }
 
 
 def read_control_state(connection: sqlite3.Connection) -> ControlState:
@@ -58,6 +68,7 @@ def read_control_state(connection: sqlite3.Connection) -> ControlState:
         "poll_now_request": poll_now_request,
         "log_override": log_override,
         "stop_request": get_daemon_stop_request(connection),
+        "check_folders_request": get_daemon_check_folders_request(connection),
     }
 
 
@@ -83,6 +94,12 @@ def request_stop() -> float:
     """Ask the running daemon to stop after its current job; returns the request stamp."""
     with closing(open_database()) as connection:
         return set_daemon_stop_request(connection, time.time())
+
+
+def request_check_folders() -> float:
+    """Ask the running daemon to check destinations and folder limits now; returns the request stamp."""
+    with closing(open_database()) as connection:
+        return set_daemon_check_folders_request(connection, time.time())
 
 
 def request_poll_now() -> float:
@@ -116,6 +133,7 @@ class ControlWatcher:
         sleep: Callable[[float], None] = time.sleep,
         tick_seconds: float = DEFAULT_TICK_SECONDS,
         on_log_override: Optional[Callable[[Optional[bool]], None]] = None,
+        on_check_folders: Optional[Callable[[], None]] = None,
     ) -> None:
         if not enabled:
             # Disabled (dry-run): never react to the real daemon's control state.
@@ -128,6 +146,7 @@ class ControlWatcher:
         self._tick_seconds = tick_seconds
         # Fires with the new log_override whenever it changes; None means "follow config".
         self._on_log_override = on_log_override
+        self._on_check_folders = on_check_folders
         self._last_log_override: Optional[bool] = None
         # True once a checkpoint() during work saw a pause (cleared by begin_cycle()).
         self.cycle_interrupted = False
@@ -135,6 +154,7 @@ class ControlWatcher:
         initial_state = self._read_state()
         self.last_handled_request: Optional[float] = initial_state["poll_now_request"]
         self._initial_stop_request: Optional[float] = initial_state.get("stop_request")
+        self._last_check_request: Optional[float] = initial_state.get("check_folders_request")
         # True once a stop request newer than startup was seen; the daemon then winds down.
         self.stop_requested = False
 
@@ -147,6 +167,14 @@ class ControlWatcher:
         if state.get("stop_request") != self._initial_stop_request:
             self.stop_requested = True
         return self.stop_requested
+
+    def _run_requested_folder_check(self, state: ControlState) -> None:
+        """Run the folder check once per new request (it does not touch the countdown or the pause)."""
+        request = state.get("check_folders_request")
+        if request != self._last_check_request:
+            self._last_check_request = request
+            if self._on_check_folders is not None:
+                self._on_check_folders()
 
     def _sync_log_override(self, state: ControlState) -> None:
         override = state.get("log_override")
@@ -205,6 +233,7 @@ class ControlWatcher:
             self._sync_log_override(state)
             if self._check_stop(state):
                 return "stop"
+            self._run_requested_folder_check(state)
             paused = state["paused"]
             now = self._clock()
             elapsed = now - last_tick

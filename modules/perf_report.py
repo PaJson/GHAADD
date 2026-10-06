@@ -156,6 +156,7 @@ def collect(repeat: int = DEFAULT_REPEAT) -> dict[str, Any]:
     def table_cold() -> Any:
         gui_data._summaries_cache.invalidate()
         gui_data._limit_cache.invalidate()
+        gui_data._counts_cache.invalidate()
         return gui_data.load_repo_table()
 
     add("GUI data", "Mappings table rows (changed database)", table_cold)

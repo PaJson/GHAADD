@@ -37,7 +37,8 @@ class RepoRow:
     files: str  # files held for the latest release: downloaded + already-present; "n / total" while incomplete
     limit: str
     last_activity: float  # epoch seconds; 0 = never worked on
-    limit_warning: bool = False  # a folder-limit warning is on record (Folder limits tab)
+    limit_warning: bool = False  # over its limit, or a folder-limit warning is on record
+    limit_note: str = ""  # hover text for the Limit cell ("12 of 15 allowed folders, counted ...")
 
 
 def format_timestamp(epoch: Optional[float]) -> str:
@@ -45,6 +46,20 @@ def format_timestamp(epoch: Optional[float]) -> str:
     if not epoch:
         return NO_VALUE
     return datetime.fromtimestamp(float(epoch)).strftime("%Y-%m-%d %H:%M")
+
+
+def format_limit(limit: Any, counted: Optional[Mapping[str, Any]]) -> tuple[str, bool, str]:
+    """(cell text, over the limit, hover note): "12 / 15" once the daemon has counted the folders, else just "15"."""
+    text = "" if limit is None else str(limit)
+    try:
+        allowed = int(limit)
+    except (TypeError, ValueError):
+        return text, False, ""
+    if allowed <= 0 or not counted:
+        return text, False, ""
+    count = int(counted.get("folder_count") or 0)
+    when = format_timestamp(counted.get("counted_at"))
+    return f"{count} / {allowed}", count > allowed, f"{count} of {allowed} allowed folders (counted {when})"
 
 
 def format_files(summary: Optional[Mapping[str, Any]]) -> str:
@@ -87,13 +102,15 @@ def build_rows(
     intervals_for: Callable[[Mapping[str, Any]], int],
     running_repo: Optional[str] = None,
     limit_warned: Collection[str] = frozenset(),
+    folder_counts: Optional[Mapping[str, Mapping[str, Any]]] = None,
 ) -> list[RepoRow]:
     """Return table rows, most recently worked-on first, then by folder name.
 
     `summaries` is keyed by lower-cased owner/repo. `intervals_for(entry)` returns
     how many recheck steps the repo has (own list or the global default).
     `running_repo` is the owner/repo the daemon is processing right now, if any.
-    `limit_warned` holds the lower-cased names that have a folder-limit warning on record.
+    `limit_warned` holds the lower-cased names that have a folder-limit warning on record; `folder_counts`
+    the latest counted folders per lower-cased repo (the Limit column then reads "12 / 15").
     """
     running_key = running_repo.lower() if running_repo else None
     rows: list[RepoRow] = []
@@ -114,6 +131,7 @@ def build_rows(
         files = format_files(summary)
 
         foldername = str(entry.get("foldername") or "").strip() or repo
+        limit_text, over, limit_note = format_limit(entry.get("limit"), (folder_counts or {}).get(repo.lower()))
         rows.append(
             RepoRow(
                 repo=repo,
@@ -125,9 +143,10 @@ def build_rows(
                 step=step,
                 next_check=format_timestamp(pending_check),
                 files=files,
-                limit=str(entry.get("limit", "")),
+                limit=limit_text,
                 last_activity=float(summary.get("last_activity") or 0) if summary else 0.0,
-                limit_warning=repo.lower() in limit_warned,
+                limit_warning=over or repo.lower() in limit_warned,
+                limit_note=limit_note,
             )
         )
 

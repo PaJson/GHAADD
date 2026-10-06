@@ -27,8 +27,11 @@ class FakeTime:
         self.now += seconds
 
 
-def _state(paused=False, request=None, log_override=None, stop=None):
-    return {"paused": paused, "poll_now_request": request, "log_override": log_override, "stop_request": stop}
+def _state(paused=False, request=None, log_override=None, stop=None, check=None):
+    return {
+        "paused": paused, "poll_now_request": request, "log_override": log_override, "stop_request": stop,
+        "check_folders_request": check,
+    }
 
 
 class ControlStateTests(unittest.TestCase):
@@ -258,6 +261,56 @@ class ControlWatcherTests(unittest.TestCase):
         fake = FakeTime()
         watcher = ControlWatcher(enabled=False, read_state=explode, clock=fake.clock, sleep=fake.sleep)
         self.assertEqual(watcher.wait(3), "elapsed")
+
+
+class CheckFoldersRequestTests(unittest.TestCase):
+    """A check-folders request runs the callback once and does not disturb the countdown."""
+
+    def make(self, state_for_time, on_check):
+        fake = FakeTime()
+        watcher = ControlWatcher(
+            read_state=lambda: state_for_time(fake.now),
+            clock=fake.clock,
+            sleep=fake.sleep,
+            on_check_folders=on_check,
+        )
+        return watcher, fake
+
+    def test_a_new_request_runs_the_check_once_and_the_wait_continues(self) -> None:
+        calls = []
+        watcher, fake = self.make(lambda t: _state(check=5.0 if t >= 3 else None), lambda: calls.append(1))
+        self.assertEqual(watcher.wait(10), "elapsed")
+        self.assertEqual(calls, [1])
+        self.assertGreaterEqual(fake.now, 10)  # the countdown was not reset
+
+    def test_a_request_already_in_the_file_at_startup_is_ignored(self) -> None:
+        calls = []
+        watcher, _ = self.make(lambda t: _state(check=5.0), lambda: calls.append(1))
+        watcher.wait(5)
+        self.assertEqual(calls, [])
+
+    def test_a_request_is_handled_while_paused_too(self) -> None:
+        calls = []
+        watcher, _ = self.make(lambda t: _state(paused=True, check=5.0 if t >= 2 else None), lambda: calls.append(1))
+        with mock.patch.object(watcher, "_check_stop", side_effect=[False, False, False, False, True, True]):
+            self.assertEqual(watcher.wait(600), "stop")
+        self.assertEqual(calls, [1])
+
+    def test_each_new_stamp_runs_it_again(self) -> None:
+        calls = []
+        watcher, _ = self.make(lambda t: _state(check=1.0 if t < 4 else 2.0) if t >= 1 else _state(), lambda: calls.append(1))
+        watcher.wait(8)
+        self.assertEqual(calls, [1, 1])
+
+    def test_round_trip_through_the_database(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as folder:
+            with mock.patch.object(db_manager, "get_state_db_path", lambda: os.path.join(folder, "state.db")):
+                self.assertIsNone(daemon_control.get_control_state()["check_folders_request"])
+                first = daemon_control.request_check_folders()
+                second = daemon_control.request_check_folders()
+                self.assertNotEqual(first, second)
+                self.assertEqual(daemon_control.get_control_state()["check_folders_request"], second)
+                self.assertFalse(daemon_control.get_control_state()["paused"])
 
 
 class LogOverrideWatcherTests(unittest.TestCase):

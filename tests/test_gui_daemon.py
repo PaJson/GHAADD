@@ -29,6 +29,7 @@ class BuildViewTests(unittest.TestCase):
         self.assertEqual(view.status_text, "Daemon not running")
         self.assertTrue(view.start_enabled)
         self.assertFalse(any((view.stop_enabled, view.pause_enabled, view.poll_enabled, view.log_enabled)))
+        self.assertFalse(view.check_enabled)
 
     def test_running_daemon_shows_pid_and_countdown(self) -> None:
         view = build_view(running(), NOW)
@@ -50,6 +51,7 @@ class BuildViewTests(unittest.TestCase):
         self.assertEqual(view.countdown_text, "Polling paused")
         self.assertEqual(view.pause_text, "Resume")
         self.assertFalse(view.poll_enabled)
+        self.assertTrue(view.check_enabled)  # checking folders does not poll, so a pause does not matter
 
     def test_cycle_in_progress_shows_the_job_or_polling(self) -> None:
         self.assertEqual(build_view(running(next_poll_at=None), NOW).countdown_text, "Polling…")

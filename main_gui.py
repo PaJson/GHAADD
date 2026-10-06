@@ -281,6 +281,7 @@ class ControlBar(ttk.Frame):
         self.stop_button = ttk.Button(buttons, text="Stop")
         self.pause_button = ttk.Button(buttons, text="Pause")
         self.poll_button = ttk.Button(buttons, text="Poll now")
+        self.check_button = ttk.Button(buttons, text="Check folders")
         self.detailed_log = tk.BooleanVar(value=False)
         self.log_check = ttk.Checkbutton(buttons, text="Detailed log", variable=self.detailed_log)
         self.restart_button = ttk.Button(buttons, text="\u21bb Restart")
@@ -291,12 +292,18 @@ class ControlBar(ttk.Frame):
         self.restart_button.bind("<ButtonPress>", lambda _event: self._restart_tip.hide())
 
         for column, widget in enumerate(
-            (self.start_button, self.stop_button, self.pause_button, self.poll_button)
+            (self.start_button, self.stop_button, self.pause_button, self.poll_button, self.check_button)
         ):
             widget.grid(row=0, column=column, padx=(0, 6))
-        self.log_check.grid(row=0, column=4, padx=(6, 12))
-        self.restart_button.grid(row=0, column=5, padx=(0, 6))
-        self.settings_button.grid(row=0, column=6)
+        attach_tooltip(
+            self.check_button,
+            "Check now that every mapped destination exists, count the folders of each repository with a limit "
+            "(the \"12 / 15\" in the table) and warn about repositories over their limit. "
+            "It does not poll the mailbox.",
+        )
+        self.log_check.grid(row=0, column=5, padx=(6, 12))
+        self.restart_button.grid(row=0, column=6, padx=(0, 6))
+        self.settings_button.grid(row=0, column=7)
         self.apply_view(gui_daemon.build_view(gui_daemon.DaemonSnapshot(), 0.0))
 
     def _show_restart_tip(self, event: tk.Event) -> None:  # type: ignore[type-arg]
@@ -313,6 +320,7 @@ class ControlBar(ttk.Frame):
             (self.stop_button, view.stop_enabled),
             (self.pause_button, view.pause_enabled),
             (self.poll_button, view.poll_enabled),
+            (self.check_button, view.check_enabled),
             (self.log_check, view.log_enabled),
         ):
             widget.state(["!disabled"] if enabled else ["disabled"])
@@ -397,7 +405,7 @@ class MappingsTab(ttk.Frame):
         ("step", "Recheck", 65, "center"),
         ("next_check", "Next check", 125, "w"),
         ("files", "Files", 70, "center"),
-        ("limit", "Limit", 50, "center"),
+        ("limit", "Limit", 75, "center"),
     )
     STRETCH_COLUMNS = ("foldername", "repo", "destination", "tag")
     SHOW_FILTERS = ("All", "Active", "Paused", "Has pending")
@@ -727,7 +735,10 @@ class MappingsTab(ttk.Frame):
             self._tooltip.schedule(f"{row.status}: {STATUS_HINTS.get(row.status, '')}", event.x_root, event.y_root)
             return
         full = self._cell_text(row, key)
-        if self._cell_display(row, key) != full:  # only text that is cut off gets a tooltip
+        if key == "limit" and row.limit_note:  # what the "12 / 15" means and when it was counted
+            self._tip_cell = (iid, key)
+            self._tooltip.schedule(row.limit_note, event.x_root, event.y_root)
+        elif self._cell_display(row, key) != full:  # only text that is cut off gets a tooltip
             self._tip_cell = (iid, key)
             self._tooltip.schedule(full, event.x_root, event.y_root)
 
@@ -1579,6 +1590,7 @@ class MainWindow(tk.Tk):
         self.control_bar.stop_button.configure(command=self._on_stop)
         self.control_bar.pause_button.configure(command=self._on_pause)
         self.control_bar.poll_button.configure(command=self._on_poll_now)
+        self.control_bar.check_button.configure(command=self._on_check_folders)
         self.control_bar.log_check.configure(command=self._on_log_toggle)
         self.control_bar.restart_button.configure(command=self._on_restart)
         ttk.Separator(self).pack(fill="x")
@@ -1930,6 +1942,12 @@ class MainWindow(tk.Tk):
 
     def _on_poll_now(self) -> None:
         self._report(gui_daemon.do_poll_now(), "Poll requested; it runs within a second.")
+
+    def _on_check_folders(self) -> None:
+        self._report(
+            gui_daemon.do_check_folders(),
+            "Folder check requested; the counts in the Limit column update within a few seconds.",
+        )
 
     def _on_log_toggle(self) -> None:
         wanted = bool(self.control_bar.detailed_log.get())  # the click has already flipped the box

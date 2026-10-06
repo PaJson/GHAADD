@@ -49,6 +49,14 @@ def _load_limit_warned() -> frozenset[str]:
         connection.close()
 
 
+def _load_folder_counts() -> dict[str, dict[str, Any]]:
+    connection = db_manager.open_database()
+    try:
+        return db_manager.get_folder_counts(connection)
+    finally:
+        connection.close()
+
+
 def _state_db_files() -> list[str]:
     path = db_manager.get_state_db_path()
     return [path, f"{path}-wal"]  # in WAL mode the daemon's commits land in the -wal file first
@@ -60,6 +68,7 @@ def _state_db_files() -> list[str]:
 _summaries_cache: StatCache[dict[str, Any]] = StatCache(_state_db_files, _load_summaries, max_age=30.0)
 
 _limit_cache: StatCache[frozenset[str]] = StatCache(_state_db_files, _load_limit_warned, max_age=30.0)
+_counts_cache: StatCache[dict[str, dict[str, Any]]] = StatCache(_state_db_files, _load_folder_counts, max_age=30.0)
 
 
 def load_repo_table(now: Optional[float] = None) -> RepoTable:
@@ -81,6 +90,12 @@ def load_repo_table(now: Optional[float] = None) -> RepoTable:
     except Exception:  # only the warning marker is lost
         pass
 
+    folder_counts: dict[str, dict[str, Any]] = {}
+    try:
+        folder_counts = _counts_cache.get()
+    except Exception:  # the counts are optional decoration
+        pass
+
     running_repo: Optional[str] = None
     try:
         current_job = daemon_lock.get_daemon_status()["current_job"]
@@ -96,6 +111,7 @@ def load_repo_table(now: Optional[float] = None) -> RepoTable:
         lambda entry: _recheck_step_count(entry, len(default_recheck)),
         running_repo=running_repo,
         limit_warned=limit_warned,
+        folder_counts=folder_counts,
     )
     return RepoTable(rows=rows, entries=entries, default_recheck=default_recheck, db_error=db_error)
 
