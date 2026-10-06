@@ -21,7 +21,17 @@ import tkinter.font as tkfont
 from tkinter import filedialog, messagebox, ttk
 from typing import Any, Callable, Iterable, Literal, Optional
 
-from modules import config_manager, daemon_launcher, gui_daemon, gui_data, gui_forms, gui_state, log_tail, mapping_manager
+from modules import (
+    config_manager,
+    daemon_launcher,
+    gui_daemon,
+    gui_data,
+    gui_forms,
+    gui_state,
+    log_tail,
+    mapping_manager,
+    status_tabs,
+)
 from modules.app_info import APP_NAME, __version__
 
 Anchor = Literal["nw", "n", "ne", "w", "center", "e", "sw", "s", "se"]
@@ -73,9 +83,46 @@ STATUS_LEGEND = "Status\n" + "\n".join(
     f"{icon}  {name}: {STATUS_HINTS[name]}" for name, icon in STATUS_ICONS.items()
 )
 
-# Placeholder content for the status tabs (step 5).
-STATUS_TABS = ["Warnings (3)", "Completed (12)", "Folder limits", "Unmapped (1)"]
-STATUS_COLUMNS = ("time", "repo", "message")
+DAEMON_REFRESH_INTERVAL_MS = 1000
+UNEXPECTED_EXIT_WINDOW_SECONDS = 120.0  # a daemon this GUI started that dies within this long is reported
+RESTART_HINT = (
+    "Settings changed since the daemon started.\n"
+    "Click to restart it: the job in progress finishes, the daemon stops,\n"
+    "then starts again with the new settings."
+)
+DEFAULT_STATUS_TEXT = "config.json · mapping.json · state.db"
+
+COLOR_ERROR = "#b3261e"
+COLOR_WARNING = "#9a6700"
+COLOR_MUTED = "#666666"
+COLOR_STRIPE = "#f2f5f9"  # every second table row
+COLOR_HEADER_BG = "#dde5ef"  # table column headers
+COLOR_HEADER_FG = "#1f2d3d"
+COLOR_SELECTED = "#0078d4"
+
+# Row icon per status (first column). Paused is a mapping.json flag and wins over runtime state.
+STATUS_ICONS = {
+    "Running": "▶",
+    "Queued": "⏳",
+    "Waiting": "◷",
+    "Idle": "○",
+    "Paused": "⏸",
+    "Failed": "✖",
+}
+
+# Hover text for the status icon in the first column.
+STATUS_HINTS = {
+    "Running": "A job is being processed now.",
+    "Queued": "A check is due and waiting its turn.",
+    "Waiting": "The next recheck is scheduled for later.",
+    "Idle": "Nothing pending.",
+    "Paused": "This repository is paused in mapping.json.",
+    "Failed": "The last job failed.",
+}
+
+STATUS_LEGEND = "Status\n" + "\n".join(
+    f"{icon}  {name}: {STATUS_HINTS[name]}" for name, icon in STATUS_ICONS.items()
+)
 
 
 def pick_directory(parent: tk.Misc, variable: tk.Variable) -> None:
@@ -86,6 +133,11 @@ def pick_directory(parent: tk.Misc, variable: tk.Variable) -> None:
     )
     if chosen:
         variable.set(os.path.normpath(chosen))
+
+
+def format_status_title(title: str, count: int) -> str:
+    """"Unmapped (2)": the number of repositories that still need a destination (not an unread count)."""
+    return status_tabs.format_title(title, count)
 
 
 def describe_error(exc: BaseException) -> str:
@@ -101,6 +153,7 @@ class Tooltip:
     """Small hover text window for a widget (shown after a short delay)."""
 
     DELAY_MS = 450
+    WRAP_PIXELS = 640  # longer text wraps instead of running off the screen
 
     def __init__(self, widget: tk.Misc) -> None:
         self._widget = widget
@@ -123,11 +176,17 @@ class Tooltip:
         self._job = None
         window = tk.Toplevel(self._widget)
         window.wm_overrideredirect(True)
-        window.wm_geometry(f"+{x_root + 14}+{y_root + 18}")
         tk.Label(
-            window, text=text, justify="left", background="#ffffe1", foreground="#000000",
+            window, text=text, justify="left", wraplength=self.WRAP_PIXELS, background="#ffffe1", foreground="#000000",
             relief="solid", borderwidth=1, padx=6, pady=3,
         ).pack()
+        window.update_idletasks()
+        widget = self._widget
+        x, y = gui_state.place_popup(
+            x_root, y_root, window.winfo_reqwidth(), window.winfo_reqheight(),
+            widget.winfo_vrootx(), widget.winfo_vrooty(), widget.winfo_vrootwidth(), widget.winfo_vrootheight(),
+        )
+        window.wm_geometry(f"+{x}+{y}")
         self._window = window
 
 
@@ -447,6 +506,18 @@ class MappingsTab(ttk.Frame):
         )
         self.browse_button.grid(row=0, column=1, padx=(6, 0))
         self.form_widgets.extend([entry, self.browse_button])
+
+    def select_repo(self, repo: str) -> bool:
+        """Show and select a repository in the table (clearing filters that would hide it)."""
+        if repo not in self._table.entries:
+            return False
+        self.filter_var.set("")
+        self.show_var.set(self.SHOW_FILTERS[0])
+        self._render_rows()
+        self.tree.selection_set(repo)
+        self.tree.focus(repo)
+        self.tree.see(repo)
+        return True
 
     # ----- table -----
 
@@ -994,28 +1065,254 @@ class LiveLogTab(ttk.Frame):
 
 
 class StatusTab(ttk.Frame):
-    """Filtered structured-event list (static until step 5)."""
+    """A read-only list for one status tab: events from state.db or the unmapped repositories.
 
-    def __init__(self, master: tk.Misc) -> None:
+    Rows arrive through set_rows(); the tab never queries anything itself. Cells that do not fit
+    end in an ellipsis and show their full text on hover, rows the user has not seen yet are bold
+    while the tab is shown, and double-clicking a row that names a repository opens it in the
+    Mappings tab.
+    """
+
+    # (key, heading, width, anchor, stretch)
+    Column = tuple[str, str, int, Anchor, bool]
+
+    def __init__(
+        self,
+        master: tk.Misc,
+        columns: tuple["StatusTab.Column", ...],
+        empty_text: str,
+        open_repo: Callable[[str], None],
+        hint: str = "",
+        on_mark_read: Optional[Callable[[], None]] = None,
+        detail: bool = False,
+    ) -> None:
         super().__init__(master, padding=10)
+        self._has_detail = detail
+        self._columns = columns
+        self._open_repo = open_repo
+        self._rows: list[tuple[str, ...]] = []  # full (untruncated) cell texts, in display order
+        self._repos: list[str] = []
+        self._ids: list[int] = []
+        self._highlight_after: Optional[int] = None
+        self._fit_job: Optional[str] = None
+        self._tip_cell: Optional[tuple[str, str]] = None
+        self._measure_cache: dict[str, int] = {}
+        self._column_widths: tuple[int, ...] = ()
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
 
-        self.tree = ttk.Treeview(self, columns=STATUS_COLUMNS, show="headings")
-        for column, title, width in (("time", "Time", 150), ("repo", "Repository", 240), ("message", "Message", 420)):
-            self.tree.heading(column, text=title)
-            self.tree.column(column, width=width, anchor="w")
+        keys = [column[0] for column in columns]
+        self.tree = ttk.Treeview(self, columns=keys, show="headings", selectmode="browse")
+        for key, heading, width, anchor, stretch in columns:
+            self.tree.heading(key, text=heading, anchor=anchor)
+            self.tree.column(key, width=width, minwidth=40, anchor=anchor, stretch=stretch)
+        self.tree.tag_configure("odd", background=COLOR_STRIPE)
+        bold = tkfont.nametofont("TkDefaultFont").copy()
+        bold.configure(weight="bold")
+        self._bold_font = bold  # keep a reference or Tk drops it
+        self.tree.tag_configure("unread", font=bold)
         self.tree.grid(row=0, column=0, sticky="nsew")
         scroll = ttk.Scrollbar(self, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=scroll.set)
         scroll.grid(row=0, column=1, sticky="ns")
 
+        self.empty_label = ttk.Label(self, text=empty_text, foreground=COLOR_MUTED)
+        bottom_row = 1
+        if detail:
+            self._build_detail()
+            bottom_row = 2
         bottom = ttk.Frame(self)
-        bottom.grid(row=1, column=0, columnspan=2, sticky="e", pady=(8, 0))
-        self.mark_read_button = ttk.Button(bottom, text="Mark all read")
-        self.mark_read_button.grid(row=0, column=0)
+        bottom.grid(row=bottom_row, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        bottom.columnconfigure(0, weight=1)
+        ttk.Label(bottom, text=hint, foreground=COLOR_MUTED).grid(row=0, column=0, sticky="w")
+        if detail:
+            self.copy_button = ttk.Button(bottom, text="Copy text", command=self._copy_selected)
+            self.copy_button.grid(row=0, column=1, padx=(0, 6))
+        self.mark_read_button: Optional[ttk.Button] = None  # only tabs with an unread counter have one
+        if on_mark_read is not None:
+            self.mark_read_button = ttk.Button(bottom, text="Mark all read", command=on_mark_read)
+            self.mark_read_button.grid(row=0, column=2)
 
-        self.tree.insert("", "end", values=("2026-10-06 12:00:09", "ip7z/7zip", "Example row"))
+        font_spec = ttk.Style(self).lookup("Treeview", "font") or "TkDefaultFont"
+        try:
+            self._cell_font: tkfont.Font = tkfont.Font(root=self, font=font_spec)
+        except tk.TclError:
+            self._cell_font = tkfont.nametofont("TkDefaultFont")
+        self._tooltip = Tooltip(self.tree)
+        self.tree.bind("<<TreeviewSelect>>", self._show_detail)
+        self.tree.bind("<Double-1>", self._on_double_click)
+        self.tree.bind("<Return>", self._on_double_click)
+        self.tree.bind("<Motion>", self._on_motion)
+        self.tree.bind("<Leave>", lambda _event: self._hide_tip())
+        self.tree.bind("<ButtonPress>", lambda _event: self._hide_tip())
+        self.tree.bind("<MouseWheel>", lambda _event: self._hide_tip())
+        self.tree.bind("<Configure>", lambda _event: self._schedule_refit())
+        self.tree.bind("<ButtonRelease-1>", lambda _event: self._schedule_refit())
+
+    # ----- detail pane: the whole text of the selected row (long messages never fit a table cell) -----
+
+    DETAIL_PLACEHOLDER = "Select a row to read its full text here."
+
+    def _build_detail(self) -> None:
+        frame = ttk.Frame(self)
+        frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        frame.columnconfigure(0, weight=1)
+        self.detail = tk.Text(frame, height=5, wrap="word", state="disabled", relief="solid", borderwidth=1,
+                              background="#fbfbfb", font=("Segoe UI", 10))
+        self.detail.tag_configure("head", font=("Segoe UI", 10, "bold"))
+        self.detail.tag_configure("hint", foreground=COLOR_MUTED)
+        self.detail.grid(row=0, column=0, sticky="ew")
+        scroll = ttk.Scrollbar(frame, orient="vertical", command=self.detail.yview)
+        self.detail.configure(yscrollcommand=scroll.set)
+        scroll.grid(row=0, column=1, sticky="ns")
+        self._set_detail("", "")
+
+    def _set_detail(self, head: str, body: str) -> None:
+        self.detail.configure(state="normal")
+        self.detail.delete("1.0", "end")
+        if head or body:
+            self.detail.insert("end", head + "\n" if head else "", "head")
+            self.detail.insert("end", body)
+        else:
+            self.detail.insert("end", self.DETAIL_PLACEHOLDER, "hint")
+        self.detail.configure(state="disabled")
+
+    def _selected_index(self) -> Optional[int]:
+        selection = self.tree.selection()
+        return int(selection[0]) if selection else None
+
+    def _selected_text(self) -> tuple[str, str]:
+        """(header, body) of the selected row: every column but the last as the header, the last as the text."""
+        index = self._selected_index()
+        if index is None or index >= len(self._rows):
+            return "", ""
+        row = self._rows[index]
+        return "   \u00b7   ".join(cell for cell in row[:-1] if cell), row[-1]
+
+    def _show_detail(self, _event: object = None) -> None:
+        if self._has_detail:
+            self._set_detail(*self._selected_text())
+
+    def _copy_selected(self) -> None:
+        head, body = self._selected_text()
+        if head or body:
+            self.clipboard_clear()
+            self.clipboard_append(f"{head}\n{body}" if head else body)
+
+    # ----- content -----
+
+    def set_rows(
+        self,
+        rows: list[tuple[str, ...]],
+        repos: list[str],
+        ids: Optional[list[int]] = None,
+        highlight_after: Optional[int] = None,
+    ) -> None:
+        """Show these rows (full texts, newest first); `ids` + `highlight_after` mark unseen rows bold."""
+        self._rows, self._repos = rows, repos
+        self._ids = ids if ids is not None else [0] * len(rows)
+        self._highlight_after = highlight_after
+        self._render()
+
+    def set_highlight_after(self, highlight_after: Optional[int]) -> None:
+        if highlight_after != self._highlight_after:
+            self._highlight_after = highlight_after
+            self._render()
+
+    def _tags(self, index: int) -> tuple[str, ...]:
+        tags = ["odd"] if index % 2 else []
+        if self._highlight_after is not None and self._ids[index] > self._highlight_after:
+            tags.append("unread")
+        return tuple(tags)
+
+    def _render(self) -> None:
+        self._column_widths = self._current_widths()
+        self._hide_tip()
+        selected = self._selected_index()
+        selected_id = self._ids[selected] if selected is not None and selected < len(self._ids) else None
+        self.tree.delete(*self.tree.get_children())
+        for index, row in enumerate(self._rows):
+            self.tree.insert(
+                "", "end", iid=str(index), values=self._display(row, self._is_unread(index)), tags=self._tags(index)
+            )
+        if self._has_detail:
+            if selected_id is not None and selected_id in self._ids:
+                self.tree.selection_set(str(self._ids.index(selected_id)))  # same event, new position
+            else:
+                self._show_detail()
+        if self._rows:
+            self.empty_label.place_forget()
+        else:
+            self.empty_label.place(relx=0.5, rely=0.35, anchor="center")
+
+    # ----- ellipsis and hover text -----
+
+    def _measure(self, text: str, bold: bool = False) -> int:
+        cache_key = ("b" if bold else "n") + text
+        width = self._measure_cache.get(cache_key)
+        if width is None:
+            if len(self._measure_cache) > 20000:
+                self._measure_cache.clear()
+            font = self._bold_font if bold else self._cell_font
+            width = self._measure_cache[cache_key] = font.measure(text)
+        return width
+
+    def _is_unread(self, index: int) -> bool:
+        return self._highlight_after is not None and self._ids[index] > self._highlight_after
+
+    def _display(self, row: tuple[str, ...], bold: bool = False) -> list[str]:
+        """Cell texts shortened to their column; bold rows are measured in the (wider) bold font."""
+        shown = []
+        for (key, _heading, _width, _anchor, _stretch), text in zip(self._columns, row):
+            width = int(self.tree.column(key, "width")) - 14
+            shown.append(fit_text(text, max(width, 20), lambda value: self._measure(value, bold)))
+        return shown
+
+    def _current_widths(self) -> tuple[int, ...]:
+        return tuple(int(self.tree.column(column[0], "width")) for column in self._columns)
+
+    def _schedule_refit(self) -> None:
+        if self._fit_job is not None:
+            self.after_cancel(self._fit_job)
+        self._fit_job = self.after(200, self._refit)
+
+    def _refit(self) -> None:
+        self._fit_job = None
+        if self._rows and self._current_widths() != self._column_widths:
+            self._render()
+
+    def _on_motion(self, event: tk.Event) -> None:  # type: ignore[type-arg]
+        if self.tree.identify_region(event.x, event.y) != "cell":
+            self._hide_tip()
+            return
+        iid = self.tree.identify_row(event.y)
+        index = int(self.tree.identify_column(event.x)[1:]) - 1
+        if not iid or not 0 <= index < len(self._columns) or (iid, str(index)) == self._tip_cell:
+            return
+        self._hide_tip()
+        full = self._rows[int(iid)][index]
+        if self._display(self._rows[int(iid)], self._is_unread(int(iid)))[index] != full:
+            self._tip_cell = (iid, str(index))
+            self._tooltip.schedule(full, event.x_root, event.y_root)
+
+    def _hide_tip(self) -> None:
+        self._tip_cell = None
+        self._tooltip.hide()
+
+    def shutdown(self) -> None:
+        if self._fit_job is not None:
+            self.after_cancel(self._fit_job)
+            self._fit_job = None
+        self._hide_tip()
+
+    # ----- actions -----
+
+    def _on_double_click(self, _event: object = None) -> None:
+        selection = self.tree.selection()
+        if selection:
+            repo = self._repos[int(selection[0])]
+            if repo:
+                self._open_repo(repo)
 
 
 class SettingsDialog(tk.Toplevel):
@@ -1149,14 +1446,24 @@ class MainWindow(tk.Tk):
         self.log_tab = LiveLogTab(self.notebook, self._live_log_active, self._on_enable_log, self.set_status)
         self.notebook.add(self.mappings_tab, text="Mappings")
         self.notebook.add(self.log_tab, text="Live log")
-        for title in STATUS_TABS:
-            self.notebook.add(StatusTab(self.notebook), text=title)
+        self.status_feed = gui_data.StatusFeed()
+        self._status_tabs: dict[str, StatusTab] = {}
+        self._status_titles: dict[str, str] = {}
+        self._unmapped_rows: list[status_tabs.UnmappedRow] = []
+        self._current_status_key: Optional[str] = None
+        for definition in status_tabs.TAB_DEFS:
+            tab = self._build_status_tab(definition)
+            self._status_tabs[definition.key] = tab
+            self._status_titles[definition.key] = definition.title
+            self.notebook.add(tab, text=definition.title)
 
         self.notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
         self.bind("<Map>", self._on_map)
         self._tick_job: Optional[str] = self.after(REFRESH_INTERVAL_MS, self._tick)
         self._daemon_job: Optional[str] = None
+        self._verify_log_job: Optional[str] = None
         self._update_daemon_view()
+        self._refresh_status_tabs()  # titles and read marks from the start, not after the first tick
 
     def set_status(self, text: str) -> None:
         """Show a message in the status bar for a few seconds, then restore the default."""
@@ -1168,6 +1475,108 @@ class MainWindow(tk.Tk):
     def _reset_status(self) -> None:
         self._status_reset_job = None
         self.status_bar.configure(text=DEFAULT_STATUS_TEXT)
+
+    # ----- status tabs -----
+
+    EVENT_COLUMNS: tuple[StatusTab.Column, ...] = (
+        ("time", "Time", 150, "w", False),
+        ("repo", "Repository", 220, "w", False),
+        ("kind", "Type", 175, "w", False),
+        ("message", "Message", 420, "w", True),
+    )
+    UNMAPPED_COLUMNS: tuple[StatusTab.Column, ...] = (
+        ("repo", "Repository", 280, "w", True),
+        ("foldername", "Folder name", 280, "w", True),
+        ("first_seen", "Last notification", 160, "w", False),
+    )
+    EMPTY_TEXTS = {
+        "warnings": "No warnings.",
+        "completed": "Nothing has been completed yet.",
+        "limits": "No folder is over its limit.",
+        "unmapped": "Every repository has a destination.",
+    }
+
+    def _build_status_tab(self, definition: status_tabs.TabDef) -> StatusTab:
+        if definition.kind == status_tabs.KIND_UNMAPPED:
+            return StatusTab(
+                self.notebook, self.UNMAPPED_COLUMNS, self.EMPTY_TEXTS[definition.key], self._show_repo,
+                hint="These repositories were added without a destination (they use default routing). "
+                     "Double-click one to set it up in the Mappings tab.",
+            )
+        return StatusTab(
+            self.notebook, self.EVENT_COLUMNS, self.EMPTY_TEXTS.get(definition.key, "Nothing to show."), self._show_repo,
+            hint="Double-click a row to open its repository in the Mappings tab.",
+            on_mark_read=(lambda key=definition.key: self._mark_status_read(key)) if definition.counter else None,
+            detail=True,
+        )
+
+    def _show_repo(self, repo: str) -> None:
+        if self.mappings_tab.select_repo(repo):
+            self.notebook.select(self.mappings_tab)
+        else:
+            self.set_status(f"{repo} is not in mapping.json.")
+
+    def _selected_status_key(self) -> Optional[str]:
+        selected = self.notebook.select()
+        for key, tab in self._status_tabs.items():
+            if selected == str(tab):
+                return key
+        return None
+
+    def _set_status_title(self, key: str, title: str) -> None:
+        if self._status_titles.get(key) != title:
+            self._status_titles[key] = title
+            self.notebook.tab(self._status_tabs[key], text=title)
+
+    def _show_event_rows(self, key: str, highlight_after: Optional[int]) -> None:
+        rows = self.status_feed.model.rows(key)
+        self._status_tabs[key].set_rows(
+            [(r.time, r.repo, r.kind, r.message) for r in rows],
+            [r.repo for r in rows],
+            [r.id for r in rows],
+            highlight_after,
+        )
+
+    def _refresh_status_tabs(self) -> None:
+        """Pull new events/unmapped repos, update the tab titles, and show them in the visible tab."""
+        model = self.status_feed.model
+        try:
+            changed = self.status_feed.refresh()
+            unmapped = self.status_feed.unmapped()
+        except Exception as exc:  # a database hiccup must not break the GUI
+            self.set_status(f"Status tabs unavailable: {exc}")
+            return
+        visible = self._current_status_key
+        for key in model.event_tab_keys:
+            if key == visible:
+                if key in changed:  # new rows while the tab is open: shown now, and read at once
+                    self._show_event_rows(key, self._status_tabs[key]._highlight_after)
+                    model.mark_read(key)
+            self._set_status_title(key, model.title(key))
+        if unmapped != self._unmapped_rows:
+            self._unmapped_rows = unmapped
+            self._status_tabs["unmapped"].set_rows(
+                [(r.repo, r.foldername, r.first_seen) for r in unmapped], [r.repo for r in unmapped]
+            )
+        self._set_status_title("unmapped", format_status_title("Unmapped", len(unmapped)))
+
+    def _enter_status_tab(self, key: str) -> None:
+        """Opening an event tab shows its rows, bold where new since the last visit, and marks them read."""
+        model = self.status_feed.model
+        if key in model.event_tab_keys:
+            self._show_event_rows(key, model.seen_id(key))
+            model.mark_read(key)
+            self._set_status_title(key, model.title(key))
+
+    def _leave_status_tab(self, key: str) -> None:
+        if key in self.status_feed.model.event_tab_keys:
+            self._status_tabs[key].set_highlight_after(None)
+
+    def _mark_status_read(self, key: str) -> None:
+        model = self.status_feed.model
+        model.mark_read(key)
+        self._status_tabs[key].set_highlight_after(None)
+        self._set_status_title(key, model.title(key))
 
     def _live_log_active(self) -> bool:
         """True when somebody can see the Live log tab (window not minimized, its tab selected)."""
@@ -1185,6 +1594,11 @@ class MainWindow(tk.Tk):
             self.mappings_tab.refresh()
 
     def _on_tab_changed(self, _event: object = None) -> None:
+        previous, self._current_status_key = self._current_status_key, self._selected_status_key()
+        if previous is not None and previous != self._current_status_key:
+            self._leave_status_tab(previous)
+        if self._current_status_key is not None and self._current_status_key != previous:
+            self._enter_status_tab(self._current_status_key)
         self._refresh_mappings_if_visible()
         if self._live_log_active():
             self.log_tab.poll_now()
@@ -1195,11 +1609,15 @@ class MainWindow(tk.Tk):
             self._refresh_mappings_if_visible()
             if self._live_log_active():
                 self.log_tab.poll_now()
+            if self.state() != "iconic":
+                self._refresh_status_tabs()
             self._update_daemon_view()
 
     def _tick(self) -> None:
         try:
             self._refresh_mappings_if_visible()
+            if self.state() != "iconic":
+                self._refresh_status_tabs()
         finally:
             self._tick_job = self.after(REFRESH_INTERVAL_MS, self._tick)
 
@@ -1319,6 +1737,24 @@ class MainWindow(tk.Tk):
             "Detailed log switched on (a new .log file)." if wanted else "Detailed log switched off.",
         ):
             self.control_bar.detailed_log.set(self._snapshot.log_on)  # show the real state again
+            return
+        if wanted:
+            if self._verify_log_job is not None:
+                self.after_cancel(self._verify_log_job)
+            self._verify_log_job = self.after(int(gui_daemon.INTENT_SECONDS * 1000) + 700, self._verify_log_switched_on)
+
+    def _verify_log_switched_on(self) -> None:
+        """The daemon reports whether its log file is really open; tell the user if the switch did not take."""
+        self._verify_log_job = None
+        try:
+            snapshot = self._reader.read()
+        except Exception:
+            return
+        if snapshot.running and not snapshot.log_on:
+            self.set_status(
+                "The daemon could not start the log file. Check that the log folder exists and is writable "
+                "(Settings, default download dir)."
+            )
 
     def _open_settings(self) -> None:
         SettingsDialog(self, self._after_settings_saved)
@@ -1366,12 +1802,14 @@ class MainWindow(tk.Tk):
 
     def destroy(self) -> None:
         """Cancel pending timers first, so nothing fires into a window that is already gone."""
-        for job in (self._tick_job, self._status_reset_job, self._daemon_job):
+        for job in (self._tick_job, self._status_reset_job, self._daemon_job, self._verify_log_job):
             if job is not None:
                 self.after_cancel(job)
-        self._tick_job = self._status_reset_job = self._daemon_job = None
+        self._tick_job = self._status_reset_job = self._daemon_job = self._verify_log_job = None
         self.mappings_tab.shutdown()
         self.log_tab.shutdown()
+        for tab in self._status_tabs.values():
+            tab.shutdown()
         super().destroy()
 
     def _set_icon(self) -> None:

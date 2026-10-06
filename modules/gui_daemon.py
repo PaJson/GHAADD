@@ -18,6 +18,7 @@ from modules.file_cache import StatCache
 
 CONTROL_READ_INTERVAL_SECONDS = 3.0  # how often the control table in state.db is read
 CONTROL_FRESH_SECONDS = 2.0  # a control read this recent outranks the (lagging) status file
+INTENT_SECONDS = 2.5  # after the GUI itself switched the log, show what was asked for while the daemon catches up
 STARTING_TIMEOUT_SECONDS = 20.0  # "Starting..." is dropped if no daemon appears by then
 STOPPING_HINT_SECONDS = 45.0  # after this, suggest the daemon may be an older version
 STOPPING_TIMEOUT_SECONDS = 120.0  # after this, Stop is offered again
@@ -92,6 +93,7 @@ class SnapshotReader:
         self._control: Optional[daemon_control.ControlState] = None
         self._control_at: Optional[float] = None
         self._control_pid: Optional[int] = None
+        self._intent_until = 0.0
 
     def read(self, force_control: bool = False) -> DaemonSnapshot:
         status = daemon_lock.get_daemon_status()
@@ -101,6 +103,8 @@ class SnapshotReader:
             return DaemonSnapshot(log_on=bool(config_log_enabled))
 
         now = self._clock()
+        if force_control:
+            self._intent_until = now + INTENT_SECONDS
         due = (
             force_control
             or self._control_at is None
@@ -121,6 +125,11 @@ class SnapshotReader:
         # a pause/resume); later the status file is newer than a few-seconds-old control read.
         paused = control["paused"] if fresh and control is not None else bool(status["paused"])
         log_override = control["log_override"] if control is not None else None
+        intended_log = bool(config_log_enabled) if log_override is None else log_override
+        # The daemon says whether the log file is really open (a failed open leaves it off). Right after
+        # the GUI changed the switch, show what was asked for; the daemon reports back within a second.
+        reported_log = status.get("log_active")
+        log_on = intended_log if reported_log is None or now < self._intent_until else reported_log
 
         # Only a daemon that published its fingerprint can be compared (an older one cannot), and an
         # unreadable config.json is "unknown", never "changed".
@@ -134,7 +143,7 @@ class SnapshotReader:
             paused=paused,
             next_poll_at=status["next_poll_at"],
             current_repo=current_job.get("repo") if isinstance(current_job, dict) else None,
-            log_on=bool(config_log_enabled) if log_override is None else log_override,
+            log_on=log_on,
             restart_needed=restart_needed,
         )
 

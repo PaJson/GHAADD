@@ -133,5 +133,64 @@ class TerminalLogTests(unittest.TestCase):
         self.assertEqual(self.logs(), [])
 
 
+class WhichRunsWriteALogTests(unittest.TestCase):
+    """Only real run modes mirror their output to a log file; --help and read-only commands do not."""
+
+    def setUp(self) -> None:
+        self._temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._temp_dir.cleanup)
+        self.directory = self._temp_dir.name
+        settings = {"enabled": True, "directory": self.directory, "max_file_mb": 10, "keep_files": 0}
+        original = (main.sys.stdout, main.sys.stderr, main.sys.argv)
+        self.addCleanup(lambda: (setattr(main.sys, "stdout", original[0]), setattr(main.sys, "stderr", original[1]),
+                                 setattr(main.sys, "argv", original[2])))
+        for patcher in (
+            mock.patch.object(main, "load_config", return_value={}),
+            mock.patch.object(main, "get_terminal_log_settings", return_value=settings),
+            mock.patch.object(main, "get_polling_settings", return_value={
+                "enabled": False, "interval_seconds": 300, "jitter_min_seconds": 0, "jitter_max_seconds": 0}),
+            mock.patch.object(main, "acquire_daemon_lock", return_value=contextlib.nullcontext()),
+            mock.patch.object(main, "ensure_mapping_file", return_value=False),
+            mock.patch.object(main, "open_database", return_value=contextlib.nullcontext()),
+            mock.patch.object(main, "run_ingest_and_queue_cycle"),
+            mock.patch.object(main, "_ORIGINAL_STDOUT", io.StringIO()),  # keep --help text out of the test output
+            mock.patch.object(main, "_ORIGINAL_STDERR", io.StringIO()),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def logs(self) -> list[str]:
+        return [name for name in os.listdir(self.directory) if name.endswith(".log")]
+
+    def run_main(self, argv: list[str], handled: bool) -> None:
+        main.sys.argv = ["main.py", *argv]
+        with mock.patch.object(main, "handle_cli_command", return_value=handled), \
+                contextlib.redirect_stdout(io.StringIO()):
+            main.main()
+
+    def test_setup_alone_does_not_open_a_file(self) -> None:
+        log = main.setup_terminal_logging({})
+        self.addCleanup(log.stop)
+        self.assertFalse(log.active)
+        self.assertEqual(self.logs(), [])
+
+    def test_a_read_only_command_leaves_no_log_file(self) -> None:
+        self.run_main(["--queue-status"], handled=True)
+        self.assertEqual(self.logs(), [])
+
+    def test_help_leaves_no_log_file(self) -> None:
+        main.sys.argv = ["main.py", "--help"]
+        with self.assertRaises(SystemExit), contextlib.redirect_stdout(io.StringIO()):
+            main.main()
+        self.assertEqual(self.logs(), [])
+
+    def test_a_run_mode_still_writes_its_log(self) -> None:
+        self.run_main(["--once"], handled=False)
+        logs = self.logs()
+        self.assertEqual(len(logs), 1)
+        with open(os.path.join(self.directory, logs[0]), encoding="utf-8") as handle:
+            self.assertIn("Logging enabled", handle.read())
+
+
 if __name__ == "__main__":
     unittest.main()

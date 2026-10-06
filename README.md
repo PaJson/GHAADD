@@ -336,7 +336,7 @@ Key behavior:
 	- Defaults are GHAADD, Processing, Complete, Partial, and Logs.
 - terminal_log.enabled
 	- false disables terminal output logging.
-	- true writes all terminal output (stdout and stderr) to a .log file for this run.
+	- true writes all terminal output (stdout and stderr) to a .log file for this run. Only real run modes (the polling daemon, --once, --single, --drain-queue) create a log file; --help, --version and the read-only/control commands (--queue-status, --doctor, --pause, ...) do not.
 	- Can be overridden while a polling daemon runs with --log-on / --log-off (or the GUI toggle); the override lasts until the daemon stops.
 	- Log files are written under: paths.default_download_dir/folders.ghaadd_root/folders.logs.
 	- Each run creates a new log file named with app start time (format: YYYYMMDD_HHMMSS.log). This includes short CLI commands such as --queue-status, so they count towards keep_files.

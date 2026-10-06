@@ -9,10 +9,10 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Optional
+from typing import Any, Callable, Mapping, Optional
 
-from modules import config_manager, daemon_lock, db_manager, mapping_manager, repo_overview
-from modules.file_cache import StatCache
+from modules import config_manager, daemon_lock, db_manager, mapping_manager, repo_overview, status_tabs
+from modules.file_cache import StatCache, file_signature
 
 
 @dataclass
@@ -107,3 +107,89 @@ def load_settings_form() -> dict[str, Any]:
         "log_max_mb": str(terminal_log["max_file_mb"]),
         "log_keep": str(terminal_log["keep_files"]),
     }
+
+
+# ----- status tabs (Warnings / Completed / Folder limits / Unmapped) -----
+
+STATUS_SEEN_SECTION = "gui.status_tabs"
+STATUS_REFRESH_MAX_AGE_SECONDS = 30.0
+
+
+class ConfigSeenStore:
+    """Per-tab last-seen event ids, kept in config.json under gui.status_tabs (GUI-side only)."""
+
+    def load(self) -> dict[str, int]:
+        gui = config_manager.load_config().get("gui")
+        tabs = gui.get("status_tabs") if isinstance(gui, dict) else None
+        if not isinstance(tabs, dict):
+            return {}
+        return {str(key): value for key, value in tabs.items() if isinstance(value, int) and not isinstance(value, bool)}
+
+    def save(self, seen: dict[str, int]) -> None:
+        try:
+            config_manager.set_config_values({f"{STATUS_SEEN_SECTION}.{key}": value for key, value in seen.items()})
+        except (config_manager.ConfigLockTimeout, config_manager.ConfigUnreadableError, OSError):
+            pass  # the read marks just are not remembered this time; never break the GUI over it
+
+
+class StatusFeed:
+    """Loads the status tabs' data cheaply enough to poll every few seconds.
+
+    The event tabs only look at state.db when it (or its WAL file) changed, plus a safety refresh
+    every 30 s; the Unmapped list only re-reads mapping.json when that file changed.
+    """
+
+    def __init__(
+        self,
+        defs: tuple[status_tabs.TabDef, ...] = status_tabs.TAB_DEFS,
+        store: Optional[status_tabs.SeenStore] = None,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._clock = clock
+        self._mapping_cache: StatCache[dict[str, list[dict[str, Any]]]] = StatCache(
+            lambda: [mapping_manager._mapping_file_path()], mapping_manager.load_mapping, clock=clock
+        )
+        self._connection: Any = None
+        self._signature: Optional[tuple[Any, ...]] = None
+        self._refreshed_at = 0.0
+        self.model = status_tabs.StatusTabsModel(
+            defs, self._fetch, self._max_id, store if store is not None else ConfigSeenStore(),
+            known_repos=self._known_repos,
+        )
+        self.defs = defs
+
+    def refresh(self) -> set[str]:
+        """Update the event rows if the database changed; returns the keys of tabs that got new rows."""
+        signature = file_signature(_state_db_files())
+        now = self._clock()
+        if (
+            self._signature is not None
+            and signature == self._signature
+            and now - self._refreshed_at < STATUS_REFRESH_MAX_AGE_SECONDS
+        ):
+            return set()
+        self._connection = db_manager.open_database()
+        try:
+            changed = self.model.refresh()
+        finally:
+            self._connection.close()
+            self._connection = None
+        self._signature, self._refreshed_at = signature, now
+        return changed
+
+    def unmapped(self) -> list[status_tabs.UnmappedRow]:
+        return status_tabs.unmapped_rows(self._mapping_cache.get()["repositories"])
+
+    # ----- callbacks for the model -----
+
+    def _fetch(self, tab: status_tabs.TabDef, after_id: Optional[int], limit: int) -> list[dict[str, Any]]:
+        return db_manager.get_events_for_tab(
+            self._connection, tab.event_types, tab.categories, tab.exclude_categories, after_id, limit
+        )
+
+    def _max_id(self) -> int:
+        return db_manager.get_max_event_id(self._connection)
+
+    def _known_repos(self) -> dict[str, str]:
+        entries = self._mapping_cache.get()["repositories"]
+        return {str(e["name"]).strip().lower(): str(e["name"]).strip() for e in entries if e.get("name")}

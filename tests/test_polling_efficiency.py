@@ -156,7 +156,7 @@ class ConfigReadingTests(unittest.TestCase):
 class SnapshotReaderTests(unittest.TestCase):
     STATUS = {
         "running": True, "pid": 7, "started_at": 1.0, "paused": False, "next_poll_at": 99.0,
-        "last_forced_poll_handled": None, "current_job": None, "config_fingerprint": None,
+        "last_forced_poll_handled": None, "current_job": None, "config_fingerprint": None, "log_active": None,
     }
 
     def setUp(self) -> None:
@@ -212,6 +212,31 @@ class SnapshotReaderTests(unittest.TestCase):
         self.status["paused"] = True
         self.assertTrue(self.reader.read().paused)  # seen through the status file, no db read needed
         self.assertEqual(self.get_control.call_count, 1)
+
+    def test_log_state_follows_what_the_daemon_reports(self) -> None:
+        self.control["log_override"] = True  # asked for on ...
+        self.status["log_active"] = False  # ... but the daemon could not open the file
+        self.reader.read()  # a periodic read (not forced) after startup
+        self.clock.now += 5
+        self.assertFalse(self.reader.read().log_on)  # shown as off: it really is off
+
+        self.status["log_active"] = True
+        self.assertTrue(self.reader.read().log_on)
+
+    def test_right_after_a_click_the_requested_state_is_shown_until_the_daemon_catches_up(self) -> None:
+        self.status["log_active"] = False
+        self.reader.read()
+        self.control["log_override"] = True
+        self.assertTrue(self.reader.read(force_control=True).log_on)  # the click: show what was asked for
+        self.clock.now += 1
+        self.assertTrue(self.reader.read().log_on)  # still inside the grace period
+        self.clock.now += 3
+        self.assertFalse(self.reader.read().log_on)  # the daemon never turned it on: the truth shows
+
+    def test_an_older_daemon_without_log_state_falls_back_to_the_switch(self) -> None:
+        self.status["log_active"] = None
+        self.control["log_override"] = True
+        self.assertTrue(self.reader.read().log_on)
 
     def test_busy_database_keeps_the_last_control_values(self) -> None:
         self.control["log_override"] = True

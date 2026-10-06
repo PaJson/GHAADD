@@ -1211,6 +1211,51 @@ def get_lifecycle_events(connection, limit: Optional[int] = 20, event_type=None,
     return connection.execute(query, params).fetchall()
 
 
+def get_events_for_tab(
+    connection,
+    event_types,
+    categories=None,
+    exclude_categories=(),
+    after_id=None,
+    limit=500,
+):
+    """Return lifecycle events for one GUI status tab, newest first (read-only).
+
+    event_types/categories are allow-lists (categories=None means any), exclude_categories drops
+    events of those categories (events without a category are kept), after_id returns only events
+    with a larger id, so a poll that finds nothing new is a cheap indexed query.
+    """
+    conditions = [f"event_type IN ({','.join('?' * len(event_types))})"]
+    params = list(event_types)
+    if categories:
+        conditions.append(f"category IN ({','.join('?' * len(categories))})")
+        params.extend(categories)
+    if exclude_categories:
+        conditions.append(f"(category IS NULL OR category NOT IN ({','.join('?' * len(exclude_categories))}))")
+        params.extend(exclude_categories)
+    if after_id is not None:
+        conditions.append("id > ?")
+        params.append(int(after_id))
+    params.append(int(limit))
+    rows = connection.execute(
+        f"""
+        SELECT id, event_type, category, repo, tag, destination_path, message, created_at
+        FROM lifecycle_events
+        WHERE {' AND '.join(conditions)}
+        ORDER BY id DESC
+        LIMIT ?
+        """,
+        params,
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_max_event_id(connection):
+    """Return the newest lifecycle event id (0 when there are no events)."""
+    row = connection.execute("SELECT MAX(id) FROM lifecycle_events").fetchone()
+    return int(row[0] or 0)
+
+
 def purge_lifecycle_events(connection, event_type=None, repo_filter=None, min_age_days=None, dry_run=False):
     """Delete lifecycle events matching the given filters and return the number removed.
 

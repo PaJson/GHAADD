@@ -4,7 +4,6 @@ import sys
 import time
 from contextlib import nullcontext
 from modules.config_manager import (
-    get_default_download_dir,
     get_config_fingerprint,
     get_destination_check_every_n_polls,
     get_polling_settings,
@@ -176,13 +175,11 @@ class TerminalLog:
 
 
 def setup_terminal_logging(config):
-    """Route console output through TeeStream and start the log file if enabled in config."""
+    """Route console output through TeeStream. The log file itself starts later, once main() knows
+    it is entering a run mode (so --help and the read-only commands do not leave log files behind)."""
     tees = (TeeStream(_ORIGINAL_STDOUT, None), TeeStream(_ORIGINAL_STDERR, None))
     sys.stdout, sys.stderr = tees
-    terminal_log = TerminalLog(get_terminal_log_settings(config), tees)
-    if terminal_log.settings["enabled"]:
-        terminal_log.start()
-    return terminal_log
+    return TerminalLog(get_terminal_log_settings(config), tees)
 
 
 def run_internal_smoke_tests():
@@ -226,10 +223,21 @@ def run_polling_loop(interval_seconds, jitter_min_seconds, jitter_max_seconds, t
 
     announced_paused = False
 
+    def log_is_active():
+        return bool(terminal_log is not None and terminal_log.active)
+
+    def apply_log_override(override):
+        """Follow a live log switch, then publish whether the file really is open (the GUI shows it)."""
+        if terminal_log is None:  # nothing to switch (never registered then, but keeps the types honest)
+            return
+        terminal_log.apply_override(override)
+        if control_enabled:
+            update_daemon_status(log_active=log_is_active())
+
     def publish_wait_state(paused, next_poll_at):
         nonlocal announced_paused
         if control_enabled:
-            update_daemon_status(paused=paused, next_poll_at=next_poll_at)
+            update_daemon_status(paused=paused, next_poll_at=next_poll_at, log_active=log_is_active())
         if paused != announced_paused:
             announced_paused = paused
             if paused:
@@ -244,12 +252,12 @@ def run_polling_loop(interval_seconds, jitter_min_seconds, jitter_max_seconds, t
             reset_log_override_on_startup(connection)
             update_daemon_status(
                 paused=False, next_poll_at=None, last_forced_poll_handled=None, current_job=None,
-                config_fingerprint=config_fingerprint,
+                config_fingerprint=config_fingerprint, log_active=log_is_active(),
             )
         watcher = ControlWatcher(
             connection=connection,
             enabled=control_enabled,
-            on_log_override=terminal_log.apply_override if terminal_log is not None else None,
+            on_log_override=apply_log_override if terminal_log is not None else None,
         )
 
         while True:
@@ -333,6 +341,11 @@ def main():
 
         if handle_cli_command(parsed_args, run_internal_smoke_tests):
             return
+
+        # Past the one-shot commands: this is a real run (daemon, --once, --single, --drain-queue), so
+        # mirror the output to a log file when terminal_log.enabled says so.
+        if terminal_log.settings["enabled"]:
+            terminal_log.start()
 
         polling_settings = get_polling_settings(config)
 

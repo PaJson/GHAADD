@@ -73,6 +73,33 @@ class FitToScreenTests(unittest.TestCase):
         self.assertTrue(self.fit(WindowState(1280, 720, 0, 0, True)).maximized)
 
 
+class PlacePopupTests(unittest.TestCase):
+    SCREEN = (0, 0, 1920, 1080)
+
+    def place(self, x, y, width=400, height=60):
+        return gui_state.place_popup(x, y, width, height, *self.SCREEN)
+
+    def test_normal_case_is_below_right_of_the_pointer(self) -> None:
+        self.assertEqual(self.place(500, 300), (514, 318))
+
+    def test_near_the_right_edge_it_moves_left_and_stays_on_screen(self) -> None:
+        x, y = self.place(1900, 300, width=600)
+        self.assertEqual(x + 600, 1920 - 8)
+        self.assertEqual(y, 318)
+
+    def test_near_the_bottom_edge_it_flips_above_the_pointer(self) -> None:
+        x, y = self.place(500, 1060, height=80)
+        self.assertEqual((x, y + 80 <= 1060), (514, True))
+
+    def test_a_popup_wider_than_the_screen_still_starts_on_screen(self) -> None:
+        x, _ = self.place(100, 100, width=5000)
+        self.assertEqual(x, 8)
+
+    def test_secondary_monitor_to_the_left_is_respected(self) -> None:
+        x, _ = gui_state.place_popup(-100, 300, 400, 60, -1920, 0, 3840, 1080)
+        self.assertEqual(x, -86)  # fits on the left monitor, no clamping needed
+
+
 class SaveStateTests(unittest.TestCase):
     def setUp(self) -> None:
         self._temp_dir = tempfile.TemporaryDirectory()

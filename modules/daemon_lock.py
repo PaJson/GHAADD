@@ -23,6 +23,7 @@ class DaemonStatus(TypedDict):
     last_forced_poll_handled: Optional[float]
     current_job: Optional[dict]  # {"repo", "tag", "since"} while a job is being processed
     config_fingerprint: Optional[str]  # config_manager.get_config_fingerprint() the daemon started with
+    log_active: Optional[bool]  # whether the terminal log file is really open (None: daemon does not say)
 
 
 def get_daemon_lock_path() -> str:
@@ -120,6 +121,7 @@ def get_daemon_status() -> DaemonStatus:
             "last_forced_poll_handled": None,
             "current_job": None,
             "config_fingerprint": None,
+            "log_active": None,
         }
 
     payload = _read_status_payload()
@@ -132,6 +134,7 @@ def get_daemon_status() -> DaemonStatus:
         "last_forced_poll_handled": payload.get("last_forced_poll_handled"),
         "current_job": payload.get("current_job") if isinstance(payload.get("current_job"), dict) else None,
         "config_fingerprint": payload.get("config_fingerprint") if isinstance(payload.get("config_fingerprint"), str) else None,
+        "log_active": payload.get("log_active") if isinstance(payload.get("log_active"), bool) else None,
     }
 
 

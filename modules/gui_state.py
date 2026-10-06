@@ -106,3 +106,31 @@ def to_geometry(state: WindowState) -> str:
     if state.x is None or state.y is None:
         return f"{state.width}x{state.height}"
     return f"{state.width}x{state.height}+{state.x}+{state.y}"
+
+
+def place_popup(
+    pointer_x: int,
+    pointer_y: int,
+    width: int,
+    height: int,
+    screen_x: int,
+    screen_y: int,
+    screen_width: int,
+    screen_height: int,
+    offset_x: int = 14,
+    offset_y: int = 18,
+    margin: int = 8,
+) -> tuple[int, int]:
+    """Where to put a popup (tooltip) of width x height near the pointer so it stays on screen.
+
+    It goes below-right of the pointer; when that would run off the right/bottom edge it moves left
+    (flush with the edge) or flips above the pointer. (screen_*) is the whole virtual desktop.
+    """
+    right, bottom = screen_x + screen_width - margin, screen_y + screen_height - margin
+    x = pointer_x + offset_x
+    if x + width > right:
+        x = right - width
+    y = pointer_y + offset_y
+    if y + height > bottom:
+        y = pointer_y - height - 6
+    return max(screen_x + margin, x), max(screen_y + margin, y)
