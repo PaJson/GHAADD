@@ -12,6 +12,7 @@ ghaadd.lock
 ghaadd.daemon.status.json
 ghaadd.daemon.status.json.*.tmp
 ghaadd.daemon.stderr.log
+perf_baseline*.json
 mapping.json.lock
 mapping.json.*.tmp
 

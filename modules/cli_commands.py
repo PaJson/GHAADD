@@ -72,6 +72,11 @@ def parse_cli_args(args: list[str], version: str) -> argparse.Namespace:
     parser.add_argument("--mapping-validate", action="store_true", help="Validate mapping.json schema and report issues.")
     parser.add_argument("--doctor", action="store_true", help="Run environment and cross-platform diagnostics.")
     parser.add_argument(
+        "--perf-report",
+        action="store_true",
+        help="Measure data sizes, growth and the timings of the routine queries (read-only, safe while the daemon runs; --json for machine output).",
+    )
+    parser.add_argument(
         "--run-pending",
         nargs="+",
         type=int,
@@ -214,6 +219,13 @@ def parse_cli_args(args: list[str], version: str) -> argparse.Namespace:
 
 def handle_cli_command(parsed_args: argparse.Namespace, run_smoke_tests: Callable[[], None]) -> bool:
     """Execute one-shot command-line operations after parsing."""
+    if parsed_args.perf_report:
+        from modules import perf_report  # imported here: it pulls in the GUI data modules, no other command needs them
+
+        report = perf_report.collect()
+        print(json.dumps(report, indent=2) if parsed_args.json else perf_report.format_report(report))
+        return True
+
     if parsed_args.doctor:
         doctor_report = run_doctor()
         if parsed_args.json:

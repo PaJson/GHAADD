@@ -330,7 +330,8 @@ def run_drain_queue_loop(github_token):
 def main():
     """Run the main orchestration flow for ingest and queue processing."""
     _configure_output_encoding()
-    print(f"GHAADD {__version__} is starting...")
+    if "--json" not in sys.argv[1:]:  # keep stdout pure JSON for --doctor/--queue-status/--perf-report --json
+        print(f"GHAADD {__version__} is starting...")
     config = load_config()
     terminal_log = setup_terminal_logging(config)
     try:

@@ -1250,6 +1250,39 @@ def get_events_for_tab(
     return [dict(row) for row in rows]
 
 
+def get_storage_stats(connection):
+    """Return read-only size and growth figures for state.db (used by the --perf-report diagnostics)."""
+    def scalar(sql, params=()):
+        row = connection.execute(sql, params).fetchone()
+        return None if row is None or row[0] is None else row[0]
+
+    def grouped(sql):
+        return {str(row[0]): int(row[1]) for row in connection.execute(sql).fetchall()}
+
+    week_ago = scalar("SELECT CAST(strftime('%s', 'now') AS REAL) - 7 * 86400")
+    return {
+        "tables": {
+            name: int(scalar(f"SELECT COUNT(*) FROM {name}") or 0)
+            for name in ("job_queue", "job_skip_details", "lifecycle_events", "asset_state")
+        },
+        "jobs_by_status": grouped("SELECT status, COUNT(*) FROM job_queue GROUP BY status"),
+        "events_by_type": grouped("SELECT event_type, COUNT(*) FROM lifecycle_events GROUP BY event_type"),
+        "oldest_job_at": scalar("SELECT MIN(created_at) FROM job_queue"),
+        "oldest_event_at": scalar("SELECT MIN(created_at) FROM lifecycle_events"),
+        "jobs_last_7_days": int(scalar("SELECT COUNT(*) FROM job_queue WHERE created_at >= ?", (week_ago,)) or 0),
+        "events_last_7_days": int(scalar("SELECT COUNT(*) FROM lifecycle_events WHERE created_at >= ?", (week_ago,)) or 0),
+        "page_size": int(scalar("PRAGMA page_size") or 0),
+        "page_count": int(scalar("PRAGMA page_count") or 0),
+        "freelist_pages": int(scalar("PRAGMA freelist_count") or 0),
+        "indexes": sorted(
+            f"{row['tbl_name']}.{row['name']}"
+            for row in connection.execute(
+                "SELECT name, tbl_name FROM sqlite_master WHERE type = 'index' AND name NOT LIKE 'sqlite_autoindex%'"
+            ).fetchall()
+        ),
+    }
+
+
 def get_max_event_id(connection):
     """Return the newest lifecycle event id (0 when there are no events)."""
     row = connection.execute("SELECT MAX(id) FROM lifecycle_events").fetchone()

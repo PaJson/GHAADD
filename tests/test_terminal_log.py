@@ -140,6 +140,7 @@ class WhichRunsWriteALogTests(unittest.TestCase):
         self._temp_dir = tempfile.TemporaryDirectory()
         self.addCleanup(self._temp_dir.cleanup)
         self.directory = self._temp_dir.name
+        self.stdout = io.StringIO()
         settings = {"enabled": True, "directory": self.directory, "max_file_mb": 10, "keep_files": 0}
         original = (main.sys.stdout, main.sys.stderr, main.sys.argv)
         self.addCleanup(lambda: (setattr(main.sys, "stdout", original[0]), setattr(main.sys, "stderr", original[1]),
@@ -153,7 +154,7 @@ class WhichRunsWriteALogTests(unittest.TestCase):
             mock.patch.object(main, "ensure_mapping_file", return_value=False),
             mock.patch.object(main, "open_database", return_value=contextlib.nullcontext()),
             mock.patch.object(main, "run_ingest_and_queue_cycle"),
-            mock.patch.object(main, "_ORIGINAL_STDOUT", io.StringIO()),  # keep --help text out of the test output
+            mock.patch.object(main, "_ORIGINAL_STDOUT", self.stdout),  # keep --help text out of the test output
             mock.patch.object(main, "_ORIGINAL_STDERR", io.StringIO()),
         ):
             patcher.start()
@@ -162,11 +163,13 @@ class WhichRunsWriteALogTests(unittest.TestCase):
     def logs(self) -> list[str]:
         return [name for name in os.listdir(self.directory) if name.endswith(".log")]
 
-    def run_main(self, argv: list[str], handled: bool) -> None:
+    def run_main(self, argv: list[str], handled: bool) -> str:
+        """Run main() and return everything it printed (before and after output is routed through the tee)."""
         main.sys.argv = ["main.py", *argv]
-        with mock.patch.object(main, "handle_cli_command", return_value=handled), \
-                contextlib.redirect_stdout(io.StringIO()):
+        early = io.StringIO()
+        with mock.patch.object(main, "handle_cli_command", return_value=handled), contextlib.redirect_stdout(early):
             main.main()
+        return early.getvalue() + self.stdout.getvalue()
 
     def test_setup_alone_does_not_open_a_file(self) -> None:
         log = main.setup_terminal_logging({})
@@ -183,6 +186,14 @@ class WhichRunsWriteALogTests(unittest.TestCase):
         with self.assertRaises(SystemExit), contextlib.redirect_stdout(io.StringIO()):
             main.main()
         self.assertEqual(self.logs(), [])
+
+    def test_json_output_is_not_preceded_by_the_startup_banner(self) -> None:
+        output = self.run_main(["--perf-report", "--json"], handled=True)
+        self.assertNotIn("is starting", output)
+
+    def test_the_banner_is_still_shown_otherwise(self) -> None:
+        output = self.run_main(["--queue-status"], handled=True)
+        self.assertIn("is starting", output)
 
     def test_a_run_mode_still_writes_its_log(self) -> None:
         self.run_main(["--once"], handled=False)

@@ -202,6 +202,7 @@ CLI options:
 - --purge-state: Delete local state.db and exit. Add --dry-run to preview whether it would delete anything without doing so.
 - --smoke-test: Run internal smoke tests and exit.
 - --doctor: Run environment and cross-platform diagnostics.
+- --perf-report: Print a read-only performance baseline: data sizes and growth (state.db, tables, logs) and how long the routine queries and probes take on your data (config/mapping loads, the queue summary, the GUI's status and table queries, the live-log read). Safe to run while the daemon works; add --json for machine-readable output. Run it now and again after weeks of use to see what grows.
 	- Add --json to output the diagnostics report as JSON.
 - --mapping-validate: Validate mapping.json schema and print errors/warnings.
 	- Add --json to output the validation result as JSON.
