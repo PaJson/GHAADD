@@ -323,6 +323,16 @@ class RepoJobSummaryTests(unittest.TestCase):
         self.assertEqual(db_manager.get_repo_job_summaries(self.connection), {})
 
 
+class GithubUrlTests(unittest.TestCase):
+    def test_owner_and_repo_give_the_github_page(self) -> None:
+        self.assertEqual(gui_forms.github_url("genymobile/scrcpy"), "https://github.com/genymobile/scrcpy")
+        self.assertEqual(gui_forms.github_url(" Owner/my_repo.js "), "https://github.com/Owner/my_repo.js")
+
+    def test_odd_names_give_no_url(self) -> None:
+        for name in ("", "scrcpy", "a/b/c", "a b/c", "o/r?x=1", "o/r#frag"):
+            self.assertIsNone(gui_forms.github_url(name), name)
+
+
 class OpenFolderTests(unittest.TestCase):
     def setUp(self) -> None:
         self._temp_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)

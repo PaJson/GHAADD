@@ -121,6 +121,15 @@ def resolve_open_folder(repo: str, destination: str, foldername: str, subfolder:
     return None
 
 
+_REPO_NAME = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+
+
+def github_url(repo: str) -> Optional[str]:
+    """The repository's GitHub page ("owner/repo" -> https://github.com/owner/repo), None if the name is odd."""
+    repo = repo.strip()
+    return f"https://github.com/{repo}" if _REPO_NAME.match(repo) else None
+
+
 def _directory_warning(label: str, path: str) -> Optional[str]:
     if path and not os.path.isdir(path):
         return f"{label} '{path}' does not exist (yet)."

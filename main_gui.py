@@ -16,6 +16,7 @@ import os
 import subprocess
 import sys
 import time
+import webbrowser
 import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import filedialog, messagebox, ttk
@@ -149,6 +150,7 @@ def open_in_file_manager(path: str) -> None:
 FIELD_HELP = {
     "name": "The repository on GitHub (owner/repo). It identifies this entry and cannot be changed here. "
             "For a renamed repository, add the new name and remove the old entry.",
+    "github": "Open this repository's page on GitHub in your web browser.",
     "foldername": "Name of this repository's folder inside the destination. "
                   "Empty = the default, \"repo (owner)\".",
     "destination": "The folder that holds this repository's folder. Finished downloads go to "
@@ -402,7 +404,7 @@ class MappingsTab(ttk.Frame):
     # Editor fields per column (top to bottom): (key, label, kind). kinds: entry, readonly, spin, dest.
     FORM_COLUMNS = (
         (
-            ("name", "Name (owner/repo)", "readonly"),
+            ("name", "Name (owner/repo)", "name"),
             ("foldername", "Folder name", "entry"),
             ("destination", "Destination", "dest"),
             ("subfolder", "Subfolder", "entry"),
@@ -528,6 +530,9 @@ class MappingsTab(ttk.Frame):
                 if kind == "dest":
                     self._add_dest_widgets(row * 2 + 1, column, pad)
                     continue
+                if kind == "name":
+                    self._add_name_widgets(row * 2 + 1, column, pad)
+                    continue
                 if kind == "spin":
                     widget: ttk.Widget = ttk.Spinbox(self.form_frame, from_=0, to=999, width=6, textvariable=self.vars[key])
                     sticky = "w"
@@ -557,6 +562,29 @@ class MappingsTab(ttk.Frame):
         self.form_widgets.extend([self.paused_check, self.open_button])
         attach_tooltip(self.paused_check, FIELD_HELP["paused"])
         attach_tooltip(self.open_button, FIELD_HELP["open_folder"])
+
+    def _add_name_widgets(self, row: int, column: int, pad: tuple[int, int]) -> None:
+        """The read-only repository name with a globe button that opens its GitHub page."""
+        holder = ttk.Frame(self.form_frame)
+        holder.grid(row=row, column=column, sticky="ew", padx=pad, pady=(0, 6))
+        holder.columnconfigure(0, weight=1)
+        ttk.Entry(holder, textvariable=self.vars["name"], state="readonly").grid(row=0, column=0, sticky="ew")
+        self.github_button = ttk.Button(holder, text="🌐", width=3, command=self._open_github)
+        self.github_button.grid(row=0, column=1, padx=(6, 0))
+        attach_tooltip(self.github_button, FIELD_HELP["github"])
+        self.form_widgets.append(self.github_button)
+
+    def _open_github(self) -> None:
+        """Open the selected repository's GitHub page in the default browser."""
+        repo = self._current_repo
+        url = gui_forms.github_url(repo) if repo else None
+        if url is None:
+            self._set_status("This repository name has no GitHub page to open.")
+            return
+        if webbrowser.open(url):
+            self._set_status(f"Opened {url}")
+        else:
+            self._set_status(f"Could not open a browser for {url}")
 
     def _add_dest_widgets(self, row: int, column: int, pad: tuple[int, int]) -> None:
         holder = ttk.Frame(self.form_frame)
