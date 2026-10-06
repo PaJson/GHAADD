@@ -24,7 +24,7 @@ from modules.cli_commands import handle_cli_command, parse_cli_args
 from modules.daemon_control import ControlWatcher, reset_log_override_on_startup, reset_paused_on_startup
 from modules.daemon_lock import acquire_daemon_lock, update_daemon_status
 from modules.db_manager import get_next_pending_job, open_database
-from modules.asset_downloader import clear_all_resolved_limit_warnings, download_release
+from modules.asset_downloader import check_folder_limits, clear_all_resolved_limit_warnings, download_release
 from modules.dry_run_mode import is_dry_run, set_dry_run
 from modules.lifecycle_logger import log_cycle_summary
 from modules.log_files import RollingLogFile
@@ -280,6 +280,11 @@ def run_polling_loop(interval_seconds, jitter_min_seconds, jitter_max_seconds, t
                 missing_count = warn_about_missing_mapped_destinations()
                 if missing_count == 0:
                     print("   ✅ All mapped destinations are present.")
+                try:
+                    if check_folder_limits() == 0:
+                        print("   ✅ No new folder-limit warnings.")
+                except Exception as exc:  # housekeeping must never stop the daemon
+                    print(f"   ⚠️ Could not check folder limits: {exc}")
 
             if watcher.cycle_interrupted:
                 # Work was left over: no countdown, poll again as soon as polling resumes.

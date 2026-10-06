@@ -86,6 +86,28 @@ class LimitWarningCleanupTests(unittest.TestCase):
             asset_downloader._warn_if_destination_limit_exceeded(self.REPO, os.path.join(self.destination, "App"))
         self.assertEqual(self.warnings(), set())
 
+    def test_periodic_check_warns_once_for_a_repository_over_its_limit(self) -> None:
+        self.sweep_clear_all()  # nothing to clear: the setUp warnings stay
+        with closing(db_manager.open_database()) as connection:
+            db_manager.purge_limit_warnings_for_repo(connection, self.REPO)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(asset_downloader.check_folder_limits(), 1)  # 3 folders, limit 2, no warning yet
+            self.assertEqual(asset_downloader.check_folder_limits(), 0)  # now one is on record: no repeat
+        self.assertEqual(self.warnings(), {self.REPO})
+
+    def test_periodic_check_ignores_repositories_within_or_without_a_limit(self) -> None:
+        with closing(db_manager.open_database()) as connection:
+            db_manager.purge_limit_warnings_for_repo(connection, self.REPO)
+        self.write_mapping(limit=3)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(asset_downloader.check_folder_limits(), 0)
+        self.write_mapping(limit=0)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(asset_downloader.check_folder_limits(), 0)
+
+    def sweep_clear_all(self) -> None:
+        self.assertEqual(self.sweep(), 0)
+
     def test_a_dry_run_deletes_nothing(self) -> None:
         os.rmdir(os.path.join(self.release_dir, "a"))
         with mock.patch("modules.lifecycle_logger.is_dry_run", return_value=True):

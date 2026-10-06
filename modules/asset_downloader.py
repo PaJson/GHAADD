@@ -322,12 +322,31 @@ def clear_all_resolved_limit_warnings() -> int:
     return cleared
 
 
-def _warn_if_destination_limit_exceeded(repo: Optional[str], repo_destination_root: str) -> None:
-    """Emit warning when repository destination exceeds configured folder limit."""
+def check_folder_limits() -> int:
+    """Periodic check: warn about repositories over their folder limit that have no warning on record yet.
+
+    Catches a limit that was set or lowered, or folders added by hand, without waiting for the
+    repository's next release. A repository that already has a warning is skipped (no repeats until
+    it is cleared); returns the number of new warnings.
+    """
+    warned = repos_with_limit_warnings()
+    raised = 0
+    for entry in load_mapping().get("repositories", []):
+        repo = str(entry.get("name") or "").strip()
+        if not repo or repo.lower() in warned or _resolve_repository_limit(repo) <= 0:
+            continue
+        base_dir, uses_mapping, _warning = _resolve_finalized_base_directory(repo, "")
+        if uses_mapping and os.path.isdir(base_dir):
+            raised += _warn_if_destination_limit_exceeded(repo, base_dir)
+    return raised
+
+
+def _warn_if_destination_limit_exceeded(repo: Optional[str], repo_destination_root: str) -> int:
+    """Emit warning when repository destination exceeds configured folder limit (returns 1 if it did)."""
     folder_limit = _resolve_repository_limit(repo)
     if folder_limit <= 0:
         _clear_resolved_limit_warnings(repo, "its limit is switched off")
-        return
+        return 0
 
     tracked_release_type_folders = _resolve_tracked_release_type_folders(repo)
     release_folder_count = _count_repository_release_folders(
@@ -336,7 +355,7 @@ def _warn_if_destination_limit_exceeded(repo: Optional[str], repo_destination_ro
     )
     if release_folder_count <= folder_limit:
         _clear_resolved_limit_warnings(repo, f"{release_folder_count} folder(s), limit {folder_limit}")
-        return
+        return 0
 
     repo_label = str(repo or "unknown")
     used_space_label = _format_bytes(_compute_directory_size_bytes(repo_destination_root))
@@ -347,6 +366,7 @@ def _warn_if_destination_limit_exceeded(repo: Optional[str], repo_destination_ro
     )
     print(f"   ⚠️ {warning_message}")
     log_warning("LIMIT", warning_message)
+    return 1
 
 
 def _move_complete_repo_tree(source_repo_dir: str, target_repo_root: str) -> int:
