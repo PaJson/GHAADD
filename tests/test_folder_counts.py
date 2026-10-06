@@ -96,6 +96,16 @@ class FolderCountTests(unittest.TestCase):
         self.assertEqual(self.check(), 0)
         self.assertEqual(self.counts()[self.REPO]["folder_count"], 2)
 
+    def test_the_check_clears_the_warnings_of_a_repository_that_is_back_under_its_limit(self) -> None:
+        self.write_mapping(limit=2)
+        self.assertEqual(self.check(), 1)  # 3 folders, limit 2: warned
+        os.rmdir(os.path.join(self.release_dir, "a"))
+        os.rmdir(os.path.join(self.release_dir, "b"))
+        self.assertEqual(self.check(), 0)  # what the "Check folders" button runs
+        self.assertEqual(self.counts()[self.REPO]["folder_count"], 1)
+        with closing(db_manager.open_database()) as connection:
+            self.assertEqual(db_manager.get_repos_with_limit_warnings(connection), set())
+
     def test_the_per_poll_clean_up_records_the_count_too(self) -> None:
         self.write_mapping(limit=2)
         self.check()

@@ -384,10 +384,11 @@ def check_folder_limits() -> int:
         base_dir, uses_mapping, _warning = _resolve_finalized_base_directory(repo, "")
         if not uses_mapping or not os.path.isdir(base_dir):
             continue
-        if repo.lower() in warned:  # already on record: only keep its count fresh
-            _record_folder_count(
-                repo, _count_repository_release_folders(base_dir, _resolve_tracked_release_type_folders(repo))
-            )
+        if repo.lower() in warned:  # already on record: no second warning, but refresh the count / clear it
+            count = _count_repository_release_folders(base_dir, _resolve_tracked_release_type_folders(repo))
+            _record_folder_count(repo, count)
+            if count <= _resolve_repository_limit(repo):
+                _clear_resolved_limit_warnings(repo, f"{count} folder(s), limit {_resolve_repository_limit(repo)}")
         else:
             raised += _warn_if_destination_limit_exceeded(repo, base_dir)  # also records the count
     return raised
