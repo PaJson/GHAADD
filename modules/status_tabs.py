@@ -211,6 +211,10 @@ class StatusTabsModel:
     def title(self, key: str) -> str:
         return format_title(self._defs[key].title, self.unread(key))
 
+    def clear(self, key: str) -> None:
+        """Forget the rows of a tab whose events were deleted (newer events still arrive normally)."""
+        self._states[key].rows = []
+
     def mark_read(self, key: str) -> bool:
         """Mark everything currently in the tab as read; True when the read mark moved."""
         rows = self._states[key].rows

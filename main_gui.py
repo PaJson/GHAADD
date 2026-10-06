@@ -135,6 +135,53 @@ def pick_directory(parent: tk.Misc, variable: tk.Variable) -> None:
         variable.set(os.path.normpath(chosen))
 
 
+def open_in_file_manager(path: str) -> None:
+    """Show a folder in the system file manager (Explorer / Finder / xdg-open)."""
+    if sys.platform.startswith("win"):
+        os.startfile(path)  # type: ignore[attr-defined]
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", path])
+    else:
+        subprocess.Popen(["xdg-open", path])
+
+
+# Hover help for the editor's field titles (keys match MappingsTab.FORM_COLUMNS plus "paused"/"open_folder").
+FIELD_HELP = {
+    "name": "The repository on GitHub (owner/repo). It identifies this entry and cannot be changed here. "
+            "For a renamed repository, add the new name and remove the old entry.",
+    "foldername": "Name of this repository's folder inside the destination. "
+                  "Empty = the default, \"repo (owner)\".",
+    "destination": "The folder that holds this repository's folder. Finished downloads go to "
+                   "<destination>/<folder name>[/<subfolder>]. Empty = the default download folder from Settings.",
+    "subfolder": "Optional folders below the folder name, separated by / or \\ (for example Nightly/x64). "
+                 "Downloads go there instead of straight into the folder name.",
+    "release_folders": "The release type folders that count towards the Limit, comma separated "
+                       "(for example Release, Pre-release). Empty = detect Release and Pre-release automatically. "
+                       "It does not change what is downloaded; use Skiplist for that.",
+    "limit": "Warn (Folder limits tab) when more than this many release folders exist for this repository. "
+             "0 = no warning. The warning never deletes anything.",
+    "recheck": "Minutes to wait between re-checks of a new release, comma separated (for example 3, 10, 30, 120). "
+               "Empty = use the default shown below.",
+    "default_recheck": "The re-check schedule used when Recheck is empty (set in Settings).",
+    "skiplist": "Release types to ignore for this repository, comma separated: Release, Pre-release. "
+                "A matching notification is logged as a warning and nothing is downloaded. Empty = download both.",
+    "last_seen": "When the last GitHub notification for this repository arrived (set by the daemon).",
+    "last_finalized": "When a release was last moved to its destination (set by the daemon).",
+    "paused": "Temporarily stop new downloads for this repository. Notification emails stay unread in the "
+              "mailbox; jobs already queued still finish.",
+    "open_folder": "Open this repository's folder in the file manager: destination + folder name + subfolder. "
+                   "If that folder does not exist yet, the closest existing parent opens.",
+}
+
+
+def attach_tooltip(widget: tk.Misc, text: str) -> None:
+    """Show `text` in a hover box while the pointer rests on `widget`."""
+    tip = Tooltip(widget)
+    widget.bind("<Enter>", lambda event: tip.schedule(text, event.x_root + 12, event.y_root + 18), add="+")
+    widget.bind("<Leave>", lambda _event: tip.hide(), add="+")
+    widget.bind("<ButtonPress>", lambda _event: tip.hide(), add="+")
+
+
 def format_status_title(title: str, count: int) -> str:
     """"Unmapped (2)": the number of repositories that still need a destination (not an unread count)."""
     return status_tabs.format_title(title, count)
@@ -465,7 +512,10 @@ class MappingsTab(ttk.Frame):
             for row, (key, label, kind) in enumerate(fields):
                 # Label and input sit directly in the form grid (no wrapper frame per field: fewer
                 # widgets to lay out and repaint while the window is resized).
-                ttk.Label(self.form_frame, text=label).grid(row=row * 2, column=column, sticky="w", padx=pad)
+                title = ttk.Label(self.form_frame, text=label)
+                title.grid(row=row * 2, column=column, sticky="w", padx=pad)
+                if key in FIELD_HELP:
+                    attach_tooltip(title, FIELD_HELP[key])
                 if kind == "dest":
                     self._add_dest_widgets(row * 2 + 1, column, pad)
                     continue
@@ -490,10 +540,14 @@ class MappingsTab(ttk.Frame):
         self.paused_check = ttk.Checkbutton(actions, text="Paused", variable=self.vars["paused"])
         self.revert_button = ttk.Button(actions, text="Revert", command=self._revert)
         self.save_button = ttk.Button(actions, text="Save", command=self._save)
+        self.open_button = ttk.Button(actions, text="Open folder", command=self._open_folder)
         self.paused_check.grid(row=0, column=0, sticky="w")
-        self.revert_button.grid(row=0, column=1, padx=(0, 6))
-        self.save_button.grid(row=0, column=2)
-        self.form_widgets.append(self.paused_check)
+        self.open_button.grid(row=0, column=1, padx=(0, 6))
+        self.revert_button.grid(row=0, column=2, padx=(0, 6))
+        self.save_button.grid(row=0, column=3)
+        self.form_widgets.extend([self.paused_check, self.open_button])
+        attach_tooltip(self.paused_check, FIELD_HELP["paused"])
+        attach_tooltip(self.open_button, FIELD_HELP["open_folder"])
 
     def _add_dest_widgets(self, row: int, column: int, pad: tuple[int, int]) -> None:
         holder = ttk.Frame(self.form_frame)
@@ -506,6 +560,25 @@ class MappingsTab(ttk.Frame):
         )
         self.browse_button.grid(row=0, column=1, padx=(6, 0))
         self.form_widgets.extend([entry, self.browse_button])
+
+    def _open_folder(self) -> None:
+        """Open the repository's folder (destination/folder name/subfolder, or the longest part that exists)."""
+        repo = self._current_repo
+        if repo is None:
+            return
+        form = self._form_values()
+        folder = gui_forms.resolve_open_folder(
+            repo, str(form["destination"]), str(form["foldername"]), str(form["subfolder"])
+        )
+        if folder is None:
+            self._set_status("No existing folder to open: set a destination that exists first.")
+            return
+        try:
+            open_in_file_manager(folder)
+        except OSError as exc:
+            self._set_status(f"Cannot open {folder}: {describe_error(exc)}")
+            return
+        self._set_status(f"Opened {folder}")
 
     def select_repo(self, repo: str) -> bool:
         """Show and select a repository in the table (clearing filters that would hide it)."""
@@ -1084,6 +1157,7 @@ class StatusTab(ttk.Frame):
         open_repo: Callable[[str], None],
         hint: str = "",
         on_mark_read: Optional[Callable[[], None]] = None,
+        on_clear: Optional[Callable[[], None]] = None,
         detail: bool = False,
     ) -> None:
         super().__init__(master, padding=10)
@@ -1132,6 +1206,11 @@ class StatusTab(ttk.Frame):
         if on_mark_read is not None:
             self.mark_read_button = ttk.Button(bottom, text="Mark all read", command=on_mark_read)
             self.mark_read_button.grid(row=0, column=2)
+        self.clear_button: Optional[ttk.Button] = None  # deletes the listed events from state.db
+        if on_clear is not None:
+            self.clear_button = ttk.Button(bottom, text="Clear…", command=on_clear)
+            self.clear_button.grid(row=0, column=3, padx=(6, 0))
+            attach_tooltip(self.clear_button, "Permanently delete the events this tab lists from the database.")
 
         font_spec = ttk.Style(self).lookup("Treeview", "font") or "TkDefaultFont"
         try:
@@ -1507,6 +1586,7 @@ class MainWindow(tk.Tk):
             self.notebook, self.EVENT_COLUMNS, self.EMPTY_TEXTS.get(definition.key, "Nothing to show."), self._show_repo,
             hint="Double-click a row to open its repository in the Mappings tab.",
             on_mark_read=(lambda key=definition.key: self._mark_status_read(key)) if definition.counter else None,
+            on_clear=lambda key=definition.key: self._clear_status_tab(key),
             detail=True,
         )
 
@@ -1577,6 +1657,33 @@ class MainWindow(tk.Tk):
         model.mark_read(key)
         self._status_tabs[key].set_highlight_after(None)
         self._set_status_title(key, model.title(key))
+
+    def _clear_status_tab(self, key: str) -> None:
+        """Delete the events a tab lists (after a confirmation that names the number)."""
+        title = next(d.title for d in self.status_feed.defs if d.key == key)
+        try:
+            count = self.status_feed.count_tab(key)
+        except Exception as exc:
+            self.set_status(f"Cannot read the database: {describe_error(exc)}")
+            return
+        if count == 0:
+            self.set_status(f"{title}: nothing to clear.")
+            return
+        if not messagebox.askyesno(
+            f"Clear {title}",
+            f"Permanently delete {count:,} {title.lower()} event(s) from the database?\n\n"
+            "This only removes the history shown in this tab; downloads and files are not touched.",
+            icon="warning", default="no", parent=self,
+        ):
+            return
+        try:
+            removed = self.status_feed.clear_tab(key)
+        except Exception as exc:  # e.g. the database is locked by a busy daemon: nothing was deleted
+            self.set_status(f"Could not clear {title}: {describe_error(exc)}")
+            return
+        self._show_event_rows(key, None)
+        self._set_status_title(key, self.status_feed.model.title(key))
+        self.set_status(f"Cleared {removed:,} {title.lower()} event(s).")
 
     def _live_log_active(self) -> bool:
         """True when somebody can see the Live log tab (window not minimized, its tab selected)."""

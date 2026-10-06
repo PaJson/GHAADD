@@ -177,6 +177,27 @@ class StatusFeed:
         self._signature, self._refreshed_at = signature, now
         return changed
 
+    def count_tab(self, key: str) -> int:
+        """How many stored events the tab lists (all of them, not only the rows on screen)."""
+        return self._purge(key, dry_run=True)
+
+    def clear_tab(self, key: str) -> int:
+        """Delete the events the tab lists from state.db and empty the tab; returns how many were removed."""
+        removed = self._purge(key, dry_run=False)
+        self.model.clear(key)
+        self._signature = None  # the next refresh looks at the database again
+        return removed
+
+    def _purge(self, key: str, dry_run: bool) -> int:
+        tab = next(definition for definition in self.defs if definition.key == key)
+        connection = db_manager.open_database()
+        try:
+            return db_manager.purge_events_for_tab(
+                connection, tab.event_types, tab.categories, tab.exclude_categories, dry_run=dry_run
+            )
+        finally:
+            connection.close()
+
     def unmapped(self) -> list[status_tabs.UnmappedRow]:
         return status_tabs.unmapped_rows(self._mapping_cache.get()["repositories"])
 

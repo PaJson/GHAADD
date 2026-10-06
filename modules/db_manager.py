@@ -1211,6 +1211,33 @@ def get_lifecycle_events(connection, limit: Optional[int] = 20, event_type=None,
     return connection.execute(query, params).fetchall()
 
 
+def _tab_event_filter(event_types, categories, exclude_categories):
+    """WHERE conditions and params selecting the events of one GUI status tab."""
+    conditions = [f"event_type IN ({','.join('?' * len(event_types))})"]
+    params = list(event_types)
+    if categories:
+        conditions.append(f"category IN ({','.join('?' * len(categories))})")
+        params.extend(categories)
+    if exclude_categories:
+        conditions.append(f"(category IS NULL OR category NOT IN ({','.join('?' * len(exclude_categories))}))")
+        params.extend(exclude_categories)
+    return conditions, params
+
+
+def purge_events_for_tab(connection, event_types, categories=None, exclude_categories=(), dry_run=False):
+    """Delete exactly the events a GUI status tab lists (same filter as get_events_for_tab); returns the count.
+
+    With dry_run=True nothing is deleted and the number of matching events is returned.
+    """
+    conditions, params = _tab_event_filter(event_types, categories, exclude_categories)
+    where = " AND ".join(conditions)
+    if dry_run:
+        return int(connection.execute(f"SELECT COUNT(*) FROM lifecycle_events WHERE {where}", params).fetchone()[0])
+    cursor = connection.execute(f"DELETE FROM lifecycle_events WHERE {where}", params)
+    connection.commit()
+    return cursor.rowcount
+
+
 def get_events_for_tab(
     connection,
     event_types,
@@ -1225,14 +1252,7 @@ def get_events_for_tab(
     events of those categories (events without a category are kept), after_id returns only events
     with a larger id, so a poll that finds nothing new is a cheap indexed query.
     """
-    conditions = [f"event_type IN ({','.join('?' * len(event_types))})"]
-    params = list(event_types)
-    if categories:
-        conditions.append(f"category IN ({','.join('?' * len(categories))})")
-        params.extend(categories)
-    if exclude_categories:
-        conditions.append(f"(category IS NULL OR category NOT IN ({','.join('?' * len(exclude_categories))}))")
-        params.extend(exclude_categories)
+    conditions, params = _tab_event_filter(event_types, categories, exclude_categories)
     if after_id is not None:
         conditions.append("id > ?")
         params.append(int(after_id))

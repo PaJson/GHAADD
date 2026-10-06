@@ -232,6 +232,21 @@ class DatabaseQueryTests(unittest.TestCase):
         self.assertEqual(len(db_manager.get_events_for_tab(self.connection, ("WARNING",), limit=2)), 2)
         self.assertEqual(db_manager.get_events_for_tab(self.connection, ("WARNING",), after_id=db_manager.get_max_event_id(self.connection)), [])
 
+    def test_purge_removes_exactly_what_the_tab_lists(self) -> None:
+        self.add("WARNING", "API")
+        self.add("WARNING", "MAPPING")
+        self.add("PARTIAL_MOVE")
+        self.add("WARNING", "LIMIT")
+        self.add("COMPLETED_MOVE")
+        warnings = (("WARNING", "PARTIAL_MOVE"), None, ("LIMIT",))
+
+        self.assertEqual(db_manager.purge_events_for_tab(self.connection, *warnings, dry_run=True), 3)
+        self.assertEqual(db_manager.get_max_event_id(self.connection), 5)  # dry run deleted nothing
+        self.assertEqual(db_manager.purge_events_for_tab(self.connection, *warnings), 3)
+
+        left = db_manager.get_events_for_tab(self.connection, ("WARNING", "COMPLETED_MOVE", "PARTIAL_MOVE"))
+        self.assertEqual({(e["event_type"], e["category"]) for e in left}, {("WARNING", "LIMIT"), ("COMPLETED_MOVE", None)})
+
     def test_max_event_id(self) -> None:
         self.assertEqual(db_manager.get_max_event_id(self.connection), 0)
         self.add("WARNING", "API")
@@ -306,6 +321,24 @@ class FeedTests(unittest.TestCase):
             feed.refresh()
         self.assertLessEqual(unchanged, 3 * 3)  # at most one settling pass (3 event tabs)
         self.assertGreater(query.call_count, unchanged)
+
+    def test_clearing_a_tab_empties_only_that_tab_and_new_events_still_arrive(self) -> None:
+        self.event("WARNING", "API", "w")
+        self.event("WARNING", "LIMIT", "l")
+        self.event("COMPLETED_MOVE", message="c", repo="o/app")
+        feed = gui_data.StatusFeed()
+        feed.refresh()
+        self.assertEqual(feed.count_tab("warnings"), 1)
+
+        self.assertEqual(feed.clear_tab("warnings"), 1)
+        self.assertEqual(feed.model.rows("warnings"), [])
+        self.assertEqual(len(feed.model.rows("limits")), 1)
+        self.assertEqual(len(feed.model.rows("completed")), 1)
+
+        self.event("WARNING", "API", "after clearing")
+        self.assertIn("warnings", feed.refresh())
+        self.assertEqual([row.message for row in feed.model.rows("warnings")], ["after clearing"])
+        self.assertEqual(feed.model.title("warnings"), "Warnings (1)")  # ids are never reused, so it is unread
 
     def test_unmapped_list_comes_from_mapping_json(self) -> None:
         feed = gui_data.StatusFeed()

@@ -9,8 +9,11 @@ exception and are reported as non-blocking warnings).
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Optional
+
+from modules import mapping_manager
 
 # config.json keys (dotted path) behind the Settings dialog.
 SETTINGS_KEYS = {
@@ -85,6 +88,37 @@ def parse_int(text: Any, label: str, errors: list[str], minimum: int = 0) -> Opt
         errors.append(f"{label} must be {minimum} or more.")
         return None
     return value
+
+
+def _safe_part(text: str) -> str:
+    """One folder name the way the downloader writes it (asset_downloader.sanitize_folder_name)."""
+    return re.sub(r'[\\/<>"|?*]', "_", text.replace(":", "-")).strip()
+
+
+def resolve_open_folder(repo: str, destination: str, foldername: str, subfolder: str) -> Optional[str]:
+    """The folder the downloader fills for this repository, or its nearest existing parent.
+
+    Built like asset_downloader: <destination>/<folder name>[/<subfolder>], the folder name defaulting to
+    "repo (owner)". Nothing downloaded yet (or a subfolder that was never created) falls back to the
+    longest part that exists. None when there is no destination or none of it exists.
+    """
+    destination = destination.strip()
+    if not destination:
+        return None
+    path = os.path.normpath(os.path.expanduser(os.path.expandvars(destination)))
+    name = _safe_part(foldername.strip() or mapping_manager.build_default_foldername(repo))
+    parts = [name or "unknown"]
+    for part in re.split(r"[\\/]+", subfolder.strip()):
+        part = _safe_part(part)
+        if part and part not in (".", ".."):
+            parts.append(part)
+    candidates = [path]
+    for part in parts:
+        candidates.append(os.path.join(candidates[-1], part))
+    for candidate in reversed(candidates):
+        if os.path.isdir(candidate):
+            return candidate
+    return None
 
 
 def _directory_warning(label: str, path: str) -> Optional[str]:

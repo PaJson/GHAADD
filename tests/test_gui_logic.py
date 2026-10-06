@@ -310,5 +310,44 @@ class RepoJobSummaryTests(unittest.TestCase):
         self.assertEqual(db_manager.get_repo_job_summaries(self.connection), {})
 
 
+class OpenFolderTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._temp_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(self._temp_dir.cleanup)
+        self.root = self._temp_dir.name
+
+    def make(self, *parts: str) -> str:
+        path = os.path.join(self.root, *parts)
+        os.makedirs(path, exist_ok=True)
+        return path
+
+    def test_full_path_with_subfolder(self) -> None:
+        full = self.make("App", "Nightly", "x64")
+        self.assertEqual(gui_forms.resolve_open_folder("o/app", self.root, "App", "Nightly/x64"), full)
+
+    def test_destination_and_folder_name_without_subfolder(self) -> None:
+        full = self.make("App")
+        self.assertEqual(gui_forms.resolve_open_folder("o/app", self.root, "App", ""), full)
+
+    def test_missing_subfolder_falls_back_to_the_folder_name(self) -> None:
+        full = self.make("App")
+        self.assertEqual(gui_forms.resolve_open_folder("o/app", self.root, "App", "Nightly"), full)
+
+    def test_nothing_downloaded_yet_falls_back_to_the_destination(self) -> None:
+        self.assertEqual(gui_forms.resolve_open_folder("o/app", self.root, "App", ""), os.path.normpath(self.root))
+
+    def test_empty_folder_name_uses_the_default_name(self) -> None:
+        full = self.make("app (o)")
+        self.assertEqual(gui_forms.resolve_open_folder("o/app", self.root, "", ""), full)
+
+    def test_backslash_subfolder_and_parent_escapes(self) -> None:
+        full = self.make("App", "a", "b")
+        self.assertEqual(gui_forms.resolve_open_folder("o/app", self.root, "App", "a\\..\\b"), full)
+
+    def test_no_destination_or_missing_destination_gives_none(self) -> None:
+        self.assertIsNone(gui_forms.resolve_open_folder("o/app", "", "App", ""))
+        self.assertIsNone(gui_forms.resolve_open_folder("o/app", os.path.join(self.root, "nope"), "App", ""))
+
+
 if __name__ == "__main__":
     unittest.main()
