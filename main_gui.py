@@ -11,15 +11,17 @@ validation, ordering and data loading live in the toolkit-independent modules
 from __future__ import annotations
 
 import argparse
+import collections
 import os
+import subprocess
 import sys
 import time
 import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import filedialog, messagebox, ttk
-from typing import Any, Callable, Literal, Optional
+from typing import Any, Callable, Iterable, Literal, Optional
 
-from modules import config_manager, gui_daemon, gui_data, gui_forms, gui_state, mapping_manager
+from modules import config_manager, daemon_launcher, gui_daemon, gui_data, gui_forms, gui_state, log_tail, mapping_manager
 from modules.app_info import APP_NAME, __version__
 
 Anchor = Literal["nw", "n", "ne", "w", "center", "e", "sw", "s", "se"]
@@ -31,6 +33,7 @@ WINDOWS_APP_ID = "GHAADD.GUI"  # own taskbar identity, so the taskbar shows our 
 REFRESH_INTERVAL_MS = 3000
 STATUS_MESSAGE_MS = 6000
 DAEMON_REFRESH_INTERVAL_MS = 1000
+UNEXPECTED_EXIT_WINDOW_SECONDS = 120.0  # a daemon this GUI started that dies within this long is reported
 RESTART_HINT = (
     "Settings changed since the daemon started.\n"
     "Click to restart it: the job in progress finishes, the daemon stops,\n"
@@ -70,13 +73,7 @@ STATUS_LEGEND = "Status\n" + "\n".join(
     f"{icon}  {name}: {STATUS_HINTS[name]}" for name, icon in STATUS_ICONS.items()
 )
 
-# Placeholder content for tabs that get real data in steps 4-5.
-DUMMY_LOG = (
-    "[12:00:01] Polling mailbox...\n"
-    "[12:00:03] 1 new notification(s)\n"
-    "[12:00:04] Queued ip7z/7zip 24.09\n"
-    "[12:00:09] Completed ip7z/7zip 24.09\n"
-)
+# Placeholder content for the status tabs (step 5).
 STATUS_TABS = ["Warnings (3)", "Completed (12)", "Folder limits", "Unmapped (1)"]
 STATUS_COLUMNS = ("time", "repo", "message")
 
@@ -755,32 +752,245 @@ class MappingsTab(ttk.Frame):
 
 
 class LiveLogTab(ttk.Frame):
-    """Raw log tail with follow control (static until step 4)."""
+    """Follows the newest terminal log file: last ~1000 lines, smart auto-scroll, filter, copy."""
 
-    def __init__(self, master: tk.Misc) -> None:
+    MAX_LINES = log_tail.DEFAULT_MAX_LINES
+    POLL_INTERVAL_MS = 300
+    IDLE_INTERVAL_MS = 1000  # while the tab is hidden or the window minimized
+    DIRECTORY_REFRESH_SECONDS = 5.0
+
+    def __init__(
+        self,
+        master: tk.Misc,
+        is_active: Callable[[], bool],
+        on_enable_log: Callable[[], None],
+        set_status: Callable[[str], None],
+    ) -> None:
         super().__init__(master, padding=10)
-        self.columnconfigure(0, weight=1)
-        self.rowconfigure(1, weight=1)
+        self._is_active = is_active
+        self._on_enable_log = on_enable_log
+        self._set_status = set_status
+        self._lines: collections.deque[str] = collections.deque(maxlen=self.MAX_LINES)
+        self._updating = False  # True while we change the text ourselves (not a user scroll)
+        self._daemon_running = False
+        self._daemon_log_on = False
+        self._has_log_file = False
+        self._directory = ""
+        self._directory_checked = 0.0
+        self._poll_job: Optional[str] = None
+        self._tailer = log_tail.LogTailer(self._log_directory, max_lines=self.MAX_LINES)
 
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(2, weight=1)
+        self._build_notice()
+        self._build_toolbar()
+        self._build_text()
+        self._update_notice()
+        self._poll_job = self.after(self.POLL_INTERVAL_MS, self._poll)
+
+    # ----- construction -----
+
+    def _build_notice(self) -> None:
+        self.notice = ttk.Frame(self)
+        self.notice.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 6))
+        self.notice.columnconfigure(0, weight=1)
+        self.notice_label = ttk.Label(self.notice, text="", foreground=COLOR_WARNING, wraplength=900)
+        self.notice_label.grid(row=0, column=0, sticky="w")
+        self.enable_button = ttk.Button(self.notice, text="Turn on detailed log", command=self._on_enable_log)
+        self.enable_button.grid(row=0, column=1, padx=(10, 0))
+
+    def _build_toolbar(self) -> None:
         toolbar = ttk.Frame(self)
-        toolbar.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 6))
+        toolbar.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 6))
         toolbar.columnconfigure(2, weight=1)
         self.follow_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(toolbar, text="Follow", variable=self.follow_var).grid(row=0, column=0)
+        ttk.Checkbutton(toolbar, text="Follow", variable=self.follow_var, command=self._on_follow_toggle).grid(
+            row=0, column=0
+        )
+        ttk.Label(toolbar, text="Filter:").grid(row=0, column=1, padx=(14, 4))
         self.filter_var = tk.StringVar()
-        ttk.Entry(toolbar, textvariable=self.filter_var, width=28).grid(row=0, column=1, padx=8)
-        self.file_label = ttk.Label(toolbar, text="20261006_120000.log", foreground=COLOR_MUTED)
-        self.file_label.grid(row=0, column=2, sticky="e", padx=(0, 8))
-        ttk.Button(toolbar, text="Copy").grid(row=0, column=3, padx=(0, 6))
-        ttk.Button(toolbar, text="Open folder").grid(row=0, column=4)
+        ttk.Entry(toolbar, textvariable=self.filter_var, width=28).grid(row=0, column=2, sticky="w")
+        self.filter_var.trace_add("write", lambda *_: self._render_all())
+        self.file_label = ttk.Label(toolbar, text="", foreground=COLOR_MUTED)
+        self.file_label.grid(row=0, column=3, sticky="e", padx=(0, 8))
+        ttk.Button(toolbar, text="Copy", command=self._copy).grid(row=0, column=4, padx=(0, 6))
+        ttk.Button(toolbar, text="Open folder", command=self._open_folder).grid(row=0, column=5)
 
-        self.text = tk.Text(self, wrap="none", height=10, font=("Consolas", 10), state="normal")
-        self.text.insert("1.0", DUMMY_LOG)
-        self.text.configure(state="disabled")
-        self.text.grid(row=1, column=0, sticky="nsew")
-        scroll = ttk.Scrollbar(self, orient="vertical", command=self.text.yview)
-        self.text.configure(yscrollcommand=scroll.set)
-        scroll.grid(row=1, column=1, sticky="ns")
+    def _build_text(self) -> None:
+        self.text = tk.Text(self, wrap="none", height=10, font=("Consolas", 10), state="disabled", undo=False)
+        self.text.tag_configure(log_tail.LEVEL_ERROR, foreground="#b3261e")
+        self.text.tag_configure(log_tail.LEVEL_WARNING, foreground="#9a6700")
+        self.text.grid(row=2, column=0, sticky="nsew")
+        yscroll = ttk.Scrollbar(self, orient="vertical", command=self.text.yview)
+        self._xscroll = ttk.Scrollbar(self, orient="horizontal", command=self.text.xview)
+        self.text.configure(yscrollcommand=lambda first, last: self._on_yview(yscroll, first, last), xscrollcommand=self._set_xscroll)
+        yscroll.grid(row=2, column=1, sticky="ns")
+        self._xscroll.grid(row=3, column=0, sticky="ew")
+
+    # ----- scrolling -----
+
+    def _set_xscroll(self, first: float | str, last: float | str) -> None:
+        needed = float(first) > 0.0 or float(last) < 1.0
+        if needed and not self._xscroll.winfo_ismapped():
+            self._xscroll.grid()
+        elif not needed and self._xscroll.winfo_ismapped():
+            self._xscroll.grid_remove()
+        self._xscroll.set(first, last)
+
+    def _on_yview(self, scrollbar: ttk.Scrollbar, first: float | str, last: float | str) -> None:
+        """Scrolling up pauses following; scrolling back to the bottom resumes it."""
+        scrollbar.set(first, last)
+        if not self._updating:
+            self.follow_var.set(float(last) >= 0.999)
+
+    def _on_follow_toggle(self) -> None:
+        if self.follow_var.get():
+            self.text.see("end")
+
+    # ----- data -----
+
+    def _log_directory(self) -> str:
+        """The configured log folder (re-read every few seconds, so a Settings change is picked up)."""
+        now = time.monotonic()
+        if not self._directory or now - self._directory_checked >= self.DIRECTORY_REFRESH_SECONDS:
+            raw = config_manager.get_terminal_log_settings()["directory"] or ""
+            self._directory = os.path.expandvars(os.path.expanduser(raw))
+            self._directory_checked = now
+        return self._directory
+
+    def poll_now(self) -> None:
+        """Look for new log lines immediately (called when the tab is shown)."""
+        if self._poll_job is not None:
+            self.after_cancel(self._poll_job)
+        self._poll()
+
+    def _poll(self) -> None:
+        interval = self.IDLE_INTERVAL_MS
+        try:
+            if self._is_active():
+                interval = self.POLL_INTERVAL_MS
+                update = self._tailer.poll()
+                if update is not None:
+                    self._apply(update)
+        except Exception as exc:  # a log hiccup must never break the GUI
+            self.file_label.configure(text=f"log unavailable: {exc}")
+        finally:
+            self._poll_job = self.after(interval, self._poll)
+
+    def _apply(self, update: log_tail.TailUpdate) -> None:
+        if update.changed_file or update.reset:
+            self._has_log_file = update.file_name is not None
+            self.file_label.configure(text=update.file_name or "")
+            self._update_notice()
+        if update.reset:
+            self._lines.clear()
+            self._lines.extend(update.lines)
+            self._render_all()
+        elif update.lines:
+            self._lines.extend(update.lines)
+            self._append(update.lines)
+
+    # ----- rendering -----
+
+    def _filter_text(self) -> str:
+        return self.filter_var.get().strip().casefold()
+
+    def _matching(self, lines: Iterable[str]) -> list[str]:
+        needle = self._filter_text()
+        return [line for line in lines if needle in line.casefold()] if needle else list(lines)
+
+    def _insert(self, lines: list[str]) -> None:
+        for line in lines:
+            level = log_tail.line_level(line)
+            self.text.insert("end", line + "\n", (level,) if level else ())
+
+    def _render_all(self) -> None:
+        self._updating = True
+        try:
+            self.text.configure(state="normal")
+            self.text.delete("1.0", "end")
+            self._insert(self._matching(self._lines))
+            self.text.configure(state="disabled")
+            if self.follow_var.get():
+                self.text.see("end")
+        finally:
+            self._updating = False
+
+    def _append(self, lines: list[str]) -> None:
+        """Add new lines at the end, drop the oldest beyond the cap, and follow if asked to."""
+        self._updating = True
+        try:
+            self.text.configure(state="normal")
+            self._insert(self._matching(lines))
+            excess = int(self.text.index("end-1c").split(".")[0]) - 1 - self.MAX_LINES
+            if excess > 0:
+                self.text.delete("1.0", f"{excess + 1}.0")
+            self.text.configure(state="disabled")
+            if self.follow_var.get():
+                self.text.see("end")
+        finally:
+            self._updating = False
+
+    # ----- notice about the detailed log -----
+
+    def set_daemon_state(self, running: bool, log_on: bool) -> None:
+        if (running, log_on) != (self._daemon_running, self._daemon_log_on):
+            self._daemon_running, self._daemon_log_on = running, log_on
+            self._update_notice()
+
+    def _update_notice(self) -> None:
+        if not self._daemon_running:
+            if self._has_log_file:
+                text, can_enable = "The daemon is not running; showing the last log.", False
+            else:
+                text, can_enable = "No log file yet. Start the daemon and turn on the detailed log to see its output here.", False
+        elif not self._daemon_log_on:
+            text = (
+                "Detailed log is off, so nothing new appears here."
+                if self._has_log_file
+                else "No log file yet. The detailed log writes the daemon's output to a file that this tab follows."
+            )
+            can_enable = True
+        else:
+            text, can_enable = "", False
+        if text:
+            self.notice.grid()
+            self.notice_label.configure(text=text)
+            if can_enable:
+                self.enable_button.grid()
+            else:
+                self.enable_button.grid_remove()
+        else:
+            self.notice.grid_remove()
+
+    # ----- buttons -----
+
+    def _copy(self) -> None:
+        try:
+            content = self.text.get("sel.first", "sel.last")
+        except tk.TclError:  # no selection: copy everything shown
+            content = self.text.get("1.0", "end-1c")
+        self.clipboard_clear()
+        self.clipboard_append(content)
+        self._set_status("Copied the selection." if self.text.tag_ranges("sel") else "Copied the shown log lines.")
+
+    def _open_folder(self) -> None:
+        directory = self._log_directory()
+        if not os.path.isdir(directory):
+            self._set_status(f"The log folder does not exist yet: {directory}")
+            return
+        try:
+            if sys.platform == "win32":
+                os.startfile(directory)  # type: ignore[attr-defined]
+            else:
+                subprocess.Popen(["open" if sys.platform == "darwin" else "xdg-open", directory])
+        except OSError as exc:
+            self._set_status(f"Could not open the folder: {exc}")
+
+    def shutdown(self) -> None:
+        if self._poll_job is not None:
+            self.after_cancel(self._poll_job)
+            self._poll_job = None
 
 
 class StatusTab(ttk.Frame):
@@ -915,6 +1125,8 @@ class MainWindow(tk.Tk):
         self._starting_since: Optional[float] = None  # set by Start/Stop until the daemon appears/disappears
         self._stopping_since: Optional[float] = None
         self._restart_pending = False  # a restart was requested: start again once the daemon has exited
+        self._gui_started_at: Optional[float] = None  # when this GUI last launched a daemon
+        self._was_running = False
 
         self.control_bar = ControlBar(self)
         self.control_bar.pack(fill="x")
@@ -934,13 +1146,13 @@ class MainWindow(tk.Tk):
         self.notebook.pack(fill="both", expand=True, padx=8, pady=8)
 
         self.mappings_tab = MappingsTab(self.notebook, self.set_status)
-        self.log_tab = LiveLogTab(self.notebook)
+        self.log_tab = LiveLogTab(self.notebook, self._live_log_active, self._on_enable_log, self.set_status)
         self.notebook.add(self.mappings_tab, text="Mappings")
         self.notebook.add(self.log_tab, text="Live log")
         for title in STATUS_TABS:
             self.notebook.add(StatusTab(self.notebook), text=title)
 
-        self.notebook.bind("<<NotebookTabChanged>>", lambda _event: self._refresh_mappings_if_visible())
+        self.notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
         self.bind("<Map>", self._on_map)
         self._tick_job: Optional[str] = self.after(REFRESH_INTERVAL_MS, self._tick)
         self._daemon_job: Optional[str] = None
@@ -957,6 +1169,13 @@ class MainWindow(tk.Tk):
         self._status_reset_job = None
         self.status_bar.configure(text=DEFAULT_STATUS_TEXT)
 
+    def _live_log_active(self) -> bool:
+        """True when somebody can see the Live log tab (window not minimized, its tab selected)."""
+        return self.state() != "iconic" and self.notebook.select() == str(self.log_tab)
+
+    def _on_enable_log(self) -> None:
+        self._report(gui_daemon.do_set_log(True), "Detailed log switched on (a new .log file).")
+
     def _mappings_visible(self) -> bool:
         """True when somebody can see the Mappings table (window not minimized, its tab selected)."""
         return self.state() != "iconic" and self.notebook.select() == str(self.mappings_tab)
@@ -965,10 +1184,17 @@ class MainWindow(tk.Tk):
         if self._mappings_visible():
             self.mappings_tab.refresh()
 
+    def _on_tab_changed(self, _event: object = None) -> None:
+        self._refresh_mappings_if_visible()
+        if self._live_log_active():
+            self.log_tab.poll_now()
+
     def _on_map(self, event: tk.Event) -> None:  # type: ignore[type-arg]
         """The window was restored: catch up immediately instead of waiting for the next tick."""
         if event.widget is self:
             self._refresh_mappings_if_visible()
+            if self._live_log_active():
+                self.log_tab.poll_now()
             self._update_daemon_view()
 
     def _tick(self) -> None:
@@ -993,6 +1219,7 @@ class MainWindow(tk.Tk):
                 return
             self._snapshot = self._reader.read(force_control=force_control)
             now = time.time()
+            self._note_unexpected_exit(now)
             if self._snapshot.running:
                 self._starting_since = None
                 if self._restart_pending and not self._is_stopping(now):
@@ -1006,16 +1233,34 @@ class MainWindow(tk.Tk):
                     error = gui_daemon.do_start()
                     self.set_status(error or "Daemon restarting with the current settings\u2026")
                     if error is None:
-                        self._starting_since = now
+                        self._starting_since = self._gui_started_at = now
             self.control_bar.apply_view(
                 gui_daemon.build_view(self._snapshot, now, self._starting_since, self._stopping_since)
             )
+            self.log_tab.set_daemon_state(self._snapshot.running, self._snapshot.log_on)
         except Exception as exc:  # a status hiccup must never kill the GUI loop
             self.control_bar.status_label.configure(text=f"Daemon status unavailable: {exc}")
         finally:
             if self._daemon_job is not None:
                 self.after_cancel(self._daemon_job)
             self._daemon_job = self.after(DAEMON_REFRESH_INTERVAL_MS, self._update_daemon_view)
+
+    def _note_unexpected_exit(self, now: float) -> None:
+        """Tell the user when a daemon this GUI just started disappears without Stop/Restart being used."""
+        running = self._snapshot.running
+        died = self._was_running and not running
+        self._was_running = running
+        if (
+            died
+            and self._gui_started_at is not None
+            and now - self._gui_started_at < UNEXPECTED_EXIT_WINDOW_SECONDS
+            and self._stopping_since is None
+            and not self._restart_pending
+        ):
+            self.set_status(
+                "The daemon stopped by itself shortly after starting. See "
+                f"{daemon_launcher.STDERR_FILE_NAME} (or turn on the detailed log and start it again)."
+            )
 
     def _is_stopping(self, now: float) -> bool:
         return self._stopping_since is not None and now - self._stopping_since < gui_daemon.STOPPING_TIMEOUT_SECONDS
@@ -1028,7 +1273,7 @@ class MainWindow(tk.Tk):
 
     def _on_start(self) -> None:
         if self._report(gui_daemon.do_start(), "Starting the daemon\u2026"):
-            self._starting_since = time.time()
+            self._starting_since = self._gui_started_at = time.time()
             self._update_daemon_view()
 
     def _on_stop(self) -> None:
@@ -1126,6 +1371,7 @@ class MainWindow(tk.Tk):
                 self.after_cancel(job)
         self._tick_job = self._status_reset_job = self._daemon_job = None
         self.mappings_tab.shutdown()
+        self.log_tab.shutdown()
         super().destroy()
 
     def _set_icon(self) -> None:

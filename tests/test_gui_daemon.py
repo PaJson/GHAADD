@@ -5,6 +5,7 @@ Run from the project root: python -m unittest discover -s tests -t .
 import os
 import sqlite3
 import subprocess
+import tempfile
 import unittest
 from unittest import mock
 
@@ -231,21 +232,72 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(os.path.basename(swapped), "python.exe")
         self.assertEqual(daemon_launcher.get_python_executable("/usr/bin/python3"), "/usr/bin/python3")
 
-    def test_daemon_is_started_detached_with_no_streams(self) -> None:
-        with mock.patch.object(daemon_launcher.subprocess, "Popen") as popen:
-            popen.return_value.pid = 4321
-            pid = daemon_launcher.start_daemon()
-
+    def start_with_fake_popen(self, stderr_path):
+        with mock.patch.object(daemon_launcher, "get_stderr_path", return_value=stderr_path):
+            with mock.patch.object(daemon_launcher.subprocess, "Popen") as popen:
+                popen.return_value.pid = 4321
+                pid = daemon_launcher.start_daemon()
         self.assertEqual(pid, 4321)
-        kwargs = popen.call_args.kwargs
-        self.assertEqual(
-            (kwargs["stdin"], kwargs["stdout"], kwargs["stderr"]), (subprocess.DEVNULL,) * 3
-        )
+        return popen.call_args.kwargs
+
+    def test_daemon_is_started_detached_without_console_streams(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            kwargs = self.start_with_fake_popen(os.path.join(folder, "stderr.log"))
+
+        self.assertEqual((kwargs["stdin"], kwargs["stdout"]), (subprocess.DEVNULL,) * 2)
         if os.name == "nt":
             self.assertTrue(kwargs["creationflags"] & 0x00000008)  # DETACHED_PROCESS
             self.assertTrue(kwargs["creationflags"] & 0x00000200)  # CREATE_NEW_PROCESS_GROUP
         else:
             self.assertTrue(kwargs["start_new_session"])
+
+    def test_child_gets_utf8_output_so_emoji_cannot_crash_it(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            kwargs = self.start_with_fake_popen(os.path.join(folder, "stderr.log"))
+        self.assertEqual(kwargs["env"]["PYTHONIOENCODING"], "utf-8")
+
+    def test_crash_output_is_kept_in_a_file_not_discarded(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            target = os.path.join(folder, "stderr.log")
+            kwargs = self.start_with_fake_popen(target)
+            self.assertEqual(kwargs["stderr"].name, target)
+            self.assertTrue(kwargs["stderr"].closed)  # our copy is closed once the child has its own
+            self.assertTrue(os.path.exists(target))
+
+    def test_an_unwritable_stderr_file_falls_back_to_discarding(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            kwargs = self.start_with_fake_popen(os.path.join(folder, "no_such_folder", "stderr.log"))
+        self.assertEqual(kwargs["stderr"], subprocess.DEVNULL)
+
+
+class OutputEncodingTests(unittest.TestCase):
+    """Regression: a redirected stdout used the cp1252 locale encoding and the first emoji killed the daemon."""
+
+    def test_emoji_do_not_crash_a_cp1252_stream_after_configuring(self) -> None:
+        import io
+
+        import main
+
+        raw = io.BytesIO()
+        stream = io.TextIOWrapper(raw, encoding="cp1252", errors="strict", write_through=True)
+        with self.assertRaises(UnicodeEncodeError):  # the bug, reproduced
+            stream.write("\U0001f4e5 Found 16 unread release notifications.\n")
+
+        stream = io.TextIOWrapper(io.BytesIO(), encoding="cp1252", errors="strict", newline="\n", write_through=True)
+        with mock.patch.object(main.sys, "stdout", stream), mock.patch.object(main.sys, "stderr", io.StringIO()):
+            main._configure_output_encoding()
+            stream.write("\U0001f4e5 Found 16 unread release notifications.\n")  # must not raise now
+        self.assertEqual(stream.encoding, "utf-8")
+        self.assertEqual(stream.buffer.getvalue().decode("utf-8"), "\U0001f4e5 Found 16 unread release notifications.\n")
+
+    def test_streams_without_reconfigure_are_left_alone(self) -> None:
+        import main
+
+        class Plain:
+            pass
+
+        with mock.patch.object(main.sys, "stdout", Plain()), mock.patch.object(main.sys, "stderr", None):
+            main._configure_output_encoding()  # e.g. under pythonw: nothing to do, must not raise
 
 
 if __name__ == "__main__":

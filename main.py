@@ -37,6 +37,24 @@ _ORIGINAL_STDOUT = sys.stdout
 _ORIGINAL_STDERR = sys.stderr
 
 
+def _configure_output_encoding():
+    """Make console output UTF-8 and unable to crash on a character the stream cannot encode.
+
+    The console handles emoji, but a redirected stream (the GUI's Start button, a service, a
+    scheduled task, "> file") falls back to the Windows locale encoding (cp1252), where the
+    first emoji print raised UnicodeEncodeError and killed the daemon. Output is mirrored to
+    UTF-8 log files anyway, so UTF-8 here changes nothing for the console and fixes the rest.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)  # absent on exotic streams and under pythonw
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):
+            pass
+
+
 class TeeStream:
     """Mirror writes to terminal and a log file stream."""
 
@@ -303,6 +321,7 @@ def run_drain_queue_loop(github_token):
 
 def main():
     """Run the main orchestration flow for ingest and queue processing."""
+    _configure_output_encoding()
     print(f"GHAADD {__version__} is starting...")
     config = load_config()
     terminal_log = setup_terminal_logging(config)

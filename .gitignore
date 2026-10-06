@@ -11,6 +11,7 @@ modules/__pycache__/
 ghaadd.lock
 ghaadd.daemon.status.json
 ghaadd.daemon.status.json.*.tmp
+ghaadd.daemon.stderr.log
 mapping.json.lock
 mapping.json.*.tmp
 
