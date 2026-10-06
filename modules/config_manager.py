@@ -1,6 +1,14 @@
+import copy
 import json
 import os
-from typing import Any, Dict, Optional, TypedDict
+import re
+import tempfile
+import time
+from typing import Any, Callable, Dict, Optional, TypedDict, TypeVar
+
+from filelock import FileLock, Timeout
+
+from modules.dry_run_mode import is_dry_run
 
 DEFAULT_ENABLE_POLLING = False
 DEFAULT_POLL_INTERVAL_SECONDS = 300
@@ -19,6 +27,12 @@ DEFAULT_PROCESSING_FOLDER = "Processing"
 DEFAULT_COMPLETE_FOLDER = "Complete"
 DEFAULT_PARTIAL_FOLDER = "Partial"
 DEFAULT_LOGS_FOLDER = "Logs"
+
+_CONFIG_LOCK_TIMEOUT_SECONDS = 10.0
+_REPLACE_RETRY_ATTEMPTS = 10
+_REPLACE_RETRY_DELAY_SECONDS = 0.05
+
+_T = TypeVar("_T")
 
 
 class FolderSettings(TypedDict):
@@ -80,9 +94,14 @@ def _normalize_configured_path(path_value: str) -> str:
     return normalized
 
 
+def _config_file_path() -> str:
+    """Return absolute path to config.json beside application files."""
+    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config.json")
+
+
 def load_config() -> Dict[str, Any]:
     """Load and return config.json as a dictionary, or an empty dict on failure."""
-    config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config.json")
+    config_path = _config_file_path()
     try:
         with open(config_path, "r", encoding="utf-8") as config_file:
             data = json.load(config_file)
@@ -91,6 +110,138 @@ def load_config() -> Dict[str, Any]:
     except (OSError, json.JSONDecodeError):
         pass
     return {}
+
+
+class ConfigLockTimeout(RuntimeError):
+    """Raised when config.json could not be locked for writing in time."""
+
+
+class ConfigUnreadableError(RuntimeError):
+    """Raised when config.json exists but is not a valid JSON object; nothing was written."""
+
+
+def _read_config_strict(file_path: str) -> Dict[str, Any]:
+    """Return config.json as a dict; {} when missing, ConfigUnreadableError when broken.
+
+    load_config() silently returns {} on a parse error, which is fine for
+    readers but would make a writer overwrite a hand-edited file with defaults.
+    """
+    if not os.path.exists(file_path):
+        return {}
+    try:
+        with open(file_path, "r", encoding="utf-8") as config_file:
+            data = json.load(config_file)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ConfigUnreadableError(f"config.json cannot be read ({exc}); fix it by hand first.") from exc
+    if not isinstance(data, dict):
+        raise ConfigUnreadableError("config.json must contain a JSON object; fix it by hand first.")
+    return data
+
+
+def _serialize_config(config: Dict[str, Any]) -> str:
+    """Return human-formatted config.json text (number arrays kept on one line)."""
+    text = json.dumps(config, indent=2, ensure_ascii=False)
+
+    def _collapse(match: "re.Match[str]") -> str:
+        return "[" + re.sub(r",\n\s*", ", ", match.group(1)) + "]"
+
+    text = re.sub(r"\[\n\s*(-?\d+(?:,\n\s*-?\d+)*)\n\s*\]", _collapse, text)
+    return text + "\n"
+
+
+def _write_config_atomically(file_path: str, serialized: str) -> None:
+    """Write to a temp file beside the target, then swap it in (readers never see a partial file)."""
+    temp_handle = tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        newline="\n",
+        dir=os.path.dirname(file_path),
+        prefix="config.json.",
+        suffix=".tmp",
+        delete=False,
+    )
+    temp_path = temp_handle.name
+    try:
+        with temp_handle:
+            temp_handle.write(serialized)
+            temp_handle.flush()
+            os.fsync(temp_handle.fileno())
+
+        # On Windows os.replace raises PermissionError while a reader briefly has the target open.
+        for attempt in range(_REPLACE_RETRY_ATTEMPTS):
+            try:
+                os.replace(temp_path, file_path)
+                return
+            except PermissionError:
+                if attempt == _REPLACE_RETRY_ATTEMPTS - 1:
+                    raise
+                time.sleep(_REPLACE_RETRY_DELAY_SECONDS)
+    except BaseException:
+        try:
+            os.remove(temp_path)
+        except OSError:
+            pass
+        raise
+
+
+def update_config(mutator: Callable[[Dict[str, Any]], _T]) -> _T:
+    """Apply one change to config.json safely and return the mutator's result.
+
+    The single write path for config.json (GUI/CLI), mirroring
+    mapping_manager.update_mapping: under a cross-process lock it re-reads the
+    file fresh, lets `mutator` change the dict in place, then writes it
+    atomically. The file is not rewritten when nothing changed. The daemon
+    loads config once at startup, so changes apply on its next start.
+
+    Raises ConfigLockTimeout when the lock cannot be taken in time and
+    ConfigUnreadableError when the existing file is not valid JSON. In dry-run
+    mode the mutator runs on the loaded config but nothing is locked or written.
+    """
+    file_path = _config_file_path()
+    if is_dry_run():
+        return mutator(load_config())
+
+    lock = FileLock(f"{file_path}.lock", timeout=_CONFIG_LOCK_TIMEOUT_SECONDS)
+    try:
+        lock.acquire()
+    except Timeout as exc:
+        raise ConfigLockTimeout(
+            f"Timed out after {_CONFIG_LOCK_TIMEOUT_SECONDS:.0f}s waiting for the config.json lock."
+        ) from exc
+
+    try:
+        config = _read_config_strict(file_path)
+        snapshot = copy.deepcopy(config)
+        result = mutator(config)
+        if config != snapshot:
+            _write_config_atomically(file_path, _serialize_config(config))
+        return result
+    finally:
+        lock.release()
+
+
+def set_config_values(changes: Dict[str, Any]) -> bool:
+    """Set several values by dotted path (e.g. "polling.interval_seconds"); True when the file changed.
+
+    Missing sections are created. Callers validate values first (see
+    modules/gui_forms.py); this only writes.
+    """
+
+    def _apply(config: Dict[str, Any]) -> bool:
+        before = copy.deepcopy(config)
+        for dotted_key, value in changes.items():
+            *parents, leaf = dotted_key.split(".")
+            node = config
+            for part in parents:
+                child = node.get(part)
+                if not isinstance(child, dict):
+                    child = {}
+                    node[part] = child
+                node = child
+            node[leaf] = value
+        return config != before
+
+    return update_config(_apply)
 
 
 def get_max_emails_to_process(config=None):

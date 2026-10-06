@@ -607,6 +607,70 @@ def get_next_pending_job(connection):
     ).fetchone()
 
 
+def get_repo_job_summaries(connection):
+    """Return one read-only job_queue summary per repo, keyed by lower-cased owner/repo.
+
+    Used by the GUI Mappings table. Per repo: latest_* come from its newest
+    non-SUPERSEDED job (None when it only has superseded ones), pending_next_check / pending_attempts from its earliest PENDING job (None
+    when nothing is pending), last_activity is the newest updated_at of any job.
+    """
+    summaries = {}
+
+    rows = connection.execute(
+        """
+        SELECT repo, MAX(updated_at) AS last_activity
+        FROM job_queue
+        GROUP BY repo
+        """
+    ).fetchall()
+    for row in rows:
+        summaries[row["repo"].lower()] = {
+            "last_activity": row["last_activity"],
+            "latest_tag": None,
+            "latest_status": None,
+            "latest_updated_at": None,
+            "latest_downloaded": 0,
+            "latest_skipped": 0,
+            "latest_total": 0,
+            "pending_next_check": None,
+            "pending_attempts": 0,
+        }
+
+    latest_rows = connection.execute(
+        """
+        SELECT repo, tag, status, updated_at, downloaded_count, skipped_count, total_items
+        FROM job_queue
+        WHERE id IN (
+            SELECT MAX(id) FROM job_queue WHERE status != 'SUPERSEDED' GROUP BY repo
+        )
+        """
+    ).fetchall()
+    for row in latest_rows:
+        summary = summaries[row["repo"].lower()]
+        summary["latest_tag"] = row["tag"]
+        summary["latest_status"] = row["status"]
+        summary["latest_updated_at"] = row["updated_at"]
+        summary["latest_downloaded"] = row["downloaded_count"]
+        summary["latest_skipped"] = row["skipped_count"]
+        summary["latest_total"] = row["total_items"]
+
+    pending_rows = connection.execute(
+        """
+        SELECT repo, next_check_time, attempt_count
+        FROM job_queue
+        WHERE status = 'PENDING'
+        ORDER BY next_check_time DESC, id DESC
+        """
+    ).fetchall()
+    # Ordered descending so the earliest pending job per repo is written last and wins.
+    for row in pending_rows:
+        summary = summaries[row["repo"].lower()]
+        summary["pending_next_check"] = row["next_check_time"]
+        summary["pending_attempts"] = row["attempt_count"]
+
+    return summaries
+
+
 def get_jobs_by_ids(connection, job_ids: Iterable[int]):
     """Return queue jobs for the provided IDs."""
     normalized_ids = sorted({int(job_id) for job_id in job_ids})
