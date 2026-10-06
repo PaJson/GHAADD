@@ -42,10 +42,10 @@ class RepoRow:
 
 
 def format_timestamp(epoch: Optional[float]) -> str:
-    """Local "YYYY-MM-DD HH:MM", or "-" when unset."""
+    """Local "YYYY-MM-DD HH:MM:SS", or "-" when unset."""
     if not epoch:
         return NO_VALUE
-    return datetime.fromtimestamp(float(epoch)).strftime("%Y-%m-%d %H:%M")
+    return datetime.fromtimestamp(float(epoch)).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def format_limit(limit: Any, counted: Optional[Mapping[str, Any]]) -> tuple[str, bool, str]:

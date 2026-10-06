@@ -401,9 +401,9 @@ class MappingsTab(ttk.Frame):
         ("repo", "Repository", 150, "w"),
         ("destination", "Destination", 150, "w"),
         ("tag", "Latest tag", 100, "w"),
-        ("last_check", "Last check", 125, "w"),
+        ("last_check", "Last check", 145, "w"),
         ("step", "Recheck", 65, "center"),
-        ("next_check", "Next check", 125, "w"),
+        ("next_check", "Next check", 145, "w"),
         ("files", "Files", 70, "center"),
         ("limit", "Limit", 75, "center"),
     )
