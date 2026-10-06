@@ -12,16 +12,21 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import filedialog, messagebox, ttk
 from typing import Any, Callable, Literal, Optional
 
-from modules import config_manager, gui_data, gui_forms, mapping_manager
+from modules import config_manager, gui_data, gui_forms, gui_state, mapping_manager
+from modules.app_info import APP_NAME, __version__
 
 Anchor = Literal["nw", "n", "ne", "w", "center", "e", "sw", "s", "se"]
 
-APP_TITLE = "GHAADD"
+APP_TITLE = f"{APP_NAME} {__version__}"
+# The app icon is looked up here: ghaadd.ico (preferred on Windows) or ghaadd.png.
+ICON_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+WINDOWS_APP_ID = "GHAADD.GUI"  # own taskbar identity, so the taskbar shows our icon instead of Python's
 REFRESH_INTERVAL_MS = 3000
 STATUS_MESSAGE_MS = 6000
 DEFAULT_STATUS_TEXT = "config.json · mapping.json · state.db"
@@ -233,10 +238,10 @@ class MappingsTab(ttk.Frame):
     # (key, heading, width, anchor) for the table; keys match repo_overview.RepoRow fields.
     TABLE_COLUMNS: tuple[tuple[str, str, int, Anchor], ...] = (
         ("icon", "?", 40, "center"),  # status icon; the "?" header explains it on hover
-        ("foldername", "Name", 200, "w"),
-        ("repo", "Repository", 200, "w"),
-        ("destination", "Destination", 200, "w"),
-        ("tag", "Latest tag", 90, "w"),
+        ("foldername", "Name", 150, "w"),
+        ("repo", "Repository", 150, "w"),
+        ("destination", "Destination", 150, "w"),
+        ("tag", "Latest tag", 100, "w"),
         ("last_check", "Last check", 125, "w"),
         ("step", "Recheck", 65, "center"),
         ("next_check", "Next check", 125, "w"),
@@ -498,6 +503,13 @@ class MappingsTab(ttk.Frame):
         if self._cell_display(row, key) != full:  # only text that is cut off gets a tooltip
             self._tip_cell = (iid, key)
             self._tooltip.schedule(full, event.x_root, event.y_root)
+
+    def shutdown(self) -> None:
+        """Cancel pending timers and close the tooltip (call before the window is destroyed)."""
+        if self._fit_job is not None:
+            self.after_cancel(self._fit_job)
+            self._fit_job = None
+        self._hide_tip()
 
     def _hide_tip(self) -> None:
         self._tip_cell = None
@@ -837,11 +849,19 @@ class SettingsDialog(tk.Toplevel):
 
 
 class MainWindow(tk.Tk):
+    DEFAULT_SIZE = "1280x720"
+    MIN_SIZE = (900, 520)
+
     def __init__(self, theme: Optional[str] = None) -> None:
         super().__init__()
         self.title(APP_TITLE)
-        self.geometry("1280x720")
-        self.minsize(900, 520)
+        self._icon_image: Optional[tk.PhotoImage] = None  # keep a reference or Tk drops the icon
+        self._set_icon()
+        self.minsize(*self.MIN_SIZE)
+        self._restore_window_state()
+        self._normal_state: Optional[gui_state.WindowState] = None  # last size/position while not maximized
+        self.bind("<Configure>", self._remember_normal_state)
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
         self._apply_theme(theme)
         self._status_reset_job: Optional[str] = None
 
@@ -863,7 +883,7 @@ class MainWindow(tk.Tk):
         for title in STATUS_TABS:
             self.notebook.add(StatusTab(self.notebook), text=title)
 
-        self.after(REFRESH_INTERVAL_MS, self._tick)
+        self._tick_job: Optional[str] = self.after(REFRESH_INTERVAL_MS, self._tick)
 
     def set_status(self, text: str) -> None:
         """Show a message in the status bar for a few seconds, then restore the default."""
@@ -880,7 +900,7 @@ class MainWindow(tk.Tk):
         try:
             self.mappings_tab.refresh()
         finally:
-            self.after(REFRESH_INTERVAL_MS, self._tick)
+            self._tick_job = self.after(REFRESH_INTERVAL_MS, self._tick)
 
     def _open_settings(self) -> None:
         SettingsDialog(self, self._after_settings_saved)
@@ -888,6 +908,71 @@ class MainWindow(tk.Tk):
     def _after_settings_saved(self, message: str) -> None:
         self.set_status(message)
         self.mappings_tab.refresh()  # the default recheck shown in the editor may have changed
+
+    def _restore_window_state(self) -> None:
+        """Apply the size/position saved in config.json (fitted to the screen), else the default."""
+        saved = gui_state.load_window_state()
+        if saved is None:
+            self.geometry(self.DEFAULT_SIZE)
+            return
+        fitted = gui_state.fit_to_screen(
+            saved,
+            self.winfo_vrootx(),
+            self.winfo_vrooty(),
+            self.winfo_vrootwidth(),
+            self.winfo_vrootheight(),
+            *self.MIN_SIZE,
+        )
+        self.geometry(gui_state.to_geometry(fitted))
+        if fitted.maximized:
+            self.after_idle(lambda: self.state("zoomed"))
+
+    def _remember_normal_state(self, event: tk.Event) -> None:  # type: ignore[type-arg]
+        """Track the window rectangle while it is in its normal (not maximized/minimized) state."""
+        if event.widget is self and self.state() == "normal":
+            self._normal_state = gui_state.parse_geometry(self.geometry())
+
+    def _on_close(self) -> None:
+        """Save the window state, then close. A failed save must never keep the window open."""
+        try:
+            normal = self._normal_state or gui_state.parse_geometry(self.geometry())
+            if normal is not None:
+                maximized = self.state() == "zoomed"
+                gui_state.save_window_state(
+                    gui_state.WindowState(normal.width, normal.height, normal.x, normal.y, maximized)
+                )
+        except Exception:
+            pass
+        self.destroy()
+
+    def destroy(self) -> None:
+        """Cancel pending timers first, so nothing fires into a window that is already gone."""
+        for job in (self._tick_job, self._status_reset_job):
+            if job is not None:
+                self.after_cancel(job)
+        self._tick_job = self._status_reset_job = None
+        self.mappings_tab.shutdown()
+        super().destroy()
+
+    def _set_icon(self) -> None:
+        """Use assets/ghaadd.ico or assets/ghaadd.png when present; otherwise keep Tk's default icon."""
+        if sys.platform == "win32":
+            try:  # must happen before the window is shown
+                import ctypes
+
+                ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(WINDOWS_APP_ID)
+            except (AttributeError, OSError):
+                pass
+        ico_path = os.path.join(ICON_DIR, "ghaadd.ico")
+        png_path = os.path.join(ICON_DIR, "ghaadd.png")
+        try:
+            if sys.platform == "win32" and os.path.isfile(ico_path):
+                self.iconbitmap(default=ico_path)
+            elif os.path.isfile(png_path):
+                self._icon_image = tk.PhotoImage(file=png_path)
+                self.iconphoto(True, self._icon_image)
+        except tk.TclError:
+            pass  # a broken icon file must never stop the GUI from starting
 
     def _apply_theme(self, preferred: Optional[str] = None) -> None:
         style = ttk.Style(self)

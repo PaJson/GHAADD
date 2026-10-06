@@ -13,7 +13,7 @@ from modules.config_manager import (
 from datetime import datetime
 from dotenv import load_dotenv
 
-__version__ = "1.1.1"
+from modules.app_info import __version__
 
 # Load environment variables from .env.
 load_dotenv()
