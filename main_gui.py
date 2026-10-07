@@ -376,9 +376,9 @@ class MappingsTab(ttk.Frame):
         ("repo", "Repository (owner/repo)", 150, "w"),
         ("destination", "Destination", 150, "w"),
         ("tag", "Tag", 100, "w"),
-        ("last_check", "Last check", 145, "w"),
+        ("last_check", "Last check", 135, "w"),
         ("step", "Recheck", 65, "center"),
-        ("next_check", "Next check", 145, "w"),
+        ("next_check", "Next check", 135, "w"),
         ("files", "Files", 70, "center"),
         ("limit", "Limit", 75, "center"),
     )
@@ -468,9 +468,10 @@ class MappingsTab(ttk.Frame):
         self.table_frame.rowconfigure(0, weight=1)
         keys = [column[0] for column in self.TABLE_COLUMNS]
         self.tree = ttk.Treeview(self.table_frame, columns=keys, show="headings", selectmode="browse")
+        fitted = self._fitted_widths()
         for key, title, width, anchor in self.TABLE_COLUMNS:
             self.tree.heading(key, text=title, anchor=anchor)
-            self.tree.column(key, width=width, minwidth=30 if key == "icon" else 40, anchor=anchor, stretch=key in self.STRETCH_COLUMNS)
+            self.tree.column(key, width=fitted.get(key, width), minwidth=30 if key == "icon" else 40, anchor=anchor, stretch=key in self.STRETCH_COLUMNS)
         self.tree.grid(row=0, column=0, sticky="nsew")
         yscroll = ttk.Scrollbar(self.table_frame, orient="vertical", command=self.tree.yview)
         self._xscroll = ttk.Scrollbar(self.table_frame, orient="horizontal", command=self.tree.xview)
@@ -665,6 +666,18 @@ class MappingsTab(ttk.Frame):
         elif not needed and self._xscroll.winfo_ismapped():
             self._xscroll.grid_remove()
         self._xscroll.set(first, last)
+
+    def _fitted_widths(self) -> dict[str, int]:
+        """Widths for the columns whose text has a known shape: never below the listed width (tuned on Windows),
+        wider where the system font is (Linux fonts are wider, so the timestamps would end in "...")."""
+        font = self._tree_font()
+        bold = tkfont.nametofont("TkDefaultFont").copy()
+        bold.configure(weight="bold")
+        stamp = font.measure("2026-10-07 00:00") + 47  # text plus the cell's side margins (Windows 135, Linux 174)
+        heading = bold.measure("Recheck") + 17
+        wanted = {"last_check": stamp, "next_check": stamp, "step": heading}
+        listed = {key: width for key, _title, width, _anchor in self.TABLE_COLUMNS}
+        return {key: max(listed[key], width) for key, width in wanted.items()}
 
     def _tree_font(self) -> tkfont.Font:
         spec = ttk.Style(self).lookup("Treeview", "font") or "TkDefaultFont"
