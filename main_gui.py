@@ -1022,15 +1022,16 @@ class LiveLogTab(ttk.Frame):
     def _build_toolbar(self) -> None:
         toolbar = ttk.Frame(self)
         toolbar.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 6))
-        toolbar.columnconfigure(2, weight=1)
+        toolbar.columnconfigure(3, weight=1)
+        ttk.Label(toolbar, text="Filter:").grid(row=0, column=0, padx=(0, 4))
+        self.filter_var = tk.StringVar()
+        FilterEntry(toolbar, self.filter_var, width=75).grid(row=0, column=1, sticky="w")
+        self.filter_var.trace_add("write", lambda *_: self._render_all())
+        # Follow sits right of the filter's clear button, away from the tab headers (a stray click there unticked it)
         self.follow_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(toolbar, text="Follow", variable=self.follow_var, command=self._on_follow_toggle).grid(
-            row=0, column=0
+            row=0, column=2, padx=(14, 0), sticky="w"
         )
-        ttk.Label(toolbar, text="Filter:").grid(row=0, column=1, padx=(14, 4))
-        self.filter_var = tk.StringVar()
-        FilterEntry(toolbar, self.filter_var, width=75).grid(row=0, column=2, sticky="w")
-        self.filter_var.trace_add("write", lambda *_: self._render_all())
         self.file_label = ttk.Label(toolbar, text="", foreground=COLOR_MUTED)
         self.file_label.grid(row=0, column=3, sticky="e", padx=(0, 8))
         ttk.Button(toolbar, text="Copy", command=self._copy).grid(row=0, column=4, padx=(0, 6))
@@ -1783,7 +1784,7 @@ class MainWindow(tk.Tk):
         self.status_feed = gui_data.StatusFeed()
         self._status_tabs: dict[str, StatusTab] = {}
         self._status_titles: dict[str, str] = {}
-        self._unmapped_rows: list[status_tabs.UnmappedRow] = []
+        self._unmapped_rows: Optional[list[status_tabs.UnmappedRow]] = None  # None = not shown yet, so an empty list still draws its message
         self._current_status_key: Optional[str] = None
         for definition in status_tabs.TAB_DEFS:
             tab = self._build_status_tab(definition)
