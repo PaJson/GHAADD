@@ -17,7 +17,7 @@ from modules.app_info import __version__
 
 # Load environment variables from .env.
 load_dotenv()
-GITHUB_TOKEN = os.getenv("GITHUB_PAT")
+GITHUB_TOKEN = os.getenv("GITHUB_PAT", None)
 
 # Import application modules.
 from modules.cli_commands import handle_cli_command, parse_cli_args

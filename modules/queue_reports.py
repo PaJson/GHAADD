@@ -963,7 +963,7 @@ def print_queue_status(
 
         oldest_purgeable = report_data["oldest_purgeable_job"]
         newest_purgeable = report_data["newest_purgeable_job"]
-        if oldest_purgeable is None:
+        if oldest_purgeable is None or newest_purgeable is None:  # both exist together; the test also settles the types
             print("Purgeable jobs (COMPLETED/FAILED/SUPERSEDED): none")
         else:
             print(
