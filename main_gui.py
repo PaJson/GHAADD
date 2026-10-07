@@ -240,6 +240,34 @@ class Tooltip:
         self._window = window
 
 
+class FilterEntry(ttk.Frame):
+    """A filter field with a small clear (x) button to its right.
+
+    The button is always visible: dark while the field holds text, greyed out while it is empty.
+    Escape in the field clears it too. `width` is the field's width in characters.
+    """
+
+    def __init__(self, master: tk.Misc, textvariable: tk.StringVar, width: int = 20) -> None:
+        super().__init__(master)
+        self._variable = textvariable
+        self.columnconfigure(0, weight=1)
+        self.entry = ttk.Entry(self, textvariable=textvariable, width=width)
+        self.entry.grid(row=0, column=0, sticky="ew")
+        self.clear_button = ttk.Button(self, text="✕", width=3, command=self.clear)
+        self.clear_button.grid(row=0, column=1, padx=(4, 0))
+        attach_tooltip(self.clear_button, "Clear the filter (Esc)")
+        self.entry.bind("<Escape>", lambda _event: self.clear())
+        textvariable.trace_add("write", lambda *_: self._sync())
+        self._sync()
+
+    def clear(self) -> None:
+        self._variable.set("")
+        self.entry.focus_set()
+
+    def _sync(self) -> None:
+        self.clear_button.state(["!disabled"] if str(self._variable.get()) else ["disabled"])
+
+
 def fit_text(text: str, max_pixels: int, measure: Callable[[str], int]) -> str:
     """Return `text`, or its longest prefix plus an ellipsis that still fits `max_pixels`."""
     if measure(text) <= max_pixels:
@@ -467,18 +495,19 @@ class MappingsTab(ttk.Frame):
     def _build_filter_bar(self) -> None:
         bar = ttk.Frame(self)
         bar.grid(row=0, column=0, sticky="ew", pady=(0, 6))
-        bar.columnconfigure(0, weight=1)
+        bar.columnconfigure(1, weight=1)
+        ttk.Label(bar, text="Filter:").grid(row=0, column=0, padx=(0, 4))
         self.filter_var = tk.StringVar()
-        ttk.Entry(bar, textvariable=self.filter_var).grid(row=0, column=0, sticky="ew")
+        FilterEntry(bar, self.filter_var).grid(row=0, column=1, sticky="ew")
         self.filter_var.trace_add("write", lambda *_: self._render_rows())
         self.show_var = tk.StringVar(value=self.SHOW_FILTERS[0])
         show_box = ttk.Combobox(bar, textvariable=self.show_var, state="readonly", width=12, values=self.SHOW_FILTERS)
-        show_box.grid(row=0, column=1, padx=(8, 0))
+        show_box.grid(row=0, column=2, padx=(8, 0))
         show_box.bind("<<ComboboxSelected>>", lambda _event: self._render_rows())
         self.add_button = ttk.Button(bar, text="Add repository…", command=self._add_repository)
         self.remove_button = ttk.Button(bar, text="Remove", command=self._remove_repository)
-        self.add_button.grid(row=0, column=2, padx=(8, 6))
-        self.remove_button.grid(row=0, column=3)
+        self.add_button.grid(row=0, column=3, padx=(8, 6))
+        self.remove_button.grid(row=0, column=4)
 
     def _build_table(self) -> None:
         self.table_frame = ttk.Frame(self)
@@ -1007,7 +1036,7 @@ class LiveLogTab(ttk.Frame):
         )
         ttk.Label(toolbar, text="Filter:").grid(row=0, column=1, padx=(14, 4))
         self.filter_var = tk.StringVar()
-        ttk.Entry(toolbar, textvariable=self.filter_var, width=28).grid(row=0, column=2, sticky="w")
+        FilterEntry(toolbar, self.filter_var, width=75).grid(row=0, column=2, sticky="w")
         self.filter_var.trace_add("write", lambda *_: self._render_all())
         self.file_label = ttk.Label(toolbar, text="", foreground=COLOR_MUTED)
         self.file_label.grid(row=0, column=3, sticky="e", padx=(0, 8))
