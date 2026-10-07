@@ -21,14 +21,14 @@ class QueueTextTests(unittest.TestCase):
     def test_the_text_for_each_situation(self) -> None:
         self.assertEqual(gui_data.queue_text(None), "")
         self.assertEqual(gui_data.queue_text(gui_data.QueueCounts(0, 0)), "Queue: nothing pending")
-        self.assertEqual(gui_data.queue_text(gui_data.QueueCounts(53, 36)), "Queue: 36 due now, 17 later")
-        self.assertEqual(gui_data.queue_text(gui_data.QueueCounts(4, 0)), "Queue: 0 due now, 4 later")
-        self.assertEqual(gui_data.queue_text(gui_data.QueueCounts(2, 2)), "Queue: 2 due now, 0 later")
+        self.assertEqual(gui_data.queue_text(gui_data.QueueCounts(53, 36)), "Queue: 36 due now, 17 due later")
+        self.assertEqual(gui_data.queue_text(gui_data.QueueCounts(4, 0)), "Queue: 0 due now, 4 due later")
+        self.assertEqual(gui_data.queue_text(gui_data.QueueCounts(2, 2)), "Queue: 2 due now, 0 due later")
 
     def test_jobs_that_are_behind_are_named(self) -> None:
         counts = gui_data.QueueCounts(pending=27, due=27, behind=26, catch_up_polls=5)
-        self.assertEqual(gui_data.queue_text(counts), "Queue: 27 due now (26 behind schedule), 0 later")
-        self.assertEqual(gui_data.queue_text(gui_data.QueueCounts(5, 3, behind=0)), "Queue: 3 due now, 2 later")
+        self.assertEqual(gui_data.queue_text(counts), "Queue: 27 due now (26 behind schedule), 0 due later")
+        self.assertEqual(gui_data.queue_text(gui_data.QueueCounts(5, 3, behind=0)), "Queue: 3 due now, 2 due later")
 
     def test_the_hover_text_explains_the_catching_up_only_when_there_is_some(self) -> None:
         plain = gui_data.queue_tip(gui_data.QueueCounts(3, 3, behind=0), "BASE")

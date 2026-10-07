@@ -92,7 +92,7 @@ CONTROL_HELP = {
     "queue_counts": "Jobs waiting in the queue.\n"
                     "Due now: their check time has come, so the next poll (or Poll now) processes them. This is the "
                     "number the daemon prints as \"Processing N due queue job(s)\".\n"
-                    "Later: scheduled re-checks of recent releases that are not due yet.",
+                    "Due later: re-checks of recent releases whose time has not come yet.",
     "choose_warnings": "Choose which kinds of warning may pop up a notification. The Warnings tab and its unread "
                        "counter still show every warning. By default API (a release that was replaced or removed) "
                        "and LIMIT (which has its own notification) are silent. The checklist has its own Save and Cancel: "

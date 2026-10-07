@@ -132,7 +132,7 @@ def queue_text(counts: Optional[QueueCounts]) -> str:
         return "Queue: nothing pending"
     later = counts.pending - counts.due
     behind = f" ({counts.behind} behind schedule)" if counts.behind else ""
-    return f"Queue: {counts.due} due now{behind}, {later} later"
+    return f"Queue: {counts.due} due now{behind}, {later} due later"
 
 
 def queue_tip(counts: Optional[QueueCounts], base: str) -> str:
