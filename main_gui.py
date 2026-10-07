@@ -991,7 +991,7 @@ class MappingsTab(ttk.Frame):
         self._set_status(f"Removed {repo}." if removed else f"{repo} was already gone.")
 
 
-class LiveLogTab(ttk.Frame):
+class TerminalLogTab(ttk.Frame):
     """Follows the newest terminal log file: last ~1000 lines, smart auto-scroll, filter, copy."""
 
     MAX_LINES = log_tail.DEFAULT_MAX_LINES
@@ -1968,7 +1968,7 @@ class MainWindow(tk.Tk):
         self.notebook.pack(fill="both", expand=True, padx=8, pady=8)
 
         self.mappings_tab = MappingsTab(self.notebook, self.set_status)
-        self.log_tab = LiveLogTab(self.notebook, self._live_log_active, self._on_enable_log, self.set_status)
+        self.log_tab = TerminalLogTab(self.notebook, self._terminal_log_active, self._on_enable_log, self.set_status)
         self.notebook.add(self.mappings_tab, text="Mappings")
         self.notebook.add(self.log_tab, text="Terminal log")
         self.status_feed = gui_data.StatusFeed()
@@ -2174,7 +2174,7 @@ class MainWindow(tk.Tk):
         self._show_event_rows("limits", None)
         self.set_status(f"Cleared {removed:,} folder-limit warning(s) for {repo}.")
 
-    def _live_log_active(self) -> bool:
+    def _terminal_log_active(self) -> bool:
         """True when somebody can see the Terminal log tab (window not minimized, its tab selected)."""
         return not self._window_hidden() and self.notebook.select() == str(self.log_tab)
 
@@ -2196,7 +2196,7 @@ class MainWindow(tk.Tk):
         if self._current_status_key is not None and self._current_status_key != previous:
             self._enter_status_tab(self._current_status_key)
         self._refresh_mappings_if_visible()
-        if self._live_log_active():
+        if self._terminal_log_active():
             self.log_tab.poll_now()
 
     def _on_map(self, event: tk.Event) -> None:  # type: ignore[type-arg]
@@ -2204,7 +2204,7 @@ class MainWindow(tk.Tk):
         if event.widget is self:
             self._failed_unseen = 0  # the user is looking now
             self._refresh_mappings_if_visible()
-            if self._live_log_active():
+            if self._terminal_log_active():
                 self.log_tab.poll_now()
             if self.state() != "iconic":
                 self._refresh_status_tabs()
