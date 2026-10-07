@@ -1601,12 +1601,18 @@ class StatusTab(ttk.Frame):
 class SettingsDialog(tk.Toplevel):
     """Global settings from config.json."""
 
-    def __init__(self, master: tk.Misc, on_saved: Callable[[str], None]) -> None:
+    def __init__(
+        self,
+        master: tk.Misc,
+        on_saved: Callable[[str], None],
+        on_warnings_saved: Optional[Callable[[], None]] = None,
+    ) -> None:
         super().__init__(master)
         self.title("Settings")
         self.resizable(False, False)
         self.transient(master)  # type: ignore[arg-type]
         self._on_saved = on_saved
+        self._on_warnings_saved = on_warnings_saved  # the warning checklist saves by itself; tell the main window
 
         body = ttk.Frame(self, padding=14)
         body.pack(fill="both", expand=True)
@@ -1621,9 +1627,9 @@ class SettingsDialog(tk.Toplevel):
         body.columnconfigure((0, 1), weight=1, uniform="settings")
 
         current = gui_data.load_settings_form()
-        # Warning types without a notification: a list, edited in its own window rather than in a field.
+        # Warning types without a notification: a list with its own window, Save and Cancel (it is not part of this
+        # form, so this window's Save neither writes nor undoes it).
         self._silenced: set[str] = set(current.pop("silenced_warning_types", []))
-        self._initial_silenced = frozenset(self._silenced)
         self._initial_form = dict(current)  # to tell whether the form has unsaved changes
         self.vars: dict[str, tk.Variable] = {
             key: tk.BooleanVar(value=value) if isinstance(value, bool) else tk.StringVar(value=value)
@@ -1798,18 +1804,18 @@ class SettingsDialog(tk.Toplevel):
         self._warnings_button.state(["!disabled"] if notifying else ["disabled"])
 
     def _choose_warnings(self) -> None:
-        """Open the checklist of warning types; the result is kept until Save."""
-        WarningTypesDialog(self, self._silenced, self._warning_types_chosen)
+        """Open the checklist of warning types. It saves by itself (its own Save button), whatever this window does."""
+        WarningTypesDialog(self, self._silenced, self._warning_types_saved)
 
-    def _warning_types_chosen(self, silenced: set[str]) -> None:
+    def _warning_types_saved(self, silenced: set[str]) -> None:
         self._silenced = set(silenced)
         self._warnings_summary.configure(text=warning_types.summary(self._silenced))
+        if self._on_warnings_saved is not None:
+            self._on_warnings_saved()
 
     def _form_changed(self) -> bool:
         """True when something in the form differs from what config.json had when the dialog opened."""
         if any(str(var.get()) != str(self._initial_form.get(key)) for key, var in self.vars.items()):
-            return True
-        if frozenset(self._silenced) != self._initial_silenced:
             return True
         return self._autostart_before is not None and bool(self.autostart_var.get()) != self._autostart_before
 
@@ -1908,8 +1914,7 @@ class SettingsDialog(tk.Toplevel):
             self.message.configure(text="\n".join(result.errors))
             return
         try:
-            changes = {**result.changes, "gui.silenced_warning_types": sorted(self._silenced)}
-            changed = config_manager.set_config_values(changes)
+            changed = config_manager.set_config_values(result.changes)
             changed = config_manager.add_missing_defaults() or changed  # also lists the settings without a field here
         except (config_manager.ConfigLockTimeout, config_manager.ConfigUnreadableError, OSError) as exc:
             self.message.configure(text=describe_error(exc))
@@ -1925,14 +1930,19 @@ class SettingsDialog(tk.Toplevel):
 
 
 class WarningTypesDialog(tk.Toplevel):
-    """A checklist of the warning types: ticked = may pop up a notification (the Warnings tab shows all of them)."""
+    """A checklist of the warning types: ticked = may pop up a notification (the Warnings tab shows all of them).
 
-    def __init__(self, master: tk.Misc, silenced: set[str], on_chosen: Callable[[set[str]], None]) -> None:
+    It has its own Save and Cancel: Save writes config.json at once (and calls `on_saved`), whatever the window it was
+    opened from does with its own Save.
+    """
+
+    def __init__(self, master: tk.Misc, silenced: set[str], on_saved: Callable[[set[str]], None]) -> None:
         super().__init__(master)
         self.title("Warning notifications")
         self.resizable(False, False)
         self.transient(master)  # type: ignore[arg-type]
-        self._on_chosen = on_chosen
+        self._on_saved = on_saved
+        self._initial = frozenset(silenced)
         self._unknown = {code for code in silenced if code not in warning_types.KNOWN_TYPES}  # kept as they are
 
         body = ttk.Frame(self, padding=14)
@@ -1954,19 +1964,36 @@ class WarningTypesDialog(tk.Toplevel):
                 row=index, column=1, sticky="w", pady=2
             )
 
+        last_row = len(warning_types.WARNING_TYPES) + 1
+        self.message = ttk.Label(body, text="", foreground=COLOR_ERROR, wraplength=700)
+        self.message.grid(row=last_row, column=0, columnspan=2, sticky="w", pady=(8, 0))
         buttons = ttk.Frame(body)
-        buttons.grid(row=len(warning_types.WARNING_TYPES) + 1, column=0, columnspan=2, sticky="ew", pady=(12, 0))
+        buttons.grid(row=last_row + 1, column=0, columnspan=2, sticky="ew", pady=(8, 0))
         buttons.columnconfigure(3, weight=1)
         ttk.Button(buttons, text="All", command=lambda: self._set_all(True)).grid(row=0, column=0, padx=(0, 6))
         ttk.Button(buttons, text="None", command=lambda: self._set_all(False)).grid(row=0, column=1, padx=(0, 6))
         ttk.Button(buttons, text="Defaults", command=self._set_defaults).grid(row=0, column=2)
-        ttk.Button(buttons, text="Cancel", command=self.destroy).grid(row=0, column=4, padx=(0, 6))
-        ok_button = ttk.Button(buttons, text="OK", command=self._ok)
-        ok_button.grid(row=0, column=5)
+        ttk.Button(buttons, text="Cancel", command=self._close_request).grid(row=0, column=4, padx=(0, 6))
+        save_button = ttk.Button(buttons, text="Save", command=self._save)
+        save_button.grid(row=0, column=5)
 
-        self.bind("<Escape>", lambda _event: self.destroy())
-        center_dialog(self, master, focus=ok_button)
+        self.bind("<Escape>", lambda _event: self._close_request())
+        self.protocol("WM_DELETE_WINDOW", self._close_request)
+        center_dialog(self, master, focus=save_button)
         self.grab_set()
+
+    def _chosen_silenced(self) -> set[str]:
+        return {code for code, var in self.vars.items() if not var.get()} | self._unknown
+
+    def _close_request(self) -> None:
+        """Cancel, Escape and the window's X: ask first when the ticks differ from what is saved."""
+        if frozenset(self._chosen_silenced()) != self._initial and not messagebox.askyesno(
+            "Warning notifications",
+            "You have changes that are not saved.\n\nClose the window and discard them?",
+            icon="warning", default="no", parent=self,
+        ):
+            return
+        self.destroy()
 
     def _set_all(self, value: bool) -> None:
         for var in self.vars.values():
@@ -1976,10 +2003,16 @@ class WarningTypesDialog(tk.Toplevel):
         for code, var in self.vars.items():
             var.set(code not in warning_types.DEFAULT_SILENCED)
 
-    def _ok(self) -> None:
-        silenced = {code for code, var in self.vars.items() if not var.get()} | self._unknown
+    def _save(self) -> None:
+        """Write the choice to config.json now; the window stays open (with the reason) if that fails."""
+        silenced = self._chosen_silenced()
+        try:
+            config_manager.set_config_values({"gui.silenced_warning_types": sorted(silenced)})
+        except (config_manager.ConfigLockTimeout, config_manager.ConfigUnreadableError, OSError) as exc:
+            self.message.configure(text=describe_error(exc))
+            return
         self.destroy()
-        self._on_chosen(silenced)
+        self._on_saved(silenced)
 
 
 class DoctorDialog(tk.Toplevel):
@@ -2619,7 +2652,16 @@ class MainWindow(tk.Tk):
             )
 
     def _open_settings(self) -> None:
-        SettingsDialog(self, self._after_settings_saved)
+        SettingsDialog(self, self._after_settings_saved, self._reload_silenced_warnings)
+
+    def _reload_silenced_warnings(self) -> None:
+        """The warning checklist saved its choice: use it from the next warning on (no restart needed)."""
+        try:
+            self._silenced_warning_types = set(config_manager.get_gui_silenced_warning_types())
+        except Exception:  # an unreadable config.json keeps the choice made at start
+            return
+        self._update_tray_icon()  # the red dot follows the same choice
+        self.set_status("Warning notifications saved.")
 
     def _open_doctor(self) -> None:
         DoctorDialog(self, self._refresh_doctor_attention)
@@ -2634,10 +2676,6 @@ class MainWindow(tk.Tk):
 
     def _after_settings_saved(self, message: str) -> None:
         self._refresh_doctor_attention()  # saving the Settings creates config.json
-        try:  # the choice of warnings that notify applies at once
-            self._silenced_warning_types = set(config_manager.get_gui_silenced_warning_types())
-        except Exception:
-            pass
         self.set_status(message)
         self.mappings_tab.refresh()  # the default recheck shown in the editor may have changed
         self._update_daemon_view()  # shows the Restart button right away when a running daemon is affected
@@ -2754,7 +2792,11 @@ class MainWindow(tk.Tk):
         if not self._tray_active():
             return
         model = self.status_feed.model
-        unread = model.unread("warnings")
+        # The red dot and the hover text follow the same choice as the notifications: a silenced warning type does not
+        # light the tray icon up (the Warnings tab and its title still count every unread warning).
+        unread = warning_types.count_notifying(
+            (row.kind for row in model.unread_rows("warnings")), self._silenced_warning_types
+        )
         unmapped = len(self._unmapped_rows or [])
         state = gui_tray.icon_state(self._snapshot.running, self._snapshot.paused)
         attention = gui_tray.needs_attention(unread, unmapped, self._failed_unseen)

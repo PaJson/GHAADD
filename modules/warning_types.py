@@ -46,6 +46,12 @@ def wants_notice(kind: object, silenced: Iterable[str]) -> bool:
     return type_of(kind) not in {str(code).strip().upper() for code in silenced}
 
 
+def count_notifying(kinds: Iterable[object], silenced: Iterable[str]) -> int:
+    """How many of these Warnings-tab rows (given by their Type text) are of a type that notifies."""
+    muted = {str(code).strip().upper() for code in silenced}
+    return sum(1 for kind in kinds if type_of(kind) not in muted)
+
+
 def describe(code: str) -> str:
     for known, meaning in WARNING_TYPES:
         if known == code:

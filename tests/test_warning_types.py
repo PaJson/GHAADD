@@ -29,6 +29,14 @@ class TypeTests(unittest.TestCase):
         self.assertTrue(warning_types.wants_notice("Partial move", silenced))
         self.assertFalse(warning_types.wants_notice("Partial move", ["partial_move"]))  # case does not matter
 
+    def test_the_tray_dot_counts_only_warnings_that_notify(self) -> None:
+        kinds = ["API", "API", "SANITY_CHECK", "Partial move", "LIMIT"]
+        self.assertEqual(warning_types.count_notifying(kinds, ["API", "LIMIT"]), 2)
+        self.assertEqual(warning_types.count_notifying(kinds, []), 5)
+        self.assertEqual(warning_types.count_notifying(kinds, ["API", "SANITY_CHECK", "PARTIAL_MOVE", "LIMIT"]), 0)
+        self.assertEqual(warning_types.count_notifying([], ["API"]), 0)
+        self.assertEqual(warning_types.count_notifying(["api"], ["API"]), 0)  # case does not matter
+
     def test_a_type_nobody_listed_notifies(self) -> None:
         self.assertTrue(warning_types.wants_notice("SOMETHING_NEW", warning_types.DEFAULT_SILENCED))
 

@@ -118,6 +118,29 @@ class ModelTests(unittest.TestCase):
         model.refresh()
         self.assertEqual(model.title("warnings"), "Warnings (1)")
 
+    def test_the_unread_rows_are_the_ones_after_the_read_mark(self) -> None:
+        model = self.model()
+        model.refresh()
+        self.events.add("WARNING", "API", message="a")
+        self.events.add("WARNING", "SANITY_CHECK", message="b")
+        self.events.add("PARTIAL_MOVE", message="c")
+        model.refresh()
+        self.assertEqual([row.message for row in model.unread_rows("warnings")], ["c", "b", "a"])  # newest first
+        self.assertEqual(model.unread("warnings"), len(model.unread_rows("warnings")))
+        model.mark_read("warnings")
+        self.assertEqual(model.unread_rows("warnings"), [])
+        self.events.add("WARNING", "MAILBOX", message="d")
+        model.refresh()
+        self.assertEqual([row.kind for row in model.unread_rows("warnings")], ["MAILBOX"])
+
+    def test_a_tab_without_a_counter_has_no_unread_rows(self) -> None:
+        model = self.model()
+        model.refresh()
+        self.events.add("WARNING", "LIMIT", message="x")
+        model.refresh()
+        self.assertEqual(model.unread_rows("limits"), [])  # Folder limits has no unread counter
+        self.assertEqual(model.unread("limits"), 0)
+
     def test_read_marks_survive_a_restart(self) -> None:
         model = self.model()
         model.refresh()

@@ -248,11 +248,15 @@ class StatusTabsModel:
     def seen_id(self, key: str) -> int:
         return self._seen.get(key, 0)
 
-    def unread(self, key: str) -> int:
+    def unread_rows(self, key: str) -> list[StatusRow]:
+        """The rows of a tab that arrived after its read mark (newest first); empty for tabs without a counter."""
         if not self._defs[key].counter:
-            return 0
+            return []
         seen = self.seen_id(key)
-        return sum(1 for row in self._states[key].rows if row.id > seen)
+        return [row for row in self._states[key].rows if row.id > seen]
+
+    def unread(self, key: str) -> int:
+        return len(self.unread_rows(key))
 
     def title(self, key: str) -> str:
         return format_title(self._defs[key].title, self.unread(key))
