@@ -34,8 +34,13 @@ FIELD_HELP = {
                     "one.\n"
                     "Compare with previous release: the previous successful release of this repository, whatever its "
                     "tag (the default).\n"
-                    "Compare same tag only: only a release with the same tag, for rolling tags such as \"nightly\".\n"
-                    "Off: never warn. Use this or \"same tag\" when each tag is a different product (platform).",
+                    "Compare same tag only: only a release with the same tag. Only useful for a repository that "
+                    "re-uses tags (a rolling \"nightly\" next to versioned releases, or one re-published tag per "
+                    "platform). If every release has a new tag, it never finds anything to compare with and so "
+                    "never warns.\n"
+                    "Off: never warn.\n"
+                    "Each repository is compared only with its own earlier releases, so several repositories using "
+                    "the same tag do not affect each other.",
     "last_seen": "When the last GitHub notification for this repository arrived (set by the daemon).",
     "last_finalized": "When a release was last moved to its destination (set by the daemon).",
     "last_filecount": "Number of files in the newest release (what the Sanity check compares). "
