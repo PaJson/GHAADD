@@ -102,8 +102,9 @@ def attach_tooltip(widget: tk.Misc, text: str) -> None:
     widget.bind("<ButtonPress>", lambda _event: tip.hide(), add="+")
 
 
-def center_dialog(dialog: tk.Toplevel, parent: tk.Misc) -> None:
-    """Put a dialog in the middle of its parent window (or of the screen when the parent is not visible)."""
+def center_dialog(dialog: tk.Toplevel, parent: tk.Misc, focus: Optional[tk.Widget] = None) -> None:
+    """Put a dialog in the middle of its parent window (or of the screen when the parent is not visible),
+    bring it to the front and give it the keyboard focus (on `focus` when given)."""
     dialog.update_idletasks()
     border_x = border_y = 0  # window frame around the content (title bar, borders); geometry() positions the frame
     if parent.winfo_viewable():
@@ -116,6 +117,10 @@ def center_dialog(dialog: tk.Toplevel, parent: tk.Misc) -> None:
         dialog.winfo_vrootx(), dialog.winfo_vrooty(), dialog.winfo_vrootwidth(), dialog.winfo_vrootheight(),
     )
     dialog.geometry(f"+{x - border_x}+{y - border_y}")
+    dialog.lift()
+    dialog.focus_force()
+    if focus is not None:
+        focus.focus_set()
 
 
 def format_status_title(title: str, count: int) -> str:
@@ -350,8 +355,7 @@ class AddRepositoryDialog(tk.Toplevel):
 
         self.bind("<Return>", lambda _event: self._add())
         self.bind("<Escape>", lambda _event: self.destroy())
-        name_entry.focus_set()
-        center_dialog(self, master)
+        center_dialog(self, master, focus=name_entry)
         self.grab_set()
 
     def _add(self) -> None:
@@ -1578,7 +1582,8 @@ class SettingsDialog(tk.Toplevel):
         processing = ttk.LabelFrame(body, text="Processing", padding=10)
         processing.grid(row=0, column=0, sticky="ew")
         processing.columnconfigure(1, weight=1)
-        row(processing, 0, "Default recheck (minutes)", ttk.Entry(processing, textvariable=self.vars["recheck"], width=28))
+        first_entry = ttk.Entry(processing, textvariable=self.vars["recheck"], width=28)
+        row(processing, 0, "Default recheck (minutes)", first_entry)
         row(processing, 1, "Max emails per poll (0 = all)", spin(processing, "max_emails", 0, 9999))
         row(processing, 2, "Destination check every N polls (0 = off)", spin(processing, "dest_check", 0, 999))
         row(processing, 3, "Default limit (new mappings, 0 = none)", spin(processing, "default_limit", 0, 9999))
@@ -1646,7 +1651,7 @@ class SettingsDialog(tk.Toplevel):
         ttk.Button(buttons, text="Save", command=self._save).grid(row=0, column=1)
 
         self.bind("<Escape>", lambda _event: self.destroy())
-        center_dialog(self, master)
+        center_dialog(self, master, focus=first_entry)
         self.grab_set()
 
     def _create_shortcuts(self) -> None:
@@ -1776,6 +1781,14 @@ class DoctorDialog(tk.Toplevel):
         self.bind("<Escape>", lambda _event: self.destroy())
         center_dialog(self, master)
         self._start()
+        self.after(200, self._focus_when_ready)
+
+    def _focus_when_ready(self) -> None:
+        """Keep the keyboard on the dialog (Escape closes it) while the checks run in their thread."""
+        try:
+            self.focus_set()
+        except tk.TclError:
+            pass
 
     def _start(self) -> None:
         self.summary.configure(text="Checking\u2026")
