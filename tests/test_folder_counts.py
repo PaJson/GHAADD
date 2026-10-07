@@ -31,11 +31,24 @@ class FormatLimitTests(unittest.TestCase):
         self.assertEqual(repo_overview.format_limit("abc", {"folder_count": 5, "counted_at": 1.0}), ("abc", False, ""))
 
     def test_rows_use_the_count_and_flag_the_ones_over_their_limit(self) -> None:
-        entries = [{"name": "o/a", "limit": 10}, {"name": "o/b", "limit": 10}]
+        entries = [{"repository": "o/a", "limit": 10}, {"repository": "o/b", "limit": 10}]
         counts = {"o/a": {"folder_count": 12, "counted_at": 1.0}, "o/b": {"folder_count": 3, "counted_at": 1.0}}
         rows = {r.repo: r for r in repo_overview.build_rows(entries, {}, 0.0, lambda entry: 5, folder_counts=counts)}
         self.assertEqual((rows["o/a"].limit, rows["o/a"].limit_warning), ("12 / 10", True))
         self.assertEqual((rows["o/b"].limit, rows["o/b"].limit_warning), ("3 / 10", False))
+
+
+class TotalFilesTests(unittest.TestCase):
+    def test_the_total_is_shown_as_a_plain_number(self) -> None:
+        summary = {"latest_tag": "v1", "latest_downloaded": 10, "latest_skipped": 6, "latest_total": 16}
+        self.assertEqual(repo_overview.format_total_files(summary), "16")
+        summary.update(latest_downloaded=0, latest_skipped=16)
+        self.assertEqual(repo_overview.format_total_files(summary), "16")
+
+    def test_nothing_known_shows_a_dash(self) -> None:
+        self.assertEqual(repo_overview.format_total_files(None), "-")
+        self.assertEqual(repo_overview.format_total_files({"latest_tag": None}), "-")
+        self.assertEqual(repo_overview.format_total_files({"latest_tag": "v1", "latest_total": 0}), "-")
 
 
 class FolderCountTests(unittest.TestCase):
@@ -68,7 +81,7 @@ class FolderCountTests(unittest.TestCase):
     def write_mapping(self, limit: int) -> None:
         with open(self.mapping_path, "w", encoding="utf-8") as handle:
             json.dump({"repositories": [
-                {"name": self.REPO, "destination": self.destination, "foldername": "App", "limit": limit}
+                {"repository": self.REPO, "destination": self.destination, "folder": "App", "limit": limit}
             ]}, handle)
 
     def counts(self) -> dict:

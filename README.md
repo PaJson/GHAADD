@@ -22,7 +22,18 @@ Automated Python utility that reads GitHub release notification emails from Gmai
 - Supports config-based download path routing by repo and release type.
 - Retries marking processed notification emails as read/deleted once on transient IMAP failures before logging a warning; the job is still queued even if the email cleanup ultimately fails.
 - Prevents accidentally running two mutating instances at once (default run, --once, --poll, --drain-queue) using a singleton file lock; read-only commands (--doctor, --queue-status, --mapping-validate, etc.) are unaffected and can run anytime.
+- Has a Tkinter GUI (`python main_gui.py`) to monitor the daemon, edit repository mappings and read warnings (see Graphical interface below).
 - Supports a tightly-scoped --single mode (at most one notification/queue item per run) and an orthogonal --dry-run modifier (no writes/deletes, full preview) for safe, controlled testing against real data.
+
+## Graphical interface (GUI)
+
+Start it with `python main_gui.py` (add `--theme clam` for coloured table headings). It needs Tkinter, which ships with Python on Windows and macOS (on Linux install your distribution's `python3-tk`). The GUI never owns the daemon: it reads `state.db`, `mapping.json` and `config.json` directly, can start a detached daemon, and only asks a running daemon to stop, pause, poll or check folders; closing the GUI leaves the daemon running.
+
+- **Control bar:** the daemon's status and countdown, Start, Stop (graceful), Pause/Resume, Poll now, Check folders, the Terminal log switch, a "Restart" button that appears when the daemon runs with older settings than config.json, and Settings (the global `config.json` values).
+- **Mappings:** one row per repository (most recently worked-on first) with a status icon, name (folder), repository, destination, latest tag ((R) Release / (P) Pre-release), last check, re-check step, next check, file count and folder limit ("12 / 15", with a warning sign and amber text when over). Hover a column heading for an explanation. Select a row to edit its settings below the table (name (folder), subfolder, destination, re-check intervals, limit, release types, sanity check, skiplist, active); double-click a row to open its folder. Add and remove repositories, filter the list, open the GitHub page with the globe button.
+- **Terminal log:** follows the newest terminal `.log` file (it is empty while the Terminal log switch is off). Filter, copy, open the log or its folder.
+- **Warnings, Completed, Folder limits, Unmapped:** structured events from `state.db` (never parsed from log text), with unread counters in the tab titles, a filter on Warnings and Completed, a detail pane with the full text, and Clear buttons that delete what a tab lists. Double-click a row to jump to its repository.
+- **Where things are kept:** window size and the "read" marks of the tabs live in `config.json` under `gui` (delete that section to reset; the daemon ignores it). All hover texts are in `modules/gui_tooltips.py`.
 
 ## Requirements
 
@@ -81,31 +92,34 @@ If mapping.json contains invalid JSON, the app keeps the original file by copyin
 
 ### Repository mapping file (mapping.json)
 
-The app auto-creates and updates repository entries in mapping.json as notifications are ingested.
+The app auto-creates and updates repository entries in mapping.json as notifications are ingested. `mapping.example.json` shows the format.
 
-Each repository entry supports these fields:
+Each repository entry supports these fields (in this order):
 
-- name: repository identity in owner/repo form
-- destination: optional destination base path for custom routing (can be any path on disk, not limited to paths.default_download_dir - see Deletion Safety below for what this does and does not do)
-- foldername: optional display and repository folder name
+- repository: repository identity in owner/repo form
+- folder: optional display and repository folder name (default: `repo (owner)`)
 - subfolder: optional nested folder path to append under the repository folder
-- limit: optional integer warning threshold for the number of folders at the destination (`0` disables checks)
-- limit_release_type_folders: optional array of folder names to include in destination limit counting for this repository (for example, `['Release', 'Pre-release']`)
-- recheck_intervals_minutes: optional list of positive integers to override queue re-check cadence for this repository
+- destination: optional destination base path for custom routing (can be any path on disk, not limited to paths.default_download_dir - see Deletion Safety below for what this does and does not do)
 - skiplist: optional array of release types to skip for this repository (for example, `['Pre-release']`); matching notifications are logged as a SKIPPED WARNING lifecycle event (see --lifecycle-log), the email is marked as read and deleted, and no job is queued. Leave empty (`[]`) to download both `Release` and `Pre-release`
-- last_notification_seen: timestamp when the last GitHub release notification was seen
+- recheck_intervals: optional list of positive integers (minutes) to override queue re-check cadence for this repository
+- limit: optional integer warning threshold for the number of folders at the destination (`0` disables checks)
+- limit_folders: optional array of release-type folder names to include in destination limit counting for this repository (for example, `['Release', 'Pre-release']`)
+- sanity_check: how the "file count changed" warning (SANITY_CHECK) picks the release to compare a finished release with: `any_tag` (default; the previous successful release of the repository whatever its tag), `same_tag` (only a previous release with the same tag, for rolling tags such as `nightly`), or `off`. Use `same_tag` or `off` for repositories where every tag is a different product (for example one tag per platform). A missing field means `any_tag`
+- last_notification: timestamp when the last GitHub release notification was seen
 - last_finalized: timestamp when a release was last moved to its complete destination (empty when none has been finalized)
-- paused: when `true`, matching notification emails move to Trash but remain unread, no new jobs are queued, and jobs already queued continue normally
+- active: `true` (the default) downloads new releases; when `false`, matching notification emails move to Trash but remain unread, no new jobs are queued, and jobs already queued continue normally
+
+Files written by version 1.x used other names (`name`, `foldername`, `recheck_intervals_minutes`, `limit_release_type_folders`, `last_notification_seen`, and `paused`, where `paused: true` is now `active: false`). They are upgraded automatically: the first GUI start, daemon start or write rewrites mapping.json with the new names and keeps a copy of the old file as `mapping.json.v1.bak`. Until an older daemon (started before the upgrade) has been restarted, the upgrade waits and writes are refused with a message saying so. `state.db` is not affected: it refers to repositories by their owner/repo text only.
 
 When a new repository is seen, the app fills in a default skeleton entry with:
 
 - the repository name
-- a generated foldername (for example, repo (owner))
-- empty destination/subfolder values
-- a default `limit` value of `0` (disabled until you configure a threshold)
+- a generated folder name (for example, repo (owner))
+- the default subfolder `@GitHub` and an empty destination
+- a default `limit` of `10`
 - an empty `skiplist` (`[]`, nothing is skipped)
-- `paused: false`
-- a last_notification_seen timestamp
+- `active: true`
+- a last_notification timestamp
 - an empty last_finalized value
 
 If you want to customize the display name or routing, you can edit these fields manually in mapping.json.
@@ -114,21 +128,22 @@ Example:
 
 ```json
 {
-	"name": "example-org/example-repo",
-	"destination": "X:\\Path\\To\\Destination",
-	"foldername": "My name for this repository",
+	"repository": "example-org/example-repo",
+	"folder": "My name for this repository",
 	"subfolder": "@GitHub/Nightly",
-	"limit": 25,
-	"limit_release_type_folders": ["Release", "Pre-release"],
-	"recheck_intervals_minutes": [3, 10, 30, 120],
+	"destination": "X:\\Path\\To\\Destination",
 	"skiplist": [],
-	"last_notification_seen": "2026-08-08_14-59",
+	"recheck_intervals": [3, 10, 30, 120],
+	"limit": 25,
+	"limit_folders": ["Release", "Pre-release"],
+	"sanity_check": "any_tag",
+	"last_notification": "2026-08-08_14-59",
 	"last_finalized": "2026-08-16_15-20",
-	"paused": false
+	"active": true
 }
 ```
 
-In this example, the repository is identified by its GitHub name in the name field, the repository folder becomes "My name for this repository", and the files are routed under the destination path plus the subfolder.
+In this example, the repository is identified by its GitHub name in the repository field, the repository folder becomes "My name for this repository", and the files are routed under the destination path plus the subfolder.
 
 The resulting folder path for this example would be:
 
@@ -136,46 +151,24 @@ The resulting folder path for this example would be:
 X:\Path\To\Destination\My name for this repository\@GitHub\Nightly
 ```
 
-In other words, the app uses the combination of <destination> + <foldername> + <subfolder> as the effective base folder for that repository.
-
-Folder behavior:
-
-- `subfolder` supports nested folders using either `/` or `\` as separators.
-- The app sanitizes each path segment separately, then joins them using the current OS path separator.
-- This means `@GitHub/Nightly` works on Windows, Linux, and macOS.
-- Empty segments and unsafe relative segments like `.` and `..` are ignored.
-
-Destination behavior:
-
-- If `destination` is empty, the app falls back to the default `GHAADD/Complete` location.
-- If `destination` is set but the destination root folder does not exist, the app prints a warning and falls back to `GHAADD/Complete`.
-- When destination exists, `foldername` and `subfolder` folders are created automatically when needed.
-
-If `limit` is `0`, no folder-count warning is applied for that repository.
-If `limit` is greater than `0`, the app warns when the repository destination appears to contain too many folders. The warning also reports the total on-disk size of that destination folder (computed only when the warning actually fires, not on every move), to help decide whether to raise or lower the limit.
-
-The periodic destination check (every `destination_check_every_n_polls` polls) also checks the folder limits: a repository that is over its limit without a warning on record gets one, so a limit you set or lower, or folders you add by hand, are noticed without waiting for the next release.
-
-The Limit column of the GUI's Mappings table shows the latest count next to the limit ("12 / 15"; amber with a warning sign when over). The daemon stores the counts in `state.db` (table `folder_counts`) whenever it counts a repository's folders: after each move, in the periodic check for every repository that has a limit, and on every poll for repositories with a warning. A count can therefore be up to `destination_check_every_n_polls` polls old; hover the cell to see when it was counted.
-
-Limit warnings clear themselves: on every poll the daemon re-counts the folders of each repository that has stored limit warnings, and deletes those warnings once the count is back at or under the limit (or the limit is set to 0). A repository whose folder cannot be found keeps its warnings.
+In other words, the app uses the combination of <destination> + <folder> + <subfolder> as the effective base folder for that repository.
 
 Limit-count folder scope behavior:
 
-- If `limit_release_type_folders` is configured with one or more values, only those top-level folders are counted for the repository limit warning.
-- If `limit_release_type_folders` is missing or empty, the app auto-detects managed release-type folders using defaults (`Release`, `Pre-release`) plus known release_type values from the queue state.
+- If `limit_folders` is configured with one or more values, only those top-level folders are counted for the repository limit warning.
+- If `limit_folders` is missing or empty, the app auto-detects managed release-type folders using defaults (`Release`, `Pre-release`) plus known release_type values from the queue state.
 - Folder names are matched case-insensitively after normal path-name sanitization.
 
-If `recheck_intervals_minutes` is set for a repository, those values are used for that repository's re-check schedule. If the list is missing or invalid, the global `processing.recheck_intervals_minutes` values are used.
+If `recheck_intervals` is set for a repository, those values are used for that repository's re-check schedule. If the list is missing or invalid, the global `processing.recheck_intervals_minutes` values (in config.json) are used.
 
 Skiplist behavior:
 
 - `skiplist` lets you skip one or both release types (`Release`, `Pre-release`) per repository instead of downloading everything.
-- When an incoming notification's release type matches an entry in `skiplist` (case-insensitive), the app does not queue a job for it, records a SKIPPED WARNING lifecycle event, and still marks the email as read and deletes it (unlike `paused`, which leaves the email unread).
+- When an incoming notification's release type matches an entry in `skiplist` (case-insensitive), the app does not queue a job for it, records a SKIPPED WARNING lifecycle event, and still marks the email as read and deletes it (unlike `active: false`, which leaves the email unread).
 - Leave `skiplist` empty (`[]`) to keep downloading both release types (the default).
-- Adding both `"Release"` and `"Pre-release"` to `skiplist` is valid and effectively pauses new downloads for that repository while still cleaning up matching emails.
+- Adding both `"Release"` and `"Pre-release"` to `skiplist` is valid and effectively switches off new downloads for that repository while still cleaning up matching emails.
 
-Set `paused` to `true` to temporarily stop new jobs for a repository. Matching notification emails move to Trash while remaining unread, so they are visible there but excluded from later polls of the configured mailbox. Jobs already in the queue continue to completion.
+Set `active` to `false` (the GUI's Active checkbox) to temporarily stop new jobs for a repository. Matching notification emails move to Trash while remaining unread, so they are visible there but excluded from later polls of the configured mailbox. Jobs already in the queue continue to completion. The GUI shows such a repository with the status "Inactive".
 
 The doctor check validates the mapping schema and warns when destination values are empty or when path styles do not match the current OS.
 
@@ -203,17 +196,17 @@ CLI options:
 - --drain-queue: Skip email ingestion entirely and repeatedly process only due queue jobs (sleeping until the next pending job's scheduled re-check time between cycles) until the pending queue is fully empty, then exit. Takes precedence over --once and --poll when provided.
 - --run-pending JOB [JOB ...]: Immediately run one or more specific pending jobs by ID, without changing their retry schedule (unlike automatic rechecks, this completes `release_not_found`/SKIP results right away). Example: python main.py --run-pending 23 27.
 - --check-folders: Make the running daemon check that every mapped destination exists, count the folders of each repository with a limit and raise missing limit warnings, right away (the GUI's "Check folders" button). The daemon also does this at start and every `destination_check_every_n_polls` polls (0 turns the automatic checks off; the button and flag still work). It runs even while polling is paused.
-- --pause / --resume / --poll-now: Control a running polling daemon from a second terminal (or the future GUI). --pause freezes the countdown to the next poll and no poll runs until --resume (a poll cycle already in progress stops at the next safe boundary: the running job or email finishes, the rest wait, and polling restarts immediately on resume); --poll-now makes the daemon poll right away and then restart its countdown (a request made while paused fires on resume). They write a single-row `daemon_control` table in `state.db`; a daemon that is not running reports "nothing to control". Pause is always cleared when a daemon starts.
+- --pause / --resume / --poll-now: Control a running polling daemon from a second terminal (or the GUI). --pause freezes the countdown to the next poll and no poll runs until --resume (a poll cycle already in progress stops at the next safe boundary: the running job or email finishes, the rest wait, and polling restarts immediately on resume); --poll-now makes the daemon poll right away and then restart its countdown (a request made while paused fires on resume). They write a single-row `daemon_control` table in `state.db`; a daemon that is not running reports "nothing to control". Pause is always cleared when a daemon starts.
 - --stop: Stop the running polling daemon gracefully from a second terminal (or the GUI's Stop button). The job in progress finishes first, then the daemon exits and releases its lock; a stop request left behind by an earlier run never stops a new daemon. Same control channel and "nothing to control" behaviour as --pause. Only the polling mode (--poll / polling.enabled) listens for it; use Ctrl+C for the other run modes.
 - --log-on / --log-off: Switch terminal logging on or off in a running polling daemon without restarting it (same control channel and "nothing to control" behaviour as --pause). --log-on starts a new .log file from that moment (it does not contain earlier output), --log-off closes the file; console output is unaffected. Each --log-on gets its own file, and retention (terminal_log.keep_files) is applied when it starts. The switch overrides terminal_log.enabled for the running session only and is cleared when a daemon starts, so the config value decides again after a restart.
 - --purge-state: Delete local state.db and exit. Add --dry-run to preview whether it would delete anything without doing so.
 - --smoke-test: Run internal smoke tests and exit.
 - --doctor: Run environment and cross-platform diagnostics.
-- --perf-report: Print a read-only performance baseline: data sizes and growth (state.db, tables, logs) and how long the routine queries and probes take on your data (config/mapping loads, the queue summary, the GUI's status and table queries, the live-log read). Safe to run while the daemon works; add --json for machine-readable output. Run it now and again after weeks of use to see what grows.
+- --perf-report: Print a read-only performance baseline: data sizes and growth (state.db, tables, logs) and how long the routine queries and probes take on your data (config/mapping loads, the queue summary, the GUI's status and table queries, the terminal-log read). Safe to run while the daemon works; add --json for machine-readable output. Run it now and again after weeks of use to see what grows.
 	- Add --json to output the diagnostics report as JSON.
 - --mapping-validate: Validate mapping.json schema and print errors/warnings.
 	- Add --json to output the validation result as JSON.
-	- Includes an advisory warning when two or more repositories resolve to the same destination+foldername+subfolder path (often left over after a repository rename).
+	- Includes an advisory warning when two or more repositories resolve to the same destination+folder+subfolder path (often left over after a repository rename).
 - --move-complete-to-destination: Retry moving repository folders from `Complete` to configured mapping destinations.
 	- Useful when destination storage was unavailable earlier (for example NAS/network issues).
 	- Add --json to output a machine-readable summary.
@@ -396,7 +389,7 @@ GHAADD never recursively deletes a directory tree anywhere, whether under paths.
 - Now-empty leftover subfolders under GHAADD/Processing after a completed release folder is moved out (empty-directory removal only; stops immediately at a non-empty folder, and never goes above the Processing root).
 - The app's own state.db and ghaadd.daemon.status.json files (fixed paths beside the app files, unrelated to paths.default_download_dir/mapping destinations), only removed via the explicit `--purge-state` command or daemon shutdown cleanup.
 
-A mapping entry's `destination` (and `foldername`/`subfolder`) is only ever used as a **move target**: finished release folders are moved there, never deleted from there. If a folder with the same name already exists at the target, GHAADD renames the incoming folder with a `(2)`, `(3)`, ... suffix instead of overwriting or deleting the existing one. Nothing pre-existing at a mapped destination is ever touched.
+A mapping entry's `destination` (and `folder`/`subfolder`) is only ever used as a **move target**: finished release folders are moved there, never deleted from there. If a folder with the same name already exists at the target, GHAADD renames the incoming folder with a `(2)`, `(3)`, ... suffix instead of overwriting or deleting the existing one. Nothing pre-existing at a mapped destination is ever touched.
 
 ## Source Archive Naming
 

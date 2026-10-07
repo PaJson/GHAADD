@@ -36,8 +36,9 @@ from modules.mailbox_listener import (
 )
 from modules.mapping_manager import (
     get_repository_recheck_intervals_minutes,
+    get_repository_sanity_check_mode,
     is_release_type_skipped,
-    is_repository_paused,
+    is_repository_active,
     mark_repository_finalized,
     upsert_repository_mapping,
 )
@@ -371,13 +372,21 @@ def _warn_if_file_count_changed_from_previous_success(
     current_total_items: int,
     working_dir: Optional[str] = None,
 ) -> None:
-    """Print a warning when the final successful file count differs from the previous release."""
+    """Print a warning when the final successful file count differs from the previous release.
+
+    Which release counts as "previous" is a per-repository setting (mapping.json `sanity_check`):
+    any_tag (default), same_tag, or off.
+    """
+    mode = get_repository_sanity_check_mode(repo)
+    if mode == "off":
+        return
     previous_job = get_previous_successful_completed_job(
         connection,
         repo=repo,
         tag=tag,
         release_type=release_type,
         exclude_job_id=job_id,
+        match_tag=(mode == "same_tag"),
     )
     if previous_job is None:
         return
@@ -460,7 +469,7 @@ def _empty_ingest_cycle_stats() -> IngestCycleStats:
         "notifications_collapsed_duplicates": 0,
         "notifications_queued": 0,
         "notifications_skipped_malformed": 0,
-        "notifications_skipped_paused": 0,
+        "notifications_skipped_inactive": 0,
         "notifications_skipped_skiplist": 0,
         "notifications_errors": 0,
     }
@@ -542,10 +551,10 @@ def ingest_notifications_once(
         print()
 
         emails_to_delete = []
-        paused_emails_to_trash = []
+        inactive_emails_to_trash = []
         queued_count = 0
         malformed_count = 0
-        paused_count = 0
+        inactive_count = 0
         skiplist_count = 0
         error_count = 0
         queued_item_info: Optional[QueuedItemInfo] = None
@@ -587,12 +596,12 @@ def ingest_notifications_once(
                     f"{repo} (notification tag={tag}, type={release_type_label})."
                 )
 
-            if is_repository_paused(repo):
+            if not is_repository_active(repo):
                 print(
-                    f"⏸️ Repository is paused; moved unread notification to Trash and skipped queueing {repo} {tag}."
+                    f"⊘ Repository is inactive; moved unread notification to Trash and skipped queueing {repo} {tag}."
                 )
-                paused_emails_to_trash.extend(email_ids)
-                paused_count += 1
+                inactive_emails_to_trash.extend(email_ids)
+                inactive_count += 1
                 continue
 
             # The email subject only reflects the release's state when GitHub sent the
@@ -739,13 +748,13 @@ def ingest_notifications_once(
                 print(f"⚠️ {warning_message}")
                 log_warning("MAILBOX", warning_message)
 
-        if paused_emails_to_trash:
-            print(f"🗑️ Moving {len(paused_emails_to_trash)} paused unread email(s) to Trash...")
-            if move_unread_to_trash(paused_emails_to_trash):
-                print("✓ Paused emails remain unread and were moved to Trash.")
+        if inactive_emails_to_trash:
+            print(f"🗑️ Moving {len(inactive_emails_to_trash)} unread email(s) of inactive repositories to Trash...")
+            if move_unread_to_trash(inactive_emails_to_trash):
+                print("✓ Emails of inactive repositories remain unread and were moved to Trash.")
             else:
                 warning_message = (
-                    f"Could not move {len(paused_emails_to_trash)} paused unread email(s) to Trash after retrying; "
+                    f"Could not move {len(inactive_emails_to_trash)} unread email(s) of inactive repositories to Trash after retrying; "
                     "they remain in the mailbox and will be checked again on the next poll."
                 )
                 print(f"⚠️ {warning_message}")
@@ -757,7 +766,7 @@ def ingest_notifications_once(
             "notifications_collapsed_duplicates": len(collapsed_notifications),
             "notifications_queued": queued_count,
             "notifications_skipped_malformed": malformed_count,
-            "notifications_skipped_paused": paused_count,
+            "notifications_skipped_inactive": inactive_count,
             "notifications_skipped_skiplist": skiplist_count,
             "notifications_errors": error_count,
         }, queued_item_info

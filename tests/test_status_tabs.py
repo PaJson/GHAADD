@@ -238,17 +238,17 @@ class HelperTests(unittest.TestCase):
 
     def test_unmapped_rows_lists_entries_without_destination_newest_first(self) -> None:
         entries = [
-            {"name": "a/mapped", "destination": "K:\\Apps", "last_notification_seen": "2026-10-06_10-00"},
-            {"name": "b/old", "destination": "", "foldername": "Old", "last_notification_seen": "2026-09-01_08-30"},
-            {"name": "c/new", "destination": "  ", "last_notification_seen": "2026-10-06_04-47"},
-            {"name": "d/nodate", "last_notification_seen": ""},
+            {"repository": "a/mapped", "destination": "K:\\Apps", "last_notification": "2026-10-06_10-00"},
+            {"repository": "b/old", "destination": "", "folder": "Old", "last_notification": "2026-09-01_08-30"},
+            {"repository": "c/new", "destination": "  ", "last_notification": "2026-10-06_04-47"},
+            {"repository": "d/nodate", "last_notification": ""},
             {"destination": ""},  # no name: ignored
         ]
         rows = unmapped_rows(entries)
 
         self.assertEqual([r.repo for r in rows], ["c/new", "b/old", "d/nodate"])
         self.assertEqual(rows[0].first_seen, "2026-10-06 04:47")
-        self.assertEqual(rows[1].foldername, "Old")
+        self.assertEqual(rows[1].folder, "Old")
 
 
 class DatabaseQueryTests(unittest.TestCase):
@@ -337,8 +337,8 @@ class FeedTests(unittest.TestCase):
             self.addCleanup(patcher.stop)
         with open(self.mapping_path, "w", encoding="utf-8") as handle:
             json.dump({"repositories": [
-                {"name": "o/app", "destination": "K:\\Apps"},
-                {"name": "o/new", "destination": ""},
+                {"repository": "o/app", "destination": "K:\\Apps"},
+                {"repository": "o/new", "destination": ""},
             ]}, handle)
         self.daemon = db_manager.open_database()  # stays open, like the daemon's connection
         self.addCleanup(self.daemon.close)
@@ -410,7 +410,7 @@ class FeedTests(unittest.TestCase):
         feed = gui_data.StatusFeed()
         self.assertEqual([row.repo for row in feed.unmapped()], ["o/new"])
         with open(self.mapping_path, "w", encoding="utf-8") as handle:
-            json.dump({"repositories": [{"name": "o/new", "destination": "K:\\Apps"}]}, handle)
+            json.dump({"repositories": [{"repository": "o/new", "destination": "K:\\Apps"}]}, handle)
         os.utime(self.mapping_path, ns=(1, 2_000_000_000_000_000_000))  # make the change visible to the stat cache
         self.assertEqual(feed.unmapped(), [])
 

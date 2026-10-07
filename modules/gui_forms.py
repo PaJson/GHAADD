@@ -95,7 +95,7 @@ def _safe_part(text: str) -> str:
     return re.sub(r'[\\/<>"|?*]', "_", text.replace(":", "-")).strip()
 
 
-def resolve_open_folder(repo: str, destination: str, foldername: str, subfolder: str) -> Optional[str]:
+def resolve_open_folder(repo: str, destination: str, folder: str, subfolder: str) -> Optional[str]:
     """The folder the downloader fills for this repository, or its nearest existing parent.
 
     Built like asset_downloader: <destination>/<folder name>[/<subfolder>], the folder name defaulting to
@@ -106,7 +106,7 @@ def resolve_open_folder(repo: str, destination: str, foldername: str, subfolder:
     if not destination:
         return None
     path = os.path.normpath(os.path.expanduser(os.path.expandvars(destination)))
-    name = _safe_part(foldername.strip() or mapping_manager.build_default_foldername(repo))
+    name = _safe_part(folder.strip() or mapping_manager.build_default_folder(repo))
     parts = [name or "unknown"]
     for part in re.split(r"[\\/]+", subfolder.strip()):
         part = _safe_part(part)
@@ -119,6 +119,31 @@ def resolve_open_folder(repo: str, destination: str, foldername: str, subfolder:
         if os.path.isdir(candidate):
             return candidate
     return None
+
+
+# The sanity-check choices of the editor: (mapping.json value, text shown in the drop-down).
+SANITY_CHOICES = (
+    ("any_tag", "Compare with previous release"),
+    ("same_tag", "Compare same tag only"),
+    ("off", "Off"),
+)
+
+
+def sanity_label(value: Any) -> str:
+    """Drop-down text for a stored sanity_check value (missing or unknown = the default, any_tag)."""
+    stored = str(value or "").strip().lower()
+    for key, label in SANITY_CHOICES:
+        if key == stored:
+            return label
+    return SANITY_CHOICES[0][1]
+
+
+def sanity_value(label: Any) -> str:
+    """The sanity_check value for a drop-down text (anything unknown = the default, any_tag)."""
+    for key, text in SANITY_CHOICES:
+        if text == str(label or "").strip():
+            return key
+    return SANITY_CHOICES[0][0]
 
 
 _REPO_NAME = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
@@ -140,7 +165,7 @@ def build_repo_changes(form: Mapping[str, Any]) -> FormResult:
     """Validate the Mappings editor and return the fields for update_repository_fields.
 
     Only editable fields are produced; `name` and the daemon-owned
-    last_notification_seen / last_finalized are never included. Duplicate
+    last_notification / last_finalized are never included. Duplicate
     detection and other cross-entry rules are left to mapping_manager, which
     raises MappingValidationError on save.
     """
@@ -158,19 +183,20 @@ def build_repo_changes(form: Mapping[str, Any]) -> FormResult:
 
     result.changes = {
         "destination": destination,
-        "foldername": str(form.get("foldername", "")).strip(),
+        "folder": str(form.get("folder", "")).strip(),
         "subfolder": str(form.get("subfolder", "")).strip(),
         "limit": limit,
-        "limit_release_type_folders": parse_str_list(str(form.get("release_folders", ""))),
-        "recheck_intervals_minutes": recheck,
+        "limit_folders": parse_str_list(str(form.get("release_folders", ""))),
+        "recheck_intervals": recheck,
         "skiplist": parse_str_list(str(form.get("skiplist", ""))),
-        "paused": bool(form.get("paused", False)),
+        "sanity_check": sanity_value(form.get("sanity_check")),
+        "active": bool(form.get("active", True)),
     }
     return result
 
 
 def build_new_repo(name: str, destination: str) -> FormResult:
-    """Validate the Add-repository dialog; `changes` holds {"name", "destination"}."""
+    """Validate the Add-repository dialog; `changes` holds {"repository", "destination"}."""
     result = FormResult()
     repo = str(name or "").strip()
     parts = repo.split("/")
@@ -183,7 +209,7 @@ def build_new_repo(name: str, destination: str) -> FormResult:
         warning = _directory_warning("Destination", dest)
         if warning:
             result.warnings.append(warning)
-    result.changes = {"name": repo, "destination": dest}
+    result.changes = {"repository": repo, "destination": dest}
     return result
 
 

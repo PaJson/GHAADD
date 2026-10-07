@@ -2,3 +2,6 @@
 
 APP_NAME = "GHAADD"
 __version__ = "2.0-RC7"
+# Version of the mapping.json key names (2 = repository/folder/.../active). A daemon publishes the format it
+# understands in its status file, so a newer GUI/CLI does not upgrade mapping.json underneath an older daemon.
+MAPPING_FORMAT = 2

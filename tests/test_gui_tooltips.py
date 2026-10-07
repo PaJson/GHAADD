@@ -15,8 +15,9 @@ except ImportError:  # no Tk on this machine
 @unittest.skipIf(main_gui is None, "tkinter is not available")
 class TooltipCoverageTests(unittest.TestCase):
     def test_every_editor_field_and_button_has_help(self) -> None:
-        keys = {key for column in main_gui.MappingsTab.FORM_COLUMNS for key, _label, _kind in column}
-        keys |= {"paused", "open_folder", "github"}
+        layout = main_gui.MappingsTab.FORM_LAYOUT
+        keys = {cell[0] for column in layout for row in column for cell in row}
+        keys |= {"active", "open_folder", "github"}
         self.assertEqual(keys - set(gui_tooltips.FIELD_HELP), set())
 
     def test_every_table_column_has_help_except_the_status_legend_column(self) -> None:

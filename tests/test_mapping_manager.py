@@ -54,20 +54,20 @@ class MappingWriteTestCase(unittest.TestCase):
 class UpdateMappingTests(MappingWriteTestCase):
     def test_creates_file_sorted_with_collapsed_arrays(self) -> None:
         def _add(payload):
-            payload["repositories"].append({"name": "zed/zebra", "recheck_intervals_minutes": [5, 15]})
-            payload["repositories"].append({"name": "amy/apple"})
+            payload["repositories"].append({"repository": "zed/zebra", "recheck_intervals": [5, 15]})
+            payload["repositories"].append({"repository": "amy/apple"})
 
         mapping_manager.update_mapping(_add)
 
-        self.assertEqual([r["name"] for r in self.read_mapping()], ["amy/apple", "zed/zebra"])
+        self.assertEqual([r["repository"] for r in self.read_mapping()], ["amy/apple", "zed/zebra"])
         with open(self.mapping_path, encoding="utf-8") as handle:
-            self.assertIn('"recheck_intervals_minutes": [5, 15]', handle.read())
+            self.assertIn('"recheck_intervals": [5, 15]', handle.read())
 
     def test_returns_mutator_result(self) -> None:
         self.assertEqual(mapping_manager.update_mapping(lambda payload: "done"), "done")
 
     def test_no_change_does_not_rewrite_file(self) -> None:
-        self.write_mapping([{"name": "b/b"}, {"name": "a/a"}])  # deliberately unsorted
+        self.write_mapping([{"repository": "b/b"}, {"repository": "a/a"}])  # deliberately unsorted
         with open(self.mapping_path, "rb") as handle:
             before = handle.read()
 
@@ -77,22 +77,22 @@ class UpdateMappingTests(MappingWriteTestCase):
             self.assertEqual(handle.read(), before)
 
     def test_leaves_no_temp_files_behind(self) -> None:
-        mapping_manager.update_mapping(lambda payload: payload["repositories"].append({"name": "a/a"}))
+        mapping_manager.update_mapping(lambda payload: payload["repositories"].append({"repository": "a/a"}))
 
         leftovers = [n for n in os.listdir(self._temp_dir.name) if n.endswith(".tmp")]
         self.assertEqual(leftovers, [])
 
     def test_mutator_error_keeps_old_file_and_releases_lock(self) -> None:
-        self.write_mapping([{"name": "a/a"}])
+        self.write_mapping([{"repository": "a/a"}])
 
         def _fail(payload):
-            payload["repositories"].append({"name": "b/b"})
+            payload["repositories"].append({"repository": "b/b"})
             raise RuntimeError("boom")
 
         with self.assertRaises(RuntimeError):
             mapping_manager.update_mapping(_fail)
 
-        self.assertEqual([r["name"] for r in self.read_mapping()], ["a/a"])
+        self.assertEqual([r["repository"] for r in self.read_mapping()], ["a/a"])
         # Lock must be free again, otherwise this would time out.
         mapping_manager.update_mapping(lambda payload: None)
 
@@ -100,7 +100,7 @@ class UpdateMappingTests(MappingWriteTestCase):
         dry_run_mode.set_dry_run(True)
 
         result = mapping_manager.update_mapping(
-            lambda payload: payload["repositories"].append({"name": "a/a"}) or "ran"
+            lambda payload: payload["repositories"].append({"repository": "a/a"}) or "ran"
         )
 
         self.assertEqual(result, "ran")
@@ -114,7 +114,7 @@ class UpdateMappingTests(MappingWriteTestCase):
                     mapping_manager.update_mapping(lambda payload: None)
 
     def test_concurrent_processes_lose_no_updates(self) -> None:
-        self.write_mapping([{"name": "a/a", "counter": 0}])
+        self.write_mapping([{"repository": "a/a", "counter": 0}])
         workers, iterations = 4, 15
 
         context = multiprocessing.get_context("spawn")
@@ -137,9 +137,9 @@ class RepositoryWriterTests(MappingWriteTestCase):
 
         self.assertEqual((created, updated), (True, False))
         entry = self.read_mapping()[0]
-        self.assertEqual(entry["name"], "owner/repo")
-        self.assertEqual(entry["last_notification_seen"], "2026-01-01_00-00")
-        self.assertIs(entry["paused"], False)
+        self.assertEqual(entry["repository"], "owner/repo")
+        self.assertEqual(entry["last_notification"], "2026-01-01_00-00")
+        self.assertIs(entry["active"], True)
         self.warning_mock.assert_called_once()
 
     def test_upsert_existing_updates_stamp_only_when_changed(self) -> None:
@@ -151,7 +151,7 @@ class RepositoryWriterTests(MappingWriteTestCase):
         self.assertEqual(
             mapping_manager.upsert_repository_mapping("owner/repo", "2026-01-02_00-00"), (False, False)
         )
-        self.assertEqual(self.read_mapping()[0]["last_notification_seen"], "2026-01-02_00-00")
+        self.assertEqual(self.read_mapping()[0]["last_notification"], "2026-01-02_00-00")
 
     def test_mark_finalized(self) -> None:
         mapping_manager.upsert_repository_mapping("owner/repo", "2026-01-01_00-00")
@@ -180,17 +180,17 @@ class UpdateRepositoryFieldsTests(MappingWriteTestCase):
         entry = self.read_mapping()[0]
         self.assertEqual((entry["destination"], entry["limit"]), ("D:/Games", 5))
         self.assertEqual(entry["last_finalized"], "2026-02-02_00-00")
-        self.assertEqual(entry["last_notification_seen"], "2026-02-03_00-00")
+        self.assertEqual(entry["last_notification"], "2026-02-03_00-00")
 
     def test_returns_false_when_nothing_changes(self) -> None:
         mapping_manager.upsert_repository_mapping("owner/repo")
 
-        self.assertFalse(mapping_manager.update_repository_fields("owner/repo", {"paused": False}))
+        self.assertFalse(mapping_manager.update_repository_fields("owner/repo", {"active": True}))
 
     def test_rejects_daemon_owned_fields_and_name(self) -> None:
         mapping_manager.upsert_repository_mapping("owner/repo")
 
-        for field in ("last_finalized", "last_notification_seen", "name"):
+        for field in ("last_finalized", "last_notification", "repository"):
             with self.assertRaises(ValueError):
                 mapping_manager.update_repository_fields("owner/repo", {field: "x"})
 
@@ -201,8 +201,8 @@ class UpdateRepositoryFieldsTests(MappingWriteTestCase):
     def test_repository_matching_is_case_insensitive(self) -> None:
         mapping_manager.upsert_repository_mapping("Owner/Repo")
 
-        self.assertTrue(mapping_manager.update_repository_fields("owner/repo", {"paused": True}))
-        self.assertIs(self.read_mapping()[0]["paused"], True)
+        self.assertTrue(mapping_manager.update_repository_fields("owner/repo", {"active": False}))
+        self.assertIs(self.read_mapping()[0]["active"], False)
 
 
 class ValidatedEditTests(MappingWriteTestCase):
@@ -214,7 +214,7 @@ class ValidatedEditTests(MappingWriteTestCase):
         mapping_manager.upsert_repository_mapping("owner/repo", "2026-01-01_00-00")
         before = self.file_bytes()
 
-        for bad_changes in ({"limit": -1}, {"paused": "yes"}, {"skiplist": "Release"}):
+        for bad_changes in ({"limit": -1}, {"active": "yes"}, {"skiplist": "Release"}):
             with self.assertRaises(mapping_manager.MappingValidationError) as raised:
                 mapping_manager.update_repository_fields("owner/repo", bad_changes)
             self.assertTrue(raised.exception.errors)
@@ -222,17 +222,17 @@ class ValidatedEditTests(MappingWriteTestCase):
         self.assertEqual(self.file_bytes(), before)
 
     def test_preexisting_error_elsewhere_does_not_block_valid_edit(self) -> None:
-        self.write_mapping([{"name": "a/a", "limit": -5}, {"name": "b/b"}])
+        self.write_mapping([{"repository": "a/a", "limit": -5}, {"repository": "b/b"}])
 
         self.assertTrue(mapping_manager.update_repository_fields("b/b", {"limit": 3}))
 
-        self.assertEqual({r["name"]: r.get("limit") for r in self.read_mapping()}, {"a/a": -5, "b/b": 3})
+        self.assertEqual({r["repository"]: r.get("limit") for r in self.read_mapping()}, {"a/a": -5, "b/b": 3})
 
     def test_validate_mapping_payload_matches_file_validation(self) -> None:
-        self.write_mapping([{"name": "a/a", "limit": -1}])
+        self.write_mapping([{"repository": "a/a", "limit": -1}])
 
         from_file = mapping_manager.validate_mapping_schema()
-        from_payload = mapping_manager.validate_mapping_payload({"repositories": [{"name": "a/a", "limit": -1}]})
+        from_payload = mapping_manager.validate_mapping_payload({"repositories": [{"repository": "a/a", "limit": -1}]})
 
         self.assertFalse(from_file["ok"])
         self.assertEqual(from_file["errors"], from_payload["errors"])
@@ -243,18 +243,18 @@ class AddRemoveRepositoryTests(MappingWriteTestCase):
         mapping_manager.add_repository("Owner/Repo", {"destination": "D:/Games", "limit": 3})
 
         entry = self.read_mapping()[0]
-        self.assertEqual(entry["name"], "Owner/Repo")
+        self.assertEqual(entry["repository"], "Owner/Repo")
         self.assertEqual((entry["destination"], entry["limit"]), ("D:/Games", 3))
-        self.assertEqual(entry["foldername"], "Repo (Owner)")
-        self.assertEqual(entry["last_notification_seen"], "")
-        self.assertIs(entry["paused"], False)
+        self.assertEqual(entry["folder"], "Repo (Owner)")
+        self.assertEqual(entry["last_notification"], "")
+        self.assertIs(entry["active"], True)
         self.warning_mock.assert_not_called()
 
     def test_add_keeps_list_sorted(self) -> None:
         mapping_manager.add_repository("zed/zebra")
         mapping_manager.add_repository("amy/apple")
 
-        self.assertEqual([r["name"] for r in self.read_mapping()], ["amy/apple", "zed/zebra"])
+        self.assertEqual([r["repository"] for r in self.read_mapping()], ["amy/apple", "zed/zebra"])
 
     def test_add_duplicate_is_rejected_case_insensitively(self) -> None:
         mapping_manager.add_repository("owner/repo")
@@ -287,7 +287,7 @@ class AddRemoveRepositoryTests(MappingWriteTestCase):
         self.assertTrue(mapping_manager.remove_repository("OWNER/ONE"))
         self.assertFalse(mapping_manager.remove_repository("owner/one"))
 
-        self.assertEqual([r["name"] for r in self.read_mapping()], ["owner/two"])
+        self.assertEqual([r["repository"] for r in self.read_mapping()], ["owner/two"])
 
 
 class EnsureMappingFileTests(MappingWriteTestCase):
@@ -300,11 +300,11 @@ class EnsureMappingFileTests(MappingWriteTestCase):
         self.assertFalse(mapping_manager.ensure_mapping_file())
 
     def test_leaves_existing_file_untouched(self) -> None:
-        self.write_mapping([{"name": "amy/apple"}])
+        self.write_mapping([{"repository": "amy/apple"}])
 
         self.assertFalse(mapping_manager.ensure_mapping_file())
 
-        self.assertEqual(self.read_mapping(), [{"name": "amy/apple"}])
+        self.assertEqual(self.read_mapping(), [{"repository": "amy/apple"}])
 
     def test_does_not_replace_invalid_file(self) -> None:
         with open(self.mapping_path, "w", encoding="utf-8") as handle:

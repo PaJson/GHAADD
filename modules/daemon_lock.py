@@ -8,6 +8,8 @@ from typing import Optional, TypedDict
 
 from filelock import FileLock, Timeout
 
+from modules.app_info import MAPPING_FORMAT
+
 _LOCK_FILE_NAME = "ghaadd.lock"
 # True only inside acquire_daemon_lock(): status fields may be published only by the lock holder.
 _lock_held = False
@@ -24,6 +26,7 @@ class DaemonStatus(TypedDict):
     current_job: Optional[dict]  # {"repo", "tag", "since"} while a job is being processed
     config_fingerprint: Optional[str]  # config_manager.get_config_fingerprint() the daemon started with
     log_active: Optional[bool]  # whether the terminal log file is really open (None: daemon does not say)
+    mapping_format: Optional[int]  # app_info.MAPPING_FORMAT the daemon understands (None: an older daemon)
 
 
 def get_daemon_lock_path() -> str:
@@ -72,7 +75,7 @@ def _write_status_payload(payload: dict) -> None:
 
 def _write_daemon_status() -> None:
     """Record this process's PID and start time for status probes."""
-    _write_status_payload({"pid": os.getpid(), "started_at": time.time()})
+    _write_status_payload({"pid": os.getpid(), "started_at": time.time(), "mapping_format": MAPPING_FORMAT})
 
 
 def update_daemon_status(**fields) -> None:
@@ -122,6 +125,7 @@ def get_daemon_status() -> DaemonStatus:
             "current_job": None,
             "config_fingerprint": None,
             "log_active": None,
+            "mapping_format": None,
         }
 
     payload = _read_status_payload()
@@ -135,6 +139,7 @@ def get_daemon_status() -> DaemonStatus:
         "current_job": payload.get("current_job") if isinstance(payload.get("current_job"), dict) else None,
         "config_fingerprint": payload.get("config_fingerprint") if isinstance(payload.get("config_fingerprint"), str) else None,
         "log_active": payload.get("log_active") if isinstance(payload.get("log_active"), bool) else None,
+        "mapping_format": payload.get("mapping_format") if isinstance(payload.get("mapping_format"), int) else None,
     }
 
 

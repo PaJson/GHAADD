@@ -287,7 +287,7 @@ class SummaryCacheTests(unittest.TestCase):
         db_manager.enqueue_job(self.daemon_connection, "o/first", "v1")
         self.daemon_connection.commit()
         with mock.patch.object(gui_data.mapping_manager, "load_mapping",
-                               return_value={"repositories": [{"name": "o/first", "foldername": "First"}]}):
+                               return_value={"repositories": [{"repository": "o/first", "folder": "First"}]}):
             before = self.table()
             db_manager.enqueue_job(self.daemon_connection, "o/first", "v2")
             self.daemon_connection.commit()

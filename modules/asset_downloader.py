@@ -25,7 +25,7 @@ from modules.config_manager import (
 from email.utils import parsedate_tz, mktime_tz
 from modules.lifecycle_logger import clear_limit_warnings, log_warning, repos_with_limit_warnings
 from modules.mapping_manager import (
-    build_default_foldername,
+    build_default_folder,
     get_repository_limit_release_type_folders,
     get_repository_mapping,
     load_mapping,
@@ -135,12 +135,12 @@ def _resolve_finalized_base_directory(
         )
         return default_complete_dir, False, warning_text
 
-    foldername = str(mapping_entry.get("foldername") or "").strip()
-    if not foldername:
-        foldername = build_default_foldername(normalized_repo)
-    foldername = sanitize_folder_name(foldername) or _build_repo_parent_folder(normalized_repo)
+    folder = str(mapping_entry.get("folder") or "").strip()
+    if not folder:
+        folder = build_default_folder(normalized_repo)
+    folder = sanitize_folder_name(folder) or _build_repo_parent_folder(normalized_repo)
 
-    base_dir = os.path.join(destination_root, foldername)
+    base_dir = os.path.join(destination_root, folder)
 
     subfolder = str(mapping_entry.get("subfolder") or "").strip()
     if subfolder:
@@ -308,7 +308,7 @@ def clear_all_resolved_limit_warnings() -> int:
         return 0
     cleared = 0
     for entry in load_mapping().get("repositories", []):
-        repo = str(entry.get("name") or "").strip()
+        repo = str(entry.get("repository") or "").strip()
         if not repo or repo.lower() not in warned:
             continue
         folder_limit = _resolve_repository_limit(repo)
@@ -373,9 +373,9 @@ def check_folder_limits() -> int:
     warned = repos_with_limit_warnings()
     raised = 0
     entries = load_mapping().get("repositories", [])
-    _prune_folder_counts([str(entry.get("name") or "") for entry in entries])
+    _prune_folder_counts([str(entry.get("repository") or "") for entry in entries])
     for entry in entries:
-        repo = str(entry.get("name") or "").strip()
+        repo = str(entry.get("repository") or "").strip()
         if not repo:
             continue
         if _resolve_repository_limit(repo) <= 0:
@@ -506,7 +506,7 @@ def move_complete_folders_to_mapped_destinations() -> dict[str, int]:
             if not isinstance(entry, dict):
                 continue
 
-            repo_name = str(entry.get("name") or "").strip()
+            repo_name = str(entry.get("repository") or "").strip()
             if not repo_name:
                 continue
 

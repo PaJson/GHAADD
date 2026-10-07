@@ -1,0 +1,18 @@
+{
+  "repositories": [
+    {
+      "repository": "example-org/example-repo",
+      "folder": "My name for this repository",
+      "subfolder": "@GitHub",
+      "destination": "X:\\Path\\To\\Destination",
+      "skiplist": [],
+      "recheck_intervals": [],
+      "limit": 10,
+      "limit_folders": ["Release", "Pre-release"],
+      "sanity_check": "any_tag",
+      "last_notification": "2026-01-01_12-00",
+      "last_finalized": "",
+      "active": true
+    }
+  ]
+}

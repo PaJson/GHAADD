@@ -98,13 +98,13 @@ class RepoFormTests(unittest.TestCase):
     def valid_form(self, **overrides):
         form = {
             "destination": tempfile.gettempdir(),
-            "foldername": " App ",
+            "folder": " App ",
             "subfolder": "@GitHub",
             "limit": "10",
             "recheck": "60, 240, 60",
             "release_folders": "Release, release, Pre-release",
             "skiplist": "beta , rc",
-            "paused": True,
+            "active": False,
         }
         form.update(overrides)
         return form
@@ -114,19 +114,19 @@ class RepoFormTests(unittest.TestCase):
 
         self.assertTrue(result.ok, result.errors)
         self.assertEqual(result.warnings, [])
-        self.assertEqual(result.changes["foldername"], "App")
+        self.assertEqual(result.changes["folder"], "App")
         self.assertEqual(result.changes["limit"], 10)
-        self.assertEqual(result.changes["recheck_intervals_minutes"], [60, 240])
-        self.assertEqual(result.changes["limit_release_type_folders"], ["Release", "Pre-release"])
+        self.assertEqual(result.changes["recheck_intervals"], [60, 240])
+        self.assertEqual(result.changes["limit_folders"], ["Release", "Pre-release"])
         self.assertEqual(result.changes["skiplist"], ["beta", "rc"])
-        self.assertIs(result.changes["paused"], True)
-        self.assertNotIn("name", result.changes)
+        self.assertIs(result.changes["active"], False)
+        self.assertNotIn("repository", result.changes)
         self.assertNotIn("last_finalized", result.changes)
 
     def test_empty_recheck_means_default(self) -> None:
         result = gui_forms.build_repo_changes(self.valid_form(recheck=""))
         self.assertTrue(result.ok)
-        self.assertEqual(result.changes["recheck_intervals_minutes"], [])
+        self.assertEqual(result.changes["recheck_intervals"], [])
 
     def test_bad_values_are_reported(self) -> None:
         result = gui_forms.build_repo_changes(
@@ -212,7 +212,7 @@ class OverviewTests(unittest.TestCase):
 
     def test_status_rules(self) -> None:
         derive = repo_overview.derive_status
-        self.assertEqual(derive(True, self.summary(pending_next_check=self.NOW - 1), self.NOW), "Paused")
+        self.assertEqual(derive(True, self.summary(pending_next_check=self.NOW - 1), self.NOW), "Inactive")
         self.assertEqual(derive(False, self.summary(pending_next_check=self.NOW - 1), self.NOW), "Queued")
         self.assertEqual(derive(False, self.summary(pending_next_check=self.NOW + 60), self.NOW), "Waiting")
         self.assertEqual(derive(False, self.summary(latest_status="FAILED"), self.NOW), "Failed")
@@ -223,10 +223,10 @@ class OverviewTests(unittest.TestCase):
 
     def test_rows_order_by_recent_activity_then_folder_name(self) -> None:
         entries = [
-            {"name": "o/never-b", "foldername": "B never"},
-            {"name": "o/old", "foldername": "Old"},
-            {"name": "o/new", "foldername": "New"},
-            {"name": "o/never-a", "foldername": "a never"},
+            {"repository": "o/never-b", "folder": "B never"},
+            {"repository": "o/old", "folder": "Old"},
+            {"repository": "o/new", "folder": "New"},
+            {"repository": "o/never-a", "folder": "a never"},
         ]
         summaries = {
             "o/old": self.summary(last_activity=self.NOW - 500),
@@ -238,25 +238,25 @@ class OverviewTests(unittest.TestCase):
         self.assertEqual([row.repo for row in rows], ["o/new", "o/old", "o/never-a", "o/never-b"])
 
     def test_running_repo_is_matched_case_insensitively(self) -> None:
-        entries = [{"name": "Owner/Repo", "foldername": "A"}, {"name": "o/other", "foldername": "B"}]
+        entries = [{"repository": "Owner/Repo", "folder": "A"}, {"repository": "o/other", "folder": "B"}]
 
         rows = repo_overview.build_rows(entries, {}, self.NOW, lambda entry: 5, running_repo="owner/repo")
 
         self.assertEqual({row.repo: row.status for row in rows}, {"Owner/Repo": "Running", "o/other": "Idle"})
 
     def test_row_values_for_a_waiting_repo(self) -> None:
-        entries = [{"name": "Owner/Repo", "foldername": "", "destination": "K:\\Apps", "limit": 10}]
+        entries = [{"repository": "Owner/Repo", "folder": "", "destination": "K:\\Apps", "limit": 10}]
         summaries = {"owner/repo": self.summary(pending_next_check=self.NOW + 600, pending_attempts=2)}
 
         (row,) = repo_overview.build_rows(entries, summaries, self.NOW, lambda entry: 5)
 
-        self.assertEqual(row.foldername, "Owner/Repo")  # falls back to the repo name
+        self.assertEqual(row.folder, "Owner/Repo")  # falls back to the repo name
         self.assertEqual((row.status, row.step, row.tag, row.files, row.limit), ("Waiting", "2 / 5", "v1", "8", "10"))
         self.assertEqual(row.files, "8")
         self.assertNotEqual(row.next_check, "-")
 
     def test_repo_without_jobs_shows_dashes(self) -> None:
-        (row,) = repo_overview.build_rows([{"name": "o/x", "foldername": "X"}], {}, self.NOW, lambda entry: 5)
+        (row,) = repo_overview.build_rows([{"repository": "o/x", "folder": "X"}], {}, self.NOW, lambda entry: 5)
         self.assertEqual((row.status, row.tag, row.last_check, row.step, row.next_check, row.files), ("Idle",) + ("-",) * 5)
         self.assertEqual(row.files, "-")
 
@@ -312,7 +312,7 @@ class RepoJobSummaryTests(unittest.TestCase):
         summaries = db_manager.get_repo_job_summaries(self.connection)
         self.assertEqual(summaries["o/pre"]["latest_release_type"], "Pre-release")
         rows = repo_overview.build_rows(
-            [{"name": "o/pre"}, {"name": "o/rel"}], summaries, 0.0, lambda entry: 5
+            [{"repository": "o/pre"}, {"repository": "o/rel"}], summaries, 0.0, lambda entry: 5
         )
         self.assertEqual({r.repo: r.tag for r in rows}, {"o/pre": "(P) nightly", "o/rel": "(R) v1"})
 
@@ -325,7 +325,7 @@ class RepoJobSummaryTests(unittest.TestCase):
         self.assertEqual(db_manager.get_repos_with_limit_warnings(self.connection), {"owner/repo"})
 
     def test_rows_flag_the_repositories_with_a_limit_warning(self) -> None:
-        entries = [{"name": "Owner/Repo", "limit": 25}, {"name": "o/other", "limit": 5}]
+        entries = [{"repository": "Owner/Repo", "limit": 25}, {"repository": "o/other", "limit": 5}]
         rows = repo_overview.build_rows(entries, {}, 0.0, lambda entry: 5, limit_warned={"owner/repo"})
         self.assertEqual({row.repo: row.limit_warning for row in rows}, {"Owner/Repo": True, "o/other": False})
 

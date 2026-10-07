@@ -1213,10 +1213,19 @@ def save_job_skip_details(connection, job_id, attempt_count, skipped_items):
     connection.commit()
 
 
-def get_previous_successful_completed_job(connection, repo, tag, release_type, exclude_job_id):
-    """Return previous successful completed job for same repo/tag/release_type."""
+def get_previous_successful_completed_job(connection, repo, tag, release_type, exclude_job_id, match_tag=True):
+    """Return the previous successful completed job for the same repo and release_type.
+
+    With match_tag=True (the original behaviour) it must also have the same tag; with False the
+    newest earlier successful job of the repository counts, whatever its tag.
+    """
+    tag_condition = "AND (tag = ? OR (tag IS NULL AND ? IS NULL))" if match_tag else ""
+    params = [int(exclude_job_id), repo]
+    if match_tag:
+        params += [tag, tag]
+    params += [release_type, release_type]
     return connection.execute(
-        """
+        f"""
         SELECT
             id,
             repo,
@@ -1231,10 +1240,7 @@ def get_previous_successful_completed_job(connection, repo, tag, release_type, e
           AND status = 'COMPLETED'
           AND last_result = 'SUCCESS'
           AND repo = ?
-                    AND (
-                tag = ?
-                OR (tag IS NULL AND ? IS NULL)
-              )
+          {tag_condition}
           AND (
                 release_type = ?
                 OR (release_type IS NULL AND ? IS NULL)
@@ -1242,7 +1248,7 @@ def get_previous_successful_completed_job(connection, repo, tag, release_type, e
         ORDER BY completed_at DESC, id DESC
         LIMIT 1
         """,
-                (int(exclude_job_id), repo, tag, tag, release_type, release_type),
+        params,
     ).fetchone()
 
 

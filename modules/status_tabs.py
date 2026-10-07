@@ -85,7 +85,7 @@ class StatusRow:
 @dataclass(frozen=True)
 class UnmappedRow:
     repo: str
-    foldername: str
+    folder: str
     first_seen: str
 
 
@@ -141,14 +141,14 @@ def unmapped_rows(entries: Iterable[Mapping[str, Any]]) -> list[UnmappedRow]:
     """Mapping entries without a destination (the daemon adds these when an unknown repo notifies)."""
     rows = []
     for entry in entries:
-        name = str(entry.get("name") or "").strip()
+        name = str(entry.get("repository") or "").strip()
         if not name or str(entry.get("destination") or "").strip():
             continue
-        stamp = str(entry.get("last_notification_seen") or "")
+        stamp = str(entry.get("last_notification") or "")
         rows.append(
             UnmappedRow(
                 repo=name,
-                foldername=str(entry.get("foldername") or "").strip(),
+                folder=str(entry.get("folder") or "").strip(),
                 first_seen=_format_stamp(stamp),
             )
         )

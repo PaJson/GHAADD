@@ -51,7 +51,7 @@ class LimitWarningCleanupTests(unittest.TestCase):
     def write_mapping(self, limit: int) -> None:
         with open(self.mapping_path, "w", encoding="utf-8") as handle:
             json.dump({"repositories": [
-                {"name": self.REPO, "destination": self.destination, "foldername": "App", "limit": limit}
+                {"repository": self.REPO, "destination": self.destination, "folder": "App", "limit": limit}
             ]}, handle)
 
     def warnings(self) -> set[str]:

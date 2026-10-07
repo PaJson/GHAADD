@@ -23,7 +23,7 @@ class PerfReportTestCase(unittest.TestCase):
         with open(self.config_path, "w", encoding="utf-8") as handle:
             json.dump({"paths": {"default_download_dir": folder}}, handle)
         with open(self.mapping_path, "w", encoding="utf-8") as handle:
-            json.dump({"repositories": [{"name": "o/app", "destination": "K:\\Apps", "foldername": "App"}]}, handle)
+            json.dump({"repositories": [{"repository": "o/app", "destination": "K:\\Apps", "folder": "App"}]}, handle)
         for target, name, value in (
             (db_manager, "get_state_db_path", lambda: self.db_path),
             (config_manager, "_config_file_path", lambda: self.config_path),

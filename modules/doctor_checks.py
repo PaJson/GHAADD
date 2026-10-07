@@ -79,7 +79,7 @@ def _iter_mapping_paths(mapping_payload: dict) -> list[tuple[str, str]]:
             continue
         destination = entry.get("destination")
         if isinstance(destination, str):
-            repo_name = str(entry.get("name") or "unknown")
+            repo_name = str(entry.get("repository") or "unknown")
             paths.append((f"mapping.repositories[{index}] ({repo_name}).destination", destination))
 
     return paths

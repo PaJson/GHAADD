@@ -25,7 +25,7 @@ class RepoTable:
 
 def _recheck_step_count(entry: Mapping[str, Any], default_count: int) -> int:
     """Number of recheck steps for a repo: its own list when set, else the global default."""
-    own = entry.get("recheck_intervals_minutes")
+    own = entry.get("recheck_intervals")
     if isinstance(own, list):
         valid = {int(v) for v in own if isinstance(v, int) and not isinstance(v, bool) and v > 0}
         if valid:
@@ -103,7 +103,7 @@ def load_repo_table(now: Optional[float] = None) -> RepoTable:
     except Exception:  # a status hiccup must not blank the mapping list
         pass
 
-    entries = {str(e.get("name") or "").strip(): e for e in mapping["repositories"] if e.get("name")}
+    entries = {str(e.get("repository") or "").strip(): e for e in mapping["repositories"] if e.get("repository")}
     rows = repo_overview.build_rows(
         list(entries.values()),
         summaries,
@@ -267,4 +267,4 @@ class StatusFeed:
 
     def _known_repos(self) -> dict[str, str]:
         entries = self._mapping_cache.get()["repositories"]
-        return {str(e["name"]).strip().lower(): str(e["name"]).strip() for e in entries if e.get("name")}
+        return {str(e["repository"]).strip().lower(): str(e["repository"]).strip() for e in entries if e.get("repository")}

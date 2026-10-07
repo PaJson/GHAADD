@@ -56,13 +56,13 @@ COLOR_HEADER_BG = "#dde5ef"  # table column headers
 COLOR_HEADER_FG = "#1f2d3d"
 COLOR_SELECTED = "#0078d4"
 
-# Row icon per status (first column). Paused is a mapping.json flag and wins over runtime state.
+# Row icon per status (first column). Inactive (active: false in mapping.json) wins over runtime state.
 STATUS_ICONS = {
     "Running": "▶",
     "Queued": "⏳",
     "Waiting": "◷",
     "Idle": "○",
-    "Paused": "⏸",
+    "Inactive": "⊘",
     "Failed": "✖",
 }
 
@@ -82,7 +82,7 @@ def pick_directory(parent: tk.Misc, variable: tk.Variable) -> None:
 
 
 def open_in_file_manager(path: str) -> None:
-    """Show a folder in the system file manager (Explorer / Finder / xdg-open)."""
+    """Open a folder in the system file manager, or a file in its default program (Explorer / Finder / xdg-open)."""
     if sys.platform.startswith("win"):
         os.startfile(path)  # type: ignore[attr-defined]
     elif sys.platform == "darwin":
@@ -318,7 +318,7 @@ class AddRepositoryDialog(tk.Toplevel):
         if not result.ok:
             self.message.configure(text=" ".join(result.errors))
             return
-        repo = result.changes["name"]
+        repo = result.changes["repository"]
         try:
             mapping_manager.add_repository(repo, {"destination": result.changes["destination"]})
         except Exception as exc:  # validation (duplicate name/destination), lock timeout, I/O
@@ -334,8 +334,8 @@ class MappingsTab(ttk.Frame):
     # (key, heading, width, anchor) for the table; keys match repo_overview.RepoRow fields.
     TABLE_COLUMNS: tuple[tuple[str, str, int, Anchor], ...] = (
         ("icon", "?", 40, "center"),  # status icon; the "?" header explains it on hover
-        ("foldername", "Name", 150, "w"),
-        ("repo", "Repository", 150, "w"),
+        ("folder", "Name (folder)", 150, "w"),
+        ("repo", "Repository (owner/repo)", 150, "w"),
         ("destination", "Destination", 150, "w"),
         ("tag", "Tag", 100, "w"),
         ("last_check", "Last check", 145, "w"),
@@ -344,31 +344,36 @@ class MappingsTab(ttk.Frame):
         ("files", "Files", 70, "center"),
         ("limit", "Limit", 75, "center"),
     )
-    STRETCH_COLUMNS = ("foldername", "repo", "destination", "tag")
-    SHOW_FILTERS = ("All", "Active", "Paused", "Has pending")
-    # Editor fields per column (top to bottom): (key, label, kind). kinds: entry, readonly, spin, dest.
-    FORM_COLUMNS = (
+    STRETCH_COLUMNS = ("folder", "repo", "destination", "tag")
+    SHOW_FILTERS = ("All", "Active", "Inactive", "Has pending")
+    # Editor layout: three columns of up to three rows; a row holds one or more fields side by side.
+    # A field is (key, label, kind, weight): kinds name, entry, readonly, dest, spin, choice; weight is its share of the
+    # row's width (a spin box keeps its natural width). The last column's third row holds Active and the buttons.
+    FORM_LAYOUT = (
         (
-            ("name", "Name (owner/repo)", "name"),
-            ("foldername", "Folder name", "entry"),
-            ("destination", "Destination", "dest"),
-            ("subfolder", "Subfolder", "entry"),
+            (("name", "Repository (owner/repo)", "name", 1),),
+            (("folder", "Name (folder)", "entry", 3), ("subfolder", "Subfolder", "entry", 1)),
+            (("destination", "Destination", "dest", 1),),
         ),
         (
-            ("release_folders", "Release folders", "entry"),
-            ("limit", "Limit", "spin"),
-            ("recheck", "Recheck (minutes, empty = default)", "entry"),
-            ("default_recheck", "Default recheck", "readonly"),
+            (("recheck", "Recheck (minutes)", "entry", 1), ("default_recheck", "Default recheck", "readonly", 1)),
+            (("limit", "Limit", "spin", 0), ("release_folders", "Release types", "entry", 1)),
+            (("sanity_check", "Sanity check (file count)", "choice", 1),),
         ),
         (
-            ("skiplist", "Skiplist", "entry"),
-            ("last_seen", "Last notification", "readonly"),
-            ("last_finalized", "Last finalized", "readonly"),
+            (("skiplist", "Skiplist", "entry", 1),),
+            (
+                ("last_seen", "Last notification", "readonly", 3),
+                ("last_finalized", "Last finalized", "readonly", 3),
+                ("last_filecount", "Last file count", "readonly", 2),
+            ),
+            (),
         ),
     )
     # Form values the user can change (the rest is read-only display).
     EDITABLE_KEYS = (
-        "foldername", "destination", "subfolder", "release_folders", "limit", "recheck", "skiplist", "paused",
+        "folder", "destination", "subfolder", "release_folders", "limit", "recheck", "skiplist", "sanity_check",
+        "active",
     )
 
     def __init__(self, master: tk.Misc, set_status: Callable[[str], None]) -> None:
@@ -453,72 +458,102 @@ class MappingsTab(ttk.Frame):
 
     def _build_form(self) -> None:
         self.form_frame = ttk.LabelFrame(self, text="Selected repository", padding=10)
-        for column in range(len(self.FORM_COLUMNS)):
+        for column in range(len(self.FORM_LAYOUT)):
             self.form_frame.columnconfigure(column, weight=1, uniform="form")
 
         self.vars: dict[str, tk.Variable] = {
-            key: tk.StringVar() for column in self.FORM_COLUMNS for key, _label, _kind in column
+            key: tk.StringVar() for column in self.FORM_LAYOUT for row in column for key, _l, _k, _w in row
         }
-        self.vars["paused"] = tk.BooleanVar()
+        self.vars["active"] = tk.BooleanVar()
         for key in self.EDITABLE_KEYS:
             self.vars[key].trace_add("write", lambda *_: self._on_form_edited())
 
         self.form_widgets: list[ttk.Widget] = []
-        for column, fields in enumerate(self.FORM_COLUMNS):
-            pad = (0, 0) if column == len(self.FORM_COLUMNS) - 1 else (0, 14)
-            for row, (key, label, kind) in enumerate(fields):
-                # Label and input sit directly in the form grid (no wrapper frame per field: fewer
-                # widgets to lay out and repaint while the window is resized).
-                title = ttk.Label(self.form_frame, text=label)
-                title.grid(row=row * 2, column=column, sticky="w", padx=pad)
-                if key in gui_tooltips.FIELD_HELP:
-                    attach_tooltip(title, gui_tooltips.FIELD_HELP[key])
-                if kind == "dest":
-                    self._add_dest_widgets(row * 2 + 1, column, pad)
-                    continue
-                if kind == "name":
-                    self._add_name_widgets(row * 2 + 1, column, pad)
-                    continue
-                if kind == "spin":
-                    widget: ttk.Widget = ttk.Spinbox(self.form_frame, from_=0, to=999, width=6, textvariable=self.vars[key])
-                    sticky = "w"
-                else:
-                    widget = ttk.Entry(
-                        self.form_frame, textvariable=self.vars[key], state="readonly" if kind == "readonly" else "normal"
-                    )
-                    sticky = "ew"
-                widget.grid(row=row * 2 + 1, column=column, sticky=sticky, padx=pad, pady=(0, 6))
-                if kind != "readonly":
-                    self.form_widgets.append(widget)
+        row_count = max(len(rows) for rows in self.FORM_LAYOUT)
+        for column, rows in enumerate(self.FORM_LAYOUT):
+            pad = (0, 0) if column == len(self.FORM_LAYOUT) - 1 else (0, 14)
+            for row, cells in enumerate(rows):
+                if cells:
+                    self._add_form_row(row * 2, column, pad, cells)
 
-        # Fourth row: validation message (left) and Paused + Revert/Save (last column).
+        # Validation message under the first two columns (only shown while there is one), and Active + the
+        # buttons in the last column's last row.
         self.message_label = ttk.Label(self.form_frame, text="", foreground=COLOR_ERROR, wraplength=700)
-        self.message_label.grid(row=8, column=0, columnspan=2, sticky="w")
+        self.message_label.grid(row=row_count * 2, column=0, columnspan=2, sticky="w")
+        self.message_label.grid_remove()
         actions = ttk.Frame(self.form_frame)
-        actions.grid(row=8, column=2, sticky="ew", pady=(8, 0))
+        actions.grid(row=row_count * 2 - 1, column=len(self.FORM_LAYOUT) - 1, sticky="ew")
         actions.columnconfigure(0, weight=1)
-        self.paused_check = ttk.Checkbutton(actions, text="Paused", variable=self.vars["paused"])
+        self.active_check = ttk.Checkbutton(actions, text="Active", variable=self.vars["active"])
         self.revert_button = ttk.Button(actions, text="Revert", command=self._revert)
         self.save_button = ttk.Button(actions, text="Save", command=self._save)
         self.open_button = ttk.Button(actions, text="Open folder", command=self._open_folder)
-        self.paused_check.grid(row=0, column=0, sticky="w")
+        self.active_check.grid(row=0, column=0, sticky="w")
         self.open_button.grid(row=0, column=1, padx=(0, 6))
         self.revert_button.grid(row=0, column=2, padx=(0, 6))
         self.save_button.grid(row=0, column=3)
-        self.form_widgets.extend([self.paused_check, self.open_button])
-        attach_tooltip(self.paused_check, gui_tooltips.FIELD_HELP["paused"])
+        self.form_widgets.extend([self.active_check, self.open_button])
+        attach_tooltip(self.active_check, gui_tooltips.FIELD_HELP["active"])
         attach_tooltip(self.open_button, gui_tooltips.FIELD_HELP["open_folder"])
 
-    def _add_name_widgets(self, row: int, column: int, pad: tuple[int, int]) -> None:
-        """The read-only repository name with a globe button that opens its GitHub page."""
+    def _add_form_row(
+        self, grid_row: int, column: int, pad: tuple[int, int], cells: tuple[tuple[str, str, str, int], ...]
+    ) -> None:
+        """One editor row: its fields side by side, each a title above its input (two grid rows high)."""
         holder = ttk.Frame(self.form_frame)
-        holder.grid(row=row, column=column, sticky="ew", padx=pad, pady=(0, 6))
+        holder.grid(row=grid_row, rowspan=2, column=column, sticky="ew", padx=pad, pady=(0, 6))
+        for index, (key, label, kind, weight) in enumerate(cells):
+            gap = (0, 0) if index == 0 else (10, 0)
+            if weight:
+                holder.columnconfigure(index, weight=weight, uniform="cells")  # exact proportions, whatever the text
+            title = ttk.Label(holder, text=label)
+            title.grid(row=0, column=index, sticky="w", padx=gap)
+            if key in gui_tooltips.FIELD_HELP:
+                attach_tooltip(title, gui_tooltips.FIELD_HELP[key])
+            if kind == "name":
+                widget: tk.Misc = self._name_widget(holder)
+            elif kind == "dest":
+                widget = self._dest_widget(holder)
+            elif kind == "spin":
+                widget = ttk.Spinbox(holder, from_=0, to=999, width=6, textvariable=self.vars[key])
+                self.form_widgets.append(widget)
+            elif kind == "choice":
+                widget = ttk.Combobox(
+                    holder, textvariable=self.vars[key], state="readonly",
+                    values=[text for _value, text in gui_forms.SANITY_CHOICES],
+                )
+                self.form_widgets.append(widget)
+            else:
+                widget = ttk.Entry(
+                    holder, textvariable=self.vars[key], state="readonly" if kind == "readonly" else "normal"
+                )
+                if kind != "readonly":
+                    self.form_widgets.append(widget)
+            widget.grid(row=1, column=index, sticky="w" if kind == "spin" else "ew", padx=gap)
+
+    def _name_widget(self, parent: tk.Misc) -> ttk.Frame:
+        """The read-only repository name with a globe button that opens its GitHub page."""
+        holder = ttk.Frame(parent)
         holder.columnconfigure(0, weight=1)
         ttk.Entry(holder, textvariable=self.vars["name"], state="readonly").grid(row=0, column=0, sticky="ew")
         self.github_button = ttk.Button(holder, text="🌐", width=3, command=self._open_github)
         self.github_button.grid(row=0, column=1, padx=(6, 0))
         attach_tooltip(self.github_button, gui_tooltips.FIELD_HELP["github"])
         self.form_widgets.append(self.github_button)
+        return holder
+
+    def _dest_widget(self, parent: tk.Misc) -> ttk.Frame:
+        """The destination entry with its Browse button."""
+        holder = ttk.Frame(parent)
+        holder.columnconfigure(0, weight=1)
+        entry = ttk.Entry(holder, textvariable=self.vars["destination"])
+        entry.grid(row=0, column=0, sticky="ew")
+        self.browse_button = ttk.Button(
+            holder, text="Browse…", width=9, command=lambda: pick_directory(self, self.vars["destination"])
+        )
+        self.browse_button.grid(row=0, column=1, padx=(6, 0))
+        self.form_widgets.extend([entry, self.browse_button])
+        return holder
 
     def _open_github(self) -> None:
         """Open the selected repository's GitHub page in the default browser."""
@@ -532,18 +567,6 @@ class MappingsTab(ttk.Frame):
         else:
             self._set_status(f"Could not open a browser for {url}")
 
-    def _add_dest_widgets(self, row: int, column: int, pad: tuple[int, int]) -> None:
-        holder = ttk.Frame(self.form_frame)
-        holder.grid(row=row, column=column, sticky="ew", padx=pad, pady=(0, 6))
-        holder.columnconfigure(0, weight=1)
-        entry = ttk.Entry(holder, textvariable=self.vars["destination"])
-        entry.grid(row=0, column=0, sticky="ew")
-        self.browse_button = ttk.Button(
-            holder, text="Browse…", width=9, command=lambda: pick_directory(self, self.vars["destination"])
-        )
-        self.browse_button.grid(row=0, column=1, padx=(6, 0))
-        self.form_widgets.extend([entry, self.browse_button])
-
     def _open_folder(self) -> None:
         """Open the repository's folder (destination/folder name/subfolder, or the longest part that exists)."""
         repo = self._current_repo
@@ -551,7 +574,7 @@ class MappingsTab(ttk.Frame):
             return
         form = self._form_values()
         folder = gui_forms.resolve_open_folder(
-            repo, str(form["destination"]), str(form["foldername"]), str(form["subfolder"])
+            repo, str(form["destination"]), str(form["folder"]), str(form["subfolder"])
         )
         if folder is None:
             self._set_status("No existing folder to open: set a destination that exists first.")
@@ -703,13 +726,13 @@ class MappingsTab(ttk.Frame):
 
     def _matches(self, row: Any) -> bool:
         needle = self.filter_var.get().strip().casefold()
-        if needle and needle not in f"{row.foldername} {row.repo} {row.destination}".casefold():
+        if needle and needle not in f"{row.folder} {row.repo} {row.destination}".casefold():
             return False
         show = self.show_var.get()
         if show == "Active":
-            return row.status != "Paused"
-        if show == "Paused":
-            return row.status == "Paused"
+            return row.status != "Inactive"
+        if show == "Inactive":
+            return row.status == "Inactive"
         if show == "Has pending":
             return row.status in ("Queued", "Waiting", "Running")
         return True
@@ -751,16 +774,18 @@ class MappingsTab(ttk.Frame):
         entry = self._table.entries[repo]
         return {
             "name": repo,
-            "foldername": str(entry.get("foldername") or ""),
+            "folder": str(entry.get("folder") or ""),
             "destination": str(entry.get("destination") or ""),
             "subfolder": str(entry.get("subfolder") or ""),
-            "release_folders": gui_forms.format_list(entry.get("limit_release_type_folders")),
+            "release_folders": gui_forms.format_list(entry.get("limit_folders")),
             "limit": str(entry.get("limit", "")),
-            "recheck": gui_forms.format_list(entry.get("recheck_intervals_minutes")),
+            "recheck": gui_forms.format_list(entry.get("recheck_intervals")),
             "skiplist": gui_forms.format_list(entry.get("skiplist")),
-            "last_seen": str(entry.get("last_notification_seen") or ""),
+            "sanity_check": gui_forms.sanity_label(entry.get("sanity_check")),
+            "last_seen": str(entry.get("last_notification") or ""),
             "last_finalized": str(entry.get("last_finalized") or ""),
-            "paused": entry.get("paused") is True,
+            "last_filecount": next((row.files_total for row in self._table.rows if row.repo == repo), ""),
+            "active": entry.get("active") is not False,
         }
 
     def _load_form(self, repo: Optional[str]) -> None:
@@ -771,7 +796,7 @@ class MappingsTab(ttk.Frame):
             for key, var in self.vars.items():
                 if key == "default_recheck":
                     continue
-                var.set(values.get(key, False if key == "paused" else ""))
+                var.set(values.get(key, False if key == "active" else ""))
         finally:
             self._loading = False
         self._current_repo = repo
@@ -801,6 +826,10 @@ class MappingsTab(ttk.Frame):
     def _show_message(self, text: str, kind: str = "error") -> None:
         color = {"error": COLOR_ERROR, "warning": COLOR_WARNING, "info": COLOR_MUTED}[kind]
         self.message_label.configure(text=text, foreground=color)
+        if text:
+            self.message_label.grid()
+        else:
+            self.message_label.grid_remove()
 
     def _on_select(self, _event: object = None) -> None:
         if self._rendering:
@@ -833,6 +862,7 @@ class MappingsTab(ttk.Frame):
             self._load_form(repo)  # picks up changes made by the daemon (last notification etc.)
             if message[0]:
                 self.message_label.configure(text=message[0], foreground=message[1])
+                self.message_label.grid()
 
     def _revert(self) -> None:
         self._load_form(self._current_repo)
@@ -960,7 +990,10 @@ class LiveLogTab(ttk.Frame):
         self.file_label = ttk.Label(toolbar, text="", foreground=COLOR_MUTED)
         self.file_label.grid(row=0, column=3, sticky="e", padx=(0, 8))
         ttk.Button(toolbar, text="Copy", command=self._copy).grid(row=0, column=4, padx=(0, 6))
-        ttk.Button(toolbar, text="Open folder", command=self._open_folder).grid(row=0, column=5)
+        self.open_log_button = ttk.Button(toolbar, text="Open log", command=self._open_log, state="disabled")
+        self.open_log_button.grid(row=0, column=5, padx=(0, 6))
+        attach_tooltip(self.open_log_button, gui_tooltips.CONTROL_HELP["open_log"])
+        ttk.Button(toolbar, text="Open folder", command=self._open_folder).grid(row=0, column=6)
 
     def _build_text(self) -> None:
         self.text = tk.Text(self, wrap="none", height=10, font=("Consolas", 10), state="disabled", undo=False)
@@ -1027,6 +1060,7 @@ class LiveLogTab(ttk.Frame):
         if update.changed_file or update.reset:
             self._has_log_file = update.file_name is not None
             self.file_label.configure(text=update.file_name or "")
+            self.open_log_button.state(["!disabled"] if self._has_log_file else ["disabled"])
             self._update_notice()
         if update.reset:
             self._lines.clear()
@@ -1126,12 +1160,20 @@ class LiveLogTab(ttk.Frame):
             self._set_status(f"The log folder does not exist yet: {directory}")
             return
         try:
-            if sys.platform == "win32":
-                os.startfile(directory)  # type: ignore[attr-defined]
-            else:
-                subprocess.Popen(["open" if sys.platform == "darwin" else "xdg-open", directory])
+            open_in_file_manager(directory)
         except OSError as exc:
             self._set_status(f"Could not open the folder: {exc}")
+
+    def _open_log(self) -> None:
+        """Open the log file this tab is following in the system's default program for .log files."""
+        path = self._tailer.path
+        if not path or not os.path.isfile(path):
+            self._set_status("There is no log file to open yet.")
+            return
+        try:
+            open_in_file_manager(path)  # a file opens in its default program
+        except OSError as exc:
+            self._set_status(f"Could not open the log: {exc}")
 
     def shutdown(self) -> None:
         if self._poll_job is not None:
@@ -1546,6 +1588,10 @@ class MainWindow(tk.Tk):
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self._apply_theme(theme)
         self._status_reset_job: Optional[str] = None
+        try:  # a mapping.json with pre-2.0 key names is upgraded now (after a backup), unless an older daemon runs
+            mapping_manager.migrate_mapping_file()
+        except Exception:  # not fatal: the old names are still understood when reading
+            pass
 
         self._snapshot = gui_daemon.DaemonSnapshot()
         self._reader = gui_daemon.SnapshotReader()
@@ -1625,7 +1671,7 @@ class MainWindow(tk.Tk):
     FILTERABLE_TABS = ("warnings", "completed")
     UNMAPPED_COLUMNS: tuple[StatusTab.Column, ...] = (
         ("repo", "Repository", 280, "w", True),
-        ("foldername", "Folder name", 280, "w", True),
+        ("folder", "Name (folder)", 280, "w", True),
         ("first_seen", "Last notification", 160, "w", False),
     )
     EMPTY_TEXTS = {
@@ -1700,7 +1746,7 @@ class MainWindow(tk.Tk):
         if unmapped != self._unmapped_rows:
             self._unmapped_rows = unmapped
             self._status_tabs["unmapped"].set_rows(
-                [(r.repo, r.foldername, r.first_seen) for r in unmapped], [r.repo for r in unmapped]
+                [(r.repo, r.folder, r.first_seen) for r in unmapped], [r.repo for r in unmapped]
             )
         self._set_status_title("unmapped", format_status_title("Unmapped", len(unmapped)))
 

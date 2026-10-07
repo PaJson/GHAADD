@@ -197,13 +197,13 @@ def log_cycle_summary(
 
     notifications_part = (
         "notifications: found={found} queued={queued} "
-        "(malformed={malformed}, paused={paused}, skiplist={skiplist}, "
+        "(malformed={malformed}, inactive={inactive}, skiplist={skiplist}, "
         "errors={errors}, duplicates_collapsed={duplicates})"
     ).format(
         found=ingest_values.get("notifications_found", 0),
         queued=ingest_values.get("notifications_queued", 0),
         malformed=ingest_values.get("notifications_skipped_malformed", 0),
-        paused=ingest_values.get("notifications_skipped_paused", 0),
+        inactive=ingest_values.get("notifications_skipped_inactive", 0),
         skiplist=ingest_values.get("notifications_skipped_skiplist", 0),
         errors=ingest_values.get("notifications_errors", 0),
         duplicates=ingest_values.get("notifications_collapsed_duplicates", 0),

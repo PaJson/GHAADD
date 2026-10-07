@@ -196,7 +196,7 @@ class IngestCycleStats(TypedDict):
     notifications_collapsed_duplicates: int
     notifications_queued: int
     notifications_skipped_malformed: int
-    notifications_skipped_paused: int
+    notifications_skipped_inactive: int
     notifications_skipped_skiplist: int
     notifications_errors: int
 

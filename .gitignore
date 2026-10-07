@@ -15,6 +15,7 @@ ghaadd.daemon.stderr.log
 perf_baseline*.json
 mapping.json.lock
 mapping.json.*.tmp
+mapping.json.v1.bak*
 
 # --- 3. SQLite Local Write Records & Engine Caches ---
 *.db

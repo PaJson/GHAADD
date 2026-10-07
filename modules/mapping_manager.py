@@ -10,6 +10,7 @@ from typing import Any, Callable, Optional, TypedDict, TypeVar
 
 from filelock import FileLock, Timeout
 
+from modules.app_info import MAPPING_FORMAT
 from modules.config_manager import get_recheck_intervals_minutes
 from modules.dry_run_mode import is_dry_run
 from modules.lifecycle_logger import log_warning
@@ -18,19 +19,37 @@ from modules.lifecycle_logger import log_warning
 DEFAULT_LIMIT_RELEASE_TYPE_FOLDERS = ["Release", "Pre-release"]
 DEFAULT_SUBFOLDER = "@GitHub"
 DEFAULT_LIMIT = 10
+# How the "file count changed" sanity check picks the release to compare with (per repository):
+# any_tag = the previous successful release of the repository whatever its tag (default),
+# same_tag = only a previous release with the same tag (suits rolling tags such as "nightly"), off = no check.
+SANITY_CHECK_MODES = ("any_tag", "same_tag", "off")
+DEFAULT_SANITY_CHECK = "any_tag"
 _MAPPING_FIELD_ORDER = (
-    "name",
-    "destination",
-    "foldername",
+    "repository",
+    "folder",
     "subfolder",
-    "limit",
-    "limit_release_type_folders",
-    "recheck_intervals_minutes",
+    "destination",
     "skiplist",
-    "last_notification_seen",
+    "recheck_intervals",
+    "limit",
+    "limit_folders",
+    "sanity_check",
+    "last_notification",
     "last_finalized",
-    "paused",
+    "active",
 )
+
+# Key names used by mapping.json before 2.0. A file written by an older version is understood as it is
+# read (in memory) and rewritten, after a backup copy, by migrate_mapping_file() or the next write.
+# `paused: true` became `active: false`, so that one is inverted rather than renamed (see _upgrade_legacy_entry).
+_LEGACY_KEY_RENAMES = {
+    "name": "repository",
+    "foldername": "folder",
+    "recheck_intervals_minutes": "recheck_intervals",
+    "limit_release_type_folders": "limit_folders",
+    "last_notification_seen": "last_notification",
+}
+_LEGACY_BACKUP_SUFFIX = ".v1.bak"
 
 
 _MAPPING_LOCK_TIMEOUT_SECONDS = 10.0
@@ -38,9 +57,9 @@ _REPLACE_RETRY_ATTEMPTS = 10
 _REPLACE_RETRY_DELAY_SECONDS = 0.05
 
 # Fields the daemon maintains. Other writers (GUI/CLI) must not set them, and
-# "name" is the entry's identity.
-_DAEMON_OWNED_FIELDS = frozenset({"last_notification_seen", "last_finalized"})
-_IDENTITY_FIELDS = frozenset({"name"})
+# "repository" is the entry's identity.
+_DAEMON_OWNED_FIELDS = frozenset({"last_notification", "last_finalized"})
+_IDENTITY_FIELDS = frozenset({"repository"})
 
 _REPOSITORY_NAME_PATTERN = re.compile(r"^[^/\s]+/[^/\s]+$")
 
@@ -96,6 +115,34 @@ def _backup_invalid_mapping_file(file_path: str, reason: str) -> None:
 def _default_mapping_payload() -> dict[str, list[dict[str, Any]]]:
     """Return default mapping payload shape."""
     return {"repositories": []}
+
+
+def _upgrade_legacy_entry(entry: dict[str, Any]) -> bool:
+    """Rename pre-2.0 keys of one entry in place (`paused` becomes the inverted `active`); True if anything changed.
+
+    When both the old and the new key exist the new one wins and the old one is dropped.
+    """
+    changed = False
+    for old_key, new_key in _LEGACY_KEY_RENAMES.items():
+        if old_key in entry:
+            value = entry.pop(old_key)
+            entry.setdefault(new_key, value)
+            changed = True
+    if "paused" in entry:
+        paused = entry.pop("paused")
+        # A value that is not a boolean is kept as it is, so validation reports it under its new name.
+        entry.setdefault("active", (not paused) if isinstance(paused, bool) else paused)
+        changed = True
+    return changed
+
+
+def _upgrade_legacy_payload(payload: dict[str, list[dict[str, Any]]]) -> bool:
+    """Upgrade every entry of a normalized payload in place; True if any entry used old key names."""
+    changed = False
+    for entry in payload.get("repositories", []):
+        if _upgrade_legacy_entry(entry):
+            changed = True
+    return changed
 
 
 def _normalize_mapping_payload(payload: Any) -> dict[str, list[dict[str, Any]]]:
@@ -170,9 +217,9 @@ def _normalize_skiplist(value: Any) -> list[str]:
 
 
 def _collapse_recheck_intervals_arrays(serialized_json: str) -> str:
-    """Render recheck_intervals_minutes arrays on a single line for readability."""
+    """Render recheck_intervals arrays on a single line for readability."""
     pattern = re.compile(
-        r'("recheck_intervals_minutes"\s*:\s*)\[\n(?P<body>(?:\s*\d+\s*,?\n)*)\s*\]',
+        r'("recheck_intervals"\s*:\s*)\[\n(?P<body>(?:\s*\d+\s*,?\n)*)\s*\]',
         re.MULTILINE,
     )
 
@@ -189,9 +236,9 @@ def _collapse_recheck_intervals_arrays(serialized_json: str) -> str:
 
 
 def _collapse_limit_release_type_folders_arrays(serialized_json: str) -> str:
-    """Render limit_release_type_folders arrays on a single line for readability."""
+    """Render limit_folders arrays on a single line for readability."""
     pattern = re.compile(
-        r'("limit_release_type_folders"\s*:\s*)\[\n(?P<body>(?:\s*"[^"]+"\s*,?\n)*)\s*\]',
+        r'("limit_folders"\s*:\s*)\[\n(?P<body>(?:\s*"[^"]+"\s*,?\n)*)\s*\]',
         re.MULTILINE,
     )
 
@@ -227,7 +274,12 @@ def _collapse_skiplist_arrays(serialized_json: str) -> str:
 
 
 def load_mapping() -> dict[str, list[dict[str, Any]]]:
-    """Load mapping.json with safe fallback payload."""
+    """Load mapping.json with safe fallback payload (keys of an older version are understood, see _LEGACY_KEY_RENAMES)."""
+    return _load_mapping(upgrade=True)
+
+
+def _load_mapping(upgrade: bool) -> dict[str, list[dict[str, Any]]]:
+    """load_mapping(), optionally leaving pre-2.0 key names as they are on disk (update_mapping needs that)."""
     file_path = _mapping_file_path()
     if not os.path.exists(file_path):
         return _default_mapping_payload()
@@ -241,7 +293,10 @@ def load_mapping() -> dict[str, list[dict[str, Any]]]:
         _backup_invalid_mapping_file(file_path, str(exc))
         return _default_mapping_payload()
 
-    return _normalize_mapping_payload(payload)
+    normalized = _normalize_mapping_payload(payload)
+    if upgrade:
+        _upgrade_legacy_payload(normalized)
+    return normalized
 
 
 def load_mapping_raw() -> Any:
@@ -264,13 +319,17 @@ def ensure_mapping_file() -> bool:
     """Create an empty mapping.json on a fresh install; return True if it was created.
 
     An existing file (even an invalid one, which load_mapping backs up when it is
-    read) is never touched. Does nothing in dry-run mode.
+    read) is only touched to upgrade pre-2.0 key names. Does nothing in dry-run mode.
     """
     if is_dry_run():
         return False
 
     file_path = _mapping_file_path()
     if os.path.exists(file_path):
+        try:
+            migrate_mapping_file()  # a file with pre-2.0 key names is rewritten with the new ones (after a backup)
+        except (MappingLockTimeout, MappingValidationError, OSError):
+            pass  # not fatal: the old names are still understood when reading
         return False
 
     lock = FileLock(_mapping_lock_path(), timeout=_MAPPING_LOCK_TIMEOUT_SECONDS)
@@ -294,7 +353,7 @@ def ensure_mapping_file() -> bool:
 
 def _repository_sort_key(entry: dict[str, Any]) -> tuple[str, str]:
     """Return a stable sort key for a repository mapping entry by repo name only."""
-    name_value = str(entry.get("name") or entry.get("foldername") or "").strip()
+    name_value = str(entry.get("repository") or entry.get("folder") or "").strip()
     repo_name = name_value.split("/", 1)[1] if "/" in name_value else name_value
     return (repo_name.lower(), name_value.lower())
 
@@ -302,7 +361,7 @@ def _repository_sort_key(entry: dict[str, Any]) -> tuple[str, str]:
 def _order_mapping_entry(entry: dict[str, Any]) -> dict[str, Any]:
     """Return a consistently ordered mapping entry."""
     ordered_entry = dict(entry)
-    ordered_entry.setdefault("paused", False)
+    ordered_entry.setdefault("active", True)
 
     return {
         key: ordered_entry[key]
@@ -416,17 +475,67 @@ def update_mapping(mutator: Callable[[dict[str, list[dict[str, Any]]]], _T]) -> 
         ) from exc
 
     try:
-        mapping_payload = load_mapping()
+        mapping_payload = _load_mapping(upgrade=False)
         snapshot = copy.deepcopy(mapping_payload)
+        had_legacy_keys = _upgrade_legacy_payload(mapping_payload)  # then the write below also upgrades the file
+        if had_legacy_keys and _older_daemon_running():
+            raise MappingValidationError([
+                "mapping.json still uses the old key names and the running daemon is an older version that "
+                "would not understand the upgraded file. Restart the daemon first (Stop, then Start), then try again."
+            ])
         result = mutator(mapping_payload)
         if mapping_payload != snapshot:
+            if had_legacy_keys:
+                _backup_legacy_mapping_file(file_path)
             _write_mapping_atomically(file_path, _serialize_mapping_payload(mapping_payload))
         return result
     finally:
         lock.release()
 
 
-def build_default_foldername(repo: str) -> str:
+def _backup_legacy_mapping_file(file_path: str) -> None:
+    """Keep a copy of a mapping.json that still has pre-2.0 key names before it is rewritten."""
+    if not os.path.exists(file_path):
+        return
+    backup_path = f"{file_path}{_LEGACY_BACKUP_SUFFIX}"
+    if os.path.exists(backup_path):  # never overwrite an earlier backup
+        backup_path = f"{backup_path}-{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    shutil.copy2(file_path, backup_path)
+    message = f"mapping.json was upgraded to the 2.0 key names; the previous file is kept as {backup_path}."
+    print(message)
+    log_warning("MAPPING", message)
+
+
+def _older_daemon_running() -> bool:
+    """True while a daemon runs that does not understand the current mapping.json format (started before 2.0)."""
+    from modules.daemon_lock import get_daemon_status
+
+    status = get_daemon_status()
+    return bool(status["running"] and status.get("mapping_format") != MAPPING_FORMAT)
+
+
+def migrate_mapping_file() -> bool:
+    """Rewrite mapping.json with the 2.0 key names when it still has the old ones; True if it was rewritten.
+
+    A backup copy (mapping.json.v1.bak) is made first. While an older daemon is running the file is left alone
+    (it would not understand the new names); the upgrade then happens once that daemon has been restarted.
+    Does nothing in dry-run mode.
+    """
+    if is_dry_run():
+        return False
+    raw = load_mapping_raw()
+    repositories = raw.get("repositories") if isinstance(raw, dict) else None
+    if not isinstance(repositories, list) or not any(
+        isinstance(entry, dict) and (set(_LEGACY_KEY_RENAMES) | {"paused"}) & set(entry) for entry in repositories
+    ):
+        return False
+    if _older_daemon_running():
+        return False
+    update_mapping(lambda payload: None)  # reading upgrades the payload, so the write happens by itself
+    return True
+
+
+def build_default_folder(repo: str) -> str:
     """Build default display name like 'duckstation (stenzek)' from owner/repo."""
     if not repo:
         return "unknown (unknown)"
@@ -442,7 +551,7 @@ def _is_same_repository_identity(
     repo: str,
 ) -> bool:
     """Return True when entry matches repository identity."""
-    entry_name = str(entry.get("name") or "").strip()
+    entry_name = str(entry.get("repository") or "").strip()
     return entry_name.lower() == repo.lower()
 
 
@@ -463,10 +572,10 @@ def get_repository_mapping(repo: str) -> Optional[dict[str, Any]]:
     return None
 
 
-def is_repository_paused(repo: str) -> bool:
-    """Return whether a repository is explicitly paused in mapping.json."""
+def is_repository_active(repo: str) -> bool:
+    """Return False only when a repository is explicitly switched off (`active: false`) in mapping.json."""
     mapping_entry = get_repository_mapping(repo)
-    return bool(isinstance(mapping_entry, dict) and mapping_entry.get("paused") is True)
+    return not (isinstance(mapping_entry, dict) and mapping_entry.get("active") is False)
 
 
 def get_repository_recheck_intervals_minutes(repo: str) -> list[int]:
@@ -475,7 +584,7 @@ def get_repository_recheck_intervals_minutes(repo: str) -> list[int]:
     if not isinstance(mapping_entry, dict):
         return list(get_recheck_intervals_minutes())
 
-    intervals_value = mapping_entry.get("recheck_intervals_minutes")
+    intervals_value = mapping_entry.get("recheck_intervals")
     if not isinstance(intervals_value, list):
         return list(get_recheck_intervals_minutes())
 
@@ -505,7 +614,7 @@ def get_repository_limit_release_type_folders(repo: str) -> list[str]:
         return []
 
     return _normalize_limit_release_type_folders(
-        mapping_entry.get("limit_release_type_folders")
+        mapping_entry.get("limit_folders")
     )
 
 
@@ -516,6 +625,14 @@ def get_repository_skiplist(repo: str) -> list[str]:
         return []
 
     return _normalize_skiplist(mapping_entry.get("skiplist"))
+
+
+def get_repository_sanity_check_mode(repo: str) -> str:
+    """Return how the file-count sanity check works for a repository (see SANITY_CHECK_MODES)."""
+    mapping_entry = get_repository_mapping(repo)
+    value = mapping_entry.get("sanity_check") if isinstance(mapping_entry, dict) else None
+    normalized = str(value or "").strip().lower()
+    return normalized if normalized in SANITY_CHECK_MODES else DEFAULT_SANITY_CHECK
 
 
 def is_release_type_skipped(repo: str, release_type: Optional[str]) -> bool:
@@ -533,17 +650,18 @@ def _current_mapping_stamp() -> str:
 def _build_skeleton_entry(repo: str, notification_seen_stamp: str) -> dict[str, Any]:
     """Return a new repository entry with default values."""
     return {
-        "name": repo,
-        "destination": "",
-        "foldername": build_default_foldername(repo),
+        "repository": repo,
+        "folder": build_default_folder(repo),
         "subfolder": DEFAULT_SUBFOLDER,
-        "limit": DEFAULT_LIMIT,
-        "limit_release_type_folders": _default_limit_release_type_folders(),
-        "recheck_intervals_minutes": [],
+        "destination": "",
         "skiplist": [],
-        "last_notification_seen": notification_seen_stamp,
+        "recheck_intervals": [],
+        "limit": DEFAULT_LIMIT,
+        "limit_folders": _default_limit_release_type_folders(),
+        "sanity_check": DEFAULT_SANITY_CHECK,
+        "last_notification": notification_seen_stamp,
         "last_finalized": "",
-        "paused": False,
+        "active": True,
     }
 
 
@@ -563,28 +681,32 @@ def upsert_repository_mapping(
                 continue
 
             updated = False
-            if entry.get("last_notification_seen") != effective_notification_seen_stamp:
-                entry["last_notification_seen"] = effective_notification_seen_stamp
+            if entry.get("last_notification") != effective_notification_seen_stamp:
+                entry["last_notification"] = effective_notification_seen_stamp
                 updated = True
 
             if "last_finalized" not in entry:
                 entry["last_finalized"] = ""
                 updated = True
 
-            if "recheck_intervals_minutes" not in entry:
-                entry["recheck_intervals_minutes"] = []
+            if "recheck_intervals" not in entry:
+                entry["recheck_intervals"] = []
                 updated = True
 
-            if "limit_release_type_folders" not in entry:
-                entry["limit_release_type_folders"] = _default_limit_release_type_folders()
+            if "limit_folders" not in entry:
+                entry["limit_folders"] = _default_limit_release_type_folders()
                 updated = True
 
             if "skiplist" not in entry:
                 entry["skiplist"] = []
                 updated = True
 
-            if "paused" not in entry:
-                entry["paused"] = False
+            if "sanity_check" not in entry:
+                entry["sanity_check"] = DEFAULT_SANITY_CHECK
+                updated = True
+
+            if "active" not in entry:
+                entry["active"] = True
                 updated = True
 
             return (False, updated)
@@ -692,7 +814,7 @@ def add_repository(repo: str, fields: Optional[dict[str, Any]] = None) -> None:
     `repo` must look like 'owner/repo'. Raises MappingValidationError when the
     name is malformed, already mapped (case-insensitive), or the resulting entry
     is invalid, and ValueError for daemon-owned fields in `fields`. The entry's
-    last_notification_seen starts empty because no notification was seen yet.
+    last_notification starts empty because no notification was seen yet.
     """
     extra_fields = dict(fields or {})
     _reject_non_editable_fields(extra_fields)
@@ -751,7 +873,7 @@ def _normalize_destination_root_for_comparison(destination: str) -> str:
 
 
 def _normalize_folder_segment_for_comparison(value: str) -> str:
-    """Return a comparison-safe form of a foldername/subfolder segment."""
+    """Return a comparison-safe form of a folder/subfolder segment."""
     segments = [segment for segment in re.split(r"[\\/]+", value.strip()) if segment not in ("", ".", "..")]
     joined = "/".join(segments)
     return joined.lower() if os.name == "nt" else joined
@@ -759,20 +881,20 @@ def _normalize_folder_segment_for_comparison(value: str) -> str:
 
 def _build_destination_comparison_key(
     destination: str,
-    foldername: Any,
+    folder: Any,
     subfolder: Any,
     repo_name: str,
 ) -> tuple[str, str, str]:
-    """Return a normalized (destination, foldername, subfolder) key for duplicate checks."""
+    """Return a normalized (destination, folder, subfolder) key for duplicate checks."""
     destination_norm = _normalize_destination_root_for_comparison(destination)
 
-    foldername_value = foldername if isinstance(foldername, str) and foldername.strip() else build_default_foldername(repo_name)
-    foldername_norm = _normalize_folder_segment_for_comparison(foldername_value)
+    folder_value = folder if isinstance(folder, str) and folder.strip() else build_default_folder(repo_name)
+    folder_norm = _normalize_folder_segment_for_comparison(folder_value)
 
     subfolder_value = subfolder if isinstance(subfolder, str) else ""
     subfolder_norm = _normalize_folder_segment_for_comparison(subfolder_value)
 
-    return (destination_norm, foldername_norm, subfolder_norm)
+    return (destination_norm, folder_norm, subfolder_norm)
 
 
 def find_missing_mapped_destinations() -> list[dict[str, str]]:
@@ -796,7 +918,7 @@ def find_missing_mapped_destinations() -> list[dict[str, str]]:
 
         missing_entries.append(
             {
-                "name": str(entry.get("name") or "unknown"),
+                "name": str(entry.get("repository") or "unknown"),
                 "destination": destination.strip(),
                 "resolved_destination": resolved_destination,
             }
@@ -822,7 +944,7 @@ def warn_about_missing_mapped_destinations() -> int:
 
 def validate_mapping_schema() -> MappingValidationResult:
     """Validate mapping.json structure and return errors/warnings."""
-    raw_payload = load_mapping_raw()
+    raw_payload = load_mapping_raw()  # validate_mapping_payload understands pre-2.0 key names
     if raw_payload is None:
         return {
             "ok": False,
@@ -854,6 +976,10 @@ def validate_mapping_payload(raw_payload: Any) -> MappingValidationResult:
             "errors": errors,
             "warnings": warnings,
         }
+    repositories = copy.deepcopy(repositories)  # validate the 2.0 view of an old file without touching the caller's data
+    for legacy_entry in repositories:
+        if isinstance(legacy_entry, dict):
+            _upgrade_legacy_entry(legacy_entry)
 
     seen_names: dict[str, int] = {}
     seen_destinations: dict[tuple[str, str, str], dict[str, Any]] = {}
@@ -866,7 +992,7 @@ def validate_mapping_payload(raw_payload: Any) -> MappingValidationResult:
 
         display_location = location
         display_suffix = ""
-        name = entry.get("name")
+        name = entry.get("repository")
         if isinstance(name, str) and name.strip():
             display_suffix = f" ({name.strip()})"
 
@@ -875,18 +1001,18 @@ def validate_mapping_payload(raw_payload: Any) -> MappingValidationResult:
             repo_name_for_key = str(name) if isinstance(name, str) else ""
             destination_key = _build_destination_comparison_key(
                 destination_value,
-                entry.get("foldername"),
+                entry.get("folder"),
                 entry.get("subfolder"),
                 repo_name_for_key,
             )
-            foldername_value = entry.get("foldername")
-            effective_foldername = (
-                foldername_value.strip()
-                if isinstance(foldername_value, str) and foldername_value.strip()
-                else build_default_foldername(repo_name_for_key)
+            folder_value = entry.get("folder")
+            effective_folder = (
+                folder_value.strip()
+                if isinstance(folder_value, str) and folder_value.strip()
+                else build_default_folder(repo_name_for_key)
             )
             subfolder_value = entry.get("subfolder")
-            display_path_parts = [destination_value.strip(), effective_foldername]
+            display_path_parts = [destination_value.strip(), effective_folder]
             if isinstance(subfolder_value, str) and subfolder_value.strip():
                 display_path_parts.append(subfolder_value.strip())
 
@@ -902,41 +1028,29 @@ def validate_mapping_payload(raw_payload: Any) -> MappingValidationResult:
             key
             for key in entry.keys()
             if key
-            not in {
-                "name",
-                "destination",
-                "foldername",
-                "subfolder",
-                "limit",
-                "recheck_intervals_minutes",
-                "limit_release_type_folders",
-                "skiplist",
-                "last_notification_seen",
-                "last_finalized",
-                "paused",
-            }
+            not in set(_MAPPING_FIELD_ORDER)
         )
         for key in unknown_keys:
             warnings.append(f"{display_location} has unknown key '{key}'.{display_suffix}")
 
         if not isinstance(name, str) or not name.strip():
-            errors.append(f"{location}.name must be a non-empty string.")
+            errors.append(f"{location}.repository must be a non-empty string.")
         else:
             normalized_name = name.strip().lower()
             if normalized_name in seen_names:
                 other_index = seen_names[normalized_name]
                 errors.append(
-                    f"{display_location}.name duplicates repositories[{other_index}].name ('{name}').{display_suffix}"
+                    f"{display_location}.repository duplicates repositories[{other_index}].repository ('{name}').{display_suffix}"
                 )
             else:
                 seen_names[normalized_name] = index
 
         for field_name in (
-            "foldername",
+            "folder",
             "destination",
             "subfolder",
             "limit",
-            "last_notification_seen",
+            "last_notification",
             "last_finalized",
         ):
             field_value = entry.get(field_name)
@@ -959,10 +1073,10 @@ def validate_mapping_payload(raw_payload: Any) -> MappingValidationResult:
                     f"{display_location}.{field_name} must be a string when provided.{display_suffix}"
                 )
 
-        paused_value = entry.get("paused")
-        if paused_value is not None and not isinstance(paused_value, bool):
+        active_value = entry.get("active")
+        if active_value is not None and not isinstance(active_value, bool):
             errors.append(
-                f"{display_location}.paused must be a boolean when provided.{display_suffix}"
+                f"{display_location}.active must be a boolean when provided.{display_suffix}"
             )
 
         destination = entry.get("destination")
@@ -971,17 +1085,17 @@ def validate_mapping_payload(raw_payload: Any) -> MappingValidationResult:
                 f"{display_location}.destination is empty; files will keep default routing until configured.{display_suffix}"
             )
 
-        foldername = entry.get("foldername")
-        if isinstance(foldername, str) and not foldername.strip():
+        folder = entry.get("folder")
+        if isinstance(folder, str) and not folder.strip():
             warnings.append(
-                f"{display_location}.foldername is empty; default folder name will be used.{display_suffix}"
+                f"{display_location}.folder is empty; default folder name will be used.{display_suffix}"
             )
 
-        intervals_value = entry.get("recheck_intervals_minutes")
+        intervals_value = entry.get("recheck_intervals")
         if intervals_value is not None:
             if not isinstance(intervals_value, list):
                 errors.append(
-                    f"{display_location}.recheck_intervals_minutes must be an array when provided.{display_suffix}"
+                    f"{display_location}.recheck_intervals must be an array when provided.{display_suffix}"
                 )
             else:
                 normalized_intervals: list[int] = []
@@ -1003,14 +1117,14 @@ def validate_mapping_payload(raw_payload: Any) -> MappingValidationResult:
 
                 if invalid_item_detected:
                     warnings.append(
-                        f"{display_location}.recheck_intervals_minutes contains invalid values; global processing.recheck_intervals_minutes may be used.{display_suffix}"
+                        f"{display_location}.recheck_intervals contains invalid values; global processing.recheck_intervals_minutes may be used.{display_suffix}"
                     )
 
-        limit_release_type_folders_value = entry.get("limit_release_type_folders")
+        limit_release_type_folders_value = entry.get("limit_folders")
         if limit_release_type_folders_value is not None:
             if not isinstance(limit_release_type_folders_value, list):
                 errors.append(
-                    f"{display_location}.limit_release_type_folders must be an array when provided.{display_suffix}"
+                    f"{display_location}.limit_folders must be an array when provided.{display_suffix}"
                 )
             else:
                 has_invalid_item = False
@@ -1024,12 +1138,20 @@ def validate_mapping_payload(raw_payload: Any) -> MappingValidationResult:
 
                 if has_invalid_item:
                     errors.append(
-                        f"{display_location}.limit_release_type_folders must contain only strings.{display_suffix}"
+                        f"{display_location}.limit_folders must contain only strings.{display_suffix}"
                     )
                 if has_empty_item:
                     warnings.append(
-                        f"{display_location}.limit_release_type_folders contains empty values; they will be ignored.{display_suffix}"
+                        f"{display_location}.limit_folders contains empty values; they will be ignored.{display_suffix}"
                     )
+
+        sanity_check_value = entry.get("sanity_check")
+        if sanity_check_value is not None and (
+            not isinstance(sanity_check_value, str) or sanity_check_value.strip().lower() not in SANITY_CHECK_MODES
+        ):
+            errors.append(
+                f"{display_location}.sanity_check must be one of {', '.join(SANITY_CHECK_MODES)}.{display_suffix}"
+            )
 
         skiplist_value = entry.get("skiplist")
         if skiplist_value is not None:
