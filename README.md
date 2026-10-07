@@ -387,7 +387,7 @@ python main.py --uninstall-autostart    # remove it (a running daemon is left ru
 - **Windows (the default, `--autostart-mode auto`):** creates a scheduled task "GHAADD" that starts at login, runs the daemon itself without a window (`pythonw.exe main.py --poll`) and restarts it after a failure (every minute, up to 999 times; a normal Stop is not restarted). It runs as you, only while you are logged in, so it needs neither admin rights nor a stored password. If the task cannot be created, the registry Run key is used instead (starts the daemon at login, no restart after a crash).
 - **Windows, other choices:** `--autostart-mode task` allows only the task (an error if it cannot be made), `--autostart-mode runkey` only the Run key. `--task-trigger manual` makes a task with no trigger: nothing starts by itself, you start it with `schtasks /Run /TN GHAADD` (or from the Task Scheduler window) and it is then kept running. `--uninstall-autostart` removes the task and the Run key, whichever exist, and `--autostart-status` shows both. Errors of a window-less daemon go to `ghaadd.daemon.stderr.log`.
 - **macOS:** installs a launchd LaunchAgent, `~/Library/LaunchAgents/com.ghaadd.daemon.plist`, which starts at login and restarts the daemon after a failure only. (Written from the documentation; not yet tried on a real Mac.)
-- **In the GUI:** Settings has a "Start the daemon when I log in" checkbox that does the same as `--install-autostart` / `--uninstall-autostart` when you press Save.
+- **In the GUI:** Settings has a "Startup" section with a "Start the daemon when I log in" checkbox that does the same as `--install-autostart` / `--uninstall-autostart` when you press Save, and a "Create shortcuts…" button (see Shortcuts) that asks for a folder and makes them at once.
 - `python main.py --daemon-detached` starts the daemon in the background and returns; it does nothing when one is already running (the daemon allows only one instance).
 
 ## Shortcuts (the GHAADD name and icon)
@@ -400,6 +400,7 @@ python main.py --remove-shortcuts
 
 - **Windows:** creates two shortcuts without a console window: **GHAADD** (opens the GUI, with the GHAADD icon) and **GHAADD daemon** (starts the polling daemon in the background and does nothing if one is running). The GHAADD shortcut also carries the app's Windows identity (`GHAADD.GUI`, the one the GUI sets for itself), which is what lets Windows show "GHAADD" with its own icon in the taskbar and the notification settings instead of "Python". Put them in the Start menu (the default) or in any folder, for example a launcher folder you start things from after a reboot.
 - **Linux:** creates `~/.local/share/applications/ghaadd.desktop`, so GHAADD appears in the application menu with its icon.
+- **In the GUI:** the Settings dialog's "Create shortcuts…" button opens a folder picker (starting in the Start menu folder) and makes the shortcuts there.
 - Notifications need the optional tray packages (see System tray); the shortcut only sets the name and icon they appear under.
 
 ## Download Path Routing

@@ -73,6 +73,22 @@ def windows_specs(directory: str, python: Optional[str] = None) -> list[Shortcut
     ]
 
 
+def is_supported(platform: Optional[str] = None) -> bool:
+    """True where shortcuts can be made (Windows, Linux); no probing."""
+    system = platform if platform is not None else sys.platform
+    return system == "win32" or system.startswith("linux")
+
+
+def default_folder(platform: Optional[str] = None, home: Optional[str] = None) -> str:
+    """Where the shortcuts go unless the user picks another folder (the Start menu / application menu)."""
+    system = platform if platform is not None else sys.platform
+    if system == "win32":
+        return start_menu_folder()
+    if system.startswith("linux"):
+        return _applications_folder(home)
+    return ""
+
+
 # ----- PowerShell script (Windows) -----
 
 _CSHARP = """\

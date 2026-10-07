@@ -86,6 +86,10 @@ STATUS_LEGEND_TITLE = "Status"
 
 # --- Buttons and small controls.
 CONTROL_HELP = {
+    "create_shortcuts": "Make GHAADD shortcuts in a folder you choose.\n"
+                        "Windows: \"GHAADD\" (opens the window) and \"GHAADD daemon\" (starts the daemon in the background);\n"
+                        "the first one makes Windows name the notifications GHAADD. The Start menu folder is suggested.\n"
+                        "Linux: an application-menu launcher (\"ghaadd.desktop\"). It happens at once, not on Save.",
     "autostart": "Start the polling daemon by itself when you log in, with no window.\n"
                  "Windows: a scheduled task that also restarts it after a failure (or the Run key if the task cannot be made).\n"
                  "Linux: a systemd user unit. macOS: a launchd agent.\n"

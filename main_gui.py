@@ -36,6 +36,7 @@ from modules import (
     gui_tray,
     log_tail,
     mapping_manager,
+    shortcuts,
     status_tabs,
 )
 from modules.app_info import APP_NAME, APP_USER_MODEL_ID, __version__
@@ -1611,16 +1612,24 @@ class SettingsDialog(tk.Toplevel):
         self.autostart_var = tk.BooleanVar(value=False)
         self._autostart_answer: list[autostart.AutostartStatus] = []
         self._autostart_check: Optional[ttk.Checkbutton] = None
-        if autostart.is_supported():
+        self._shortcuts_answer: list[Any] = []
+        self._shortcuts_button: Optional[ttk.Button] = None
+        if autostart.is_supported() or shortcuts.is_supported():
             startup = ttk.LabelFrame(body, text="Startup", padding=10)
             startup.grid(row=3, column=0, sticky="ew", pady=(10, 0))
-            self._autostart_check = ttk.Checkbutton(
-                startup, text="Start the daemon when I log in", variable=self.autostart_var, state="disabled"
-            )
-            self._autostart_check.grid(row=0, column=0, sticky="w")
-            attach_tooltip(self._autostart_check, gui_tooltips.CONTROL_HELP["autostart"])
-            threading.Thread(target=self._probe_autostart, daemon=True).start()
-            self.after(100, self._apply_autostart_answer)
+            startup.columnconfigure(0, weight=1)
+            if autostart.is_supported():
+                self._autostart_check = ttk.Checkbutton(
+                    startup, text="Start the daemon when I log in", variable=self.autostart_var, state="disabled"
+                )
+                self._autostart_check.grid(row=0, column=0, sticky="w")
+                attach_tooltip(self._autostart_check, gui_tooltips.CONTROL_HELP["autostart"])
+                threading.Thread(target=self._probe_autostart, daemon=True).start()
+                self.after(100, self._apply_autostart_answer)
+            if shortcuts.is_supported():
+                self._shortcuts_button = ttk.Button(startup, text="Create shortcuts…", command=self._create_shortcuts)
+                self._shortcuts_button.grid(row=0, column=1, sticky="e")
+                attach_tooltip(self._shortcuts_button, gui_tooltips.CONTROL_HELP["create_shortcuts"])
 
         ttk.Label(
             body,
@@ -1639,6 +1648,46 @@ class SettingsDialog(tk.Toplevel):
         self.bind("<Escape>", lambda _event: self.destroy())
         center_dialog(self, master)
         self.grab_set()
+
+    def _create_shortcuts(self) -> None:
+        """Ask for a folder, then make the shortcuts there (in a thread: PowerShell takes a moment)."""
+        start = shortcuts.default_folder()
+        folder = filedialog.askdirectory(
+            parent=self,
+            initialdir=start if os.path.isdir(start) else None,
+            title="Folder for the GHAADD shortcuts",
+            mustexist=False,
+        )
+        if not folder or self._shortcuts_button is None:
+            return
+        folder = os.path.normpath(folder)
+        self._shortcuts_button.configure(state="disabled")
+        self.message.configure(text="Creating the shortcuts…", foreground=COLOR_MUTED)
+        self._shortcuts_answer.clear()
+        threading.Thread(target=self._make_shortcuts, args=(folder,), daemon=True).start()
+        self.after(100, self._apply_shortcuts_answer)
+
+    def _make_shortcuts(self, folder: str) -> None:
+        try:
+            self._shortcuts_answer.append(shortcuts.create_shortcuts(folder))
+        except Exception as exc:  # report it instead of losing it in the thread
+            self._shortcuts_answer.append(autostart.AutostartResult(False, f"Could not create the shortcuts: {exc}"))
+
+    def _apply_shortcuts_answer(self) -> None:
+        try:
+            if not self._shortcuts_answer:
+                self.after(100, self._apply_shortcuts_answer)
+                return
+            result = self._shortcuts_answer[0]
+            if self._shortcuts_button is not None:
+                self._shortcuts_button.configure(state="normal")
+            self.message.configure(text="")
+            if result.ok:
+                messagebox.showinfo("Shortcuts", result.message, parent=self)
+            else:
+                messagebox.showerror("Shortcuts", result.message, parent=self)
+        except tk.TclError:  # the dialog was closed meanwhile
+            pass
 
     def _probe_autostart(self) -> None:
         try:

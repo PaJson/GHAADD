@@ -106,6 +106,23 @@ class LinuxTests(unittest.TestCase):
         self.assertFalse(shortcuts.remove_shortcuts(platform="darwin").ok)
 
 
+class SettingsDialogSupportTests(unittest.TestCase):
+    def test_which_systems_can_make_shortcuts(self) -> None:
+        for system in ("win32", "linux", "linux2"):
+            self.assertTrue(shortcuts.is_supported(system), system)
+        for system in ("darwin", "freebsd13"):
+            self.assertFalse(shortcuts.is_supported(system), system)
+
+    def test_the_folder_the_picker_starts_in(self) -> None:
+        with mock.patch.dict(os.environ, {"APPDATA": "C:\\Users\\me\\AppData\\Roaming"}):
+            self.assertTrue(shortcuts.default_folder("win32").endswith(os.path.join("Start Menu", "Programs")))
+        self.assertEqual(
+            shortcuts.default_folder("linux", home="/home/me"),
+            os.path.join("/home/me", ".local", "share", "applications"),
+        )
+        self.assertEqual(shortcuts.default_folder("darwin"), "")
+
+
 class CommandLineTests(unittest.TestCase):
     def test_the_flags(self) -> None:
         parsed = cli_commands.parse_cli_args(["--create-shortcuts", "--shortcut-dir", "X"], "x")
