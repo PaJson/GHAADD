@@ -2432,6 +2432,14 @@ class MainWindow(tk.Tk):
                 for action in self._tray.pending_actions():
                     if action == gui_tray.ACTION_SHOW:
                         self._show_from_tray()
+                    elif action == gui_tray.ACTION_TOGGLE:
+                        if self._window_hidden():
+                            self._show_from_tray()
+                        else:
+                            self.withdraw()  # gone from the taskbar too; the tray icon brings it back
+                    elif action == gui_tray.ACTION_START:
+                        if not self._snapshot.running:
+                            self._on_start()
                     elif action == gui_tray.ACTION_POLL:
                         self._on_poll_now()
                     elif action == gui_tray.ACTION_PAUSE:
@@ -2441,7 +2449,19 @@ class MainWindow(tk.Tk):
                         return
         finally:
             if self._tray is not None:
+                self._sync_tray_menu()
                 self._tray_job = self.after(250, self._poll_tray)
+
+    def _sync_tray_menu(self) -> None:
+        """Keep the tray menu in step with the window (open/hidden) and the daemon (running/paused)."""
+        if self._tray_active():
+            try:
+                visible = not self._window_hidden()
+            except tk.TclError:
+                return
+            self._tray.set_menu_state(  # type: ignore[union-attr]
+                gui_tray.MenuState(visible, bool(self._snapshot.running), bool(self._snapshot.paused))
+            )
 
     def _update_tray_icon(self) -> None:
         if not self._tray_active():
@@ -2452,6 +2472,7 @@ class MainWindow(tk.Tk):
         state = gui_tray.icon_state(self._snapshot.running, self._snapshot.paused)
         attention = gui_tray.needs_attention(unread, unmapped, self._failed_unseen)
         self._tray.update(state, attention, gui_tray.tooltip_text(APP_NAME, state, unread, unmapped))  # type: ignore[union-attr]
+        self._sync_tray_menu()
 
     def _send_notice(self, notice: Optional[gui_tray.Notice]) -> None:
         """A tray notification, only while nobody is looking at the window."""

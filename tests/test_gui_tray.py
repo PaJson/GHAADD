@@ -289,5 +289,31 @@ class ToastTests(unittest.TestCase):
         self.assertEqual(shown, [])
 
 
+class MenuStateTests(unittest.TestCase):
+    def test_nothing_to_poll_or_pause_without_a_daemon(self) -> None:
+        state = gui_tray.MenuState(window_visible=True, daemon_running=False, daemon_paused=False)
+        self.assertTrue(state.can_start)
+        self.assertFalse(state.can_poll)
+        self.assertFalse(state.can_pause)
+
+    def test_a_running_daemon_can_be_polled_and_paused(self) -> None:
+        state = gui_tray.MenuState(True, True, False)
+        self.assertFalse(state.can_start)
+        self.assertTrue(state.can_poll)
+        self.assertTrue(state.can_pause)
+
+    def test_a_paused_daemon_can_be_resumed_but_not_polled(self) -> None:
+        state = gui_tray.MenuState(True, True, True)
+        self.assertFalse(state.can_poll)
+        self.assertTrue(state.can_pause)
+
+    def test_the_first_entry_follows_the_window(self) -> None:
+        self.assertEqual(gui_tray.toggle_label("GHAADD", True), "Hide GHAADD")
+        self.assertEqual(gui_tray.toggle_label("GHAADD", False), "Show GHAADD")
+
+    def test_setting_the_state_without_an_icon_is_harmless(self) -> None:
+        gui_tray.TrayIcon("GHAADD", lambda: "Pause").set_menu_state(gui_tray.MenuState(False, True, False))
+
+
 if __name__ == "__main__":
     unittest.main()

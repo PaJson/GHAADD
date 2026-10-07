@@ -31,6 +31,8 @@ STATE_COLORS = {
 ATTENTION_COLOR = "#d32f2f"  # the red dot: something unread needs a look
 
 ACTION_SHOW = "show"
+ACTION_TOGGLE = "toggle"  # show the window if it is hidden, hide it if it is open
+ACTION_START = "start"
 ACTION_POLL = "poll"
 ACTION_PAUSE = "pause"
 ACTION_QUIT = "quit"
@@ -256,6 +258,34 @@ def send_windows_toast(app_id: str, notice: "Notice", runner: Any = None) -> boo
         return False
 
 
+# ----- the menu follows the real state -----
+
+
+@dataclass(frozen=True)
+class MenuState:
+    """What the tray menu offers right now."""
+
+    window_visible: bool
+    daemon_running: bool
+    daemon_paused: bool
+
+    @property
+    def can_start(self) -> bool:
+        return not self.daemon_running
+
+    @property
+    def can_poll(self) -> bool:
+        return self.daemon_running and not self.daemon_paused
+
+    @property
+    def can_pause(self) -> bool:
+        return self.daemon_running  # also while paused: the entry then reads "Resume polling"
+
+
+def toggle_label(app_name: str, window_visible: bool) -> str:
+    return f"Hide {app_name}" if window_visible else f"Show {app_name}"
+
+
 # ----- the pystray adapter -----
 
 
@@ -276,6 +306,8 @@ class TrayIcon:
         self._actions: "queue.SimpleQueue[str]" = queue.SimpleQueue()
         self._icon: Any = None
         self._shown: tuple[str, bool, str] = ("", False, "")  # (state, attention, tooltip) last given to the system
+        # Written by the GUI thread, read by the menu callbacks (tray thread): plain values, never Tk objects.
+        self._menu_state = MenuState(window_visible=True, daemon_running=False, daemon_paused=False)
 
     def start(self) -> bool:
         """Show the icon. False when the system has no usable tray (the GUI then works without it)."""
@@ -283,9 +315,22 @@ class TrayIcon:
             import pystray
 
             menu = pystray.Menu(
-                pystray.MenuItem(f"Show {self._app_name}", lambda *_: self._actions.put(ACTION_SHOW), default=True),
-                pystray.MenuItem("Poll now", lambda *_: self._actions.put(ACTION_POLL)),
-                pystray.MenuItem(lambda _item: self._paused_label(), lambda *_: self._actions.put(ACTION_PAUSE)),
+                pystray.MenuItem(
+                    lambda _item: toggle_label(self._app_name, self._menu_state.window_visible),
+                    lambda *_: self._actions.put(ACTION_TOGGLE),
+                    default=True,
+                ),
+                pystray.MenuItem(
+                    "Start daemon", lambda *_: self._actions.put(ACTION_START), visible=lambda _item: self._menu_state.can_start
+                ),
+                pystray.MenuItem(
+                    "Poll now", lambda *_: self._actions.put(ACTION_POLL), enabled=lambda _item: self._menu_state.can_poll
+                ),
+                pystray.MenuItem(
+                    lambda _item: self._paused_label(),
+                    lambda *_: self._actions.put(ACTION_PAUSE),
+                    enabled=lambda _item: self._menu_state.can_pause,
+                ),
                 pystray.Menu.SEPARATOR,
                 pystray.MenuItem(f"Quit {self._app_name} window", lambda *_: self._actions.put(ACTION_QUIT)),
             )
@@ -309,6 +354,16 @@ class TrayIcon:
                 actions.append(self._actions.get_nowait())
             except queue.Empty:
                 return actions
+
+    def set_menu_state(self, state: MenuState) -> None:
+        """Tell the menu what is true now (cheap; the system menu is only refreshed when something differs)."""
+        if self._icon is None or state == self._menu_state:
+            return
+        self._menu_state = state
+        try:
+            self._icon.update_menu()
+        except Exception:
+            pass
 
     def update(self, state: str, attention: bool, tooltip: str) -> None:
         """Change the picture and hover text; the system is only touched when something differs."""
