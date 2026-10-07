@@ -39,6 +39,7 @@ from modules import (
     mapping_manager,
     shortcuts,
     status_tabs,
+    warning_types,
 )
 from modules.app_info import APP_NAME, APP_USER_MODEL_ID, __version__
 
@@ -1616,6 +1617,9 @@ class SettingsDialog(tk.Toplevel):
         body.columnconfigure((0, 1), weight=1, uniform="settings")
 
         current = gui_data.load_settings_form()
+        # Warning types without a notification: a list, edited in its own window rather than in a field.
+        self._silenced: set[str] = set(current.pop("silenced_warning_types", []))
+        self._initial_silenced = frozenset(self._silenced)
         self._initial_form = dict(current)  # to tell whether the form has unsaved changes
         self.vars: dict[str, tk.Variable] = {
             key: tk.BooleanVar(value=value) if isinstance(value, bool) else tk.StringVar(value=value)
@@ -1670,6 +1674,15 @@ class SettingsDialog(tk.Toplevel):
         row(logging_box, 1, "Max log file (MB, 0 = no rollover)", spin(logging_box, "log_max_mb", 0, 1000))
         row(logging_box, 2, "Keep log files (0 = all)", spin(logging_box, "log_keep", 0, 9999))
 
+        warnings_box = ttk.LabelFrame(right, text="Warning notifications", padding=10)
+        warnings_box.grid(row=3, column=0, sticky="ew", pady=(10, 0))
+        warnings_box.columnconfigure(0, weight=1)
+        self._warnings_summary = ttk.Label(warnings_box, text=warning_types.summary(self._silenced))
+        self._warnings_summary.grid(row=0, column=0, sticky="w")
+        self._warnings_button = ttk.Button(warnings_box, text="Choose warnings…", command=self._choose_warnings)
+        self._warnings_button.grid(row=0, column=1, sticky="e")
+        attach_tooltip(self._warnings_button, gui_tooltips.CONTROL_HELP["choose_warnings"])
+
         # Autostart lives in the operating system (not in config.json) and is applied on Save. Asking the
         # system (schtasks, systemctl, ...) can take a moment, so it happens in a thread and the box stays
         # disabled until the answer is in; the dialog itself never waits for it.
@@ -1704,8 +1717,10 @@ class SettingsDialog(tk.Toplevel):
             for child in tray_box.winfo_children():
                 if isinstance(child, ttk.Checkbutton):
                     child.state(["disabled"])  # the values are kept as they are; there is just nothing to switch
+            self._warnings_button.state(["disabled"])
         else:
             self.vars["tray"].trace_add("write", lambda *_: self._enable_tray_checks())
+            self.vars["notifications"].trace_add("write", lambda *_: self._enable_tray_checks())
             self._enable_tray_checks()
 
         startup = ttk.LabelFrame(right, text="Startup", padding=10)
@@ -1774,10 +1789,23 @@ class SettingsDialog(tk.Toplevel):
         state = ["!disabled"] if self.vars["tray"].get() else ["disabled"]
         for check in self._tray_checks:
             check.state(state)
+        # Choosing which warnings notify only matters while there are notifications at all.
+        notifying = self.vars["tray"].get() and self.vars["notifications"].get()
+        self._warnings_button.state(["!disabled"] if notifying else ["disabled"])
+
+    def _choose_warnings(self) -> None:
+        """Open the checklist of warning types; the result is kept until Save."""
+        WarningTypesDialog(self, self._silenced, self._warning_types_chosen)
+
+    def _warning_types_chosen(self, silenced: set[str]) -> None:
+        self._silenced = set(silenced)
+        self._warnings_summary.configure(text=warning_types.summary(self._silenced))
 
     def _form_changed(self) -> bool:
         """True when something in the form differs from what config.json had when the dialog opened."""
         if any(str(var.get()) != str(self._initial_form.get(key)) for key, var in self.vars.items()):
+            return True
+        if frozenset(self._silenced) != self._initial_silenced:
             return True
         return self._autostart_before is not None and bool(self.autostart_var.get()) != self._autostart_before
 
@@ -1876,7 +1904,8 @@ class SettingsDialog(tk.Toplevel):
             self.message.configure(text="\n".join(result.errors))
             return
         try:
-            changed = config_manager.set_config_values(result.changes)
+            changes = {**result.changes, "gui.silenced_warning_types": sorted(self._silenced)}
+            changed = config_manager.set_config_values(changes)
             changed = config_manager.add_missing_defaults() or changed  # also lists the settings without a field here
         except (config_manager.ConfigLockTimeout, config_manager.ConfigUnreadableError, OSError) as exc:
             self.message.configure(text=describe_error(exc))
@@ -1889,6 +1918,64 @@ class SettingsDialog(tk.Toplevel):
             text += " " + ("Start at login is now " + ("on." if self.autostart_var.get() else "off.") if change.ok else f"Start at login could not be changed: {change.message}")
         self.destroy()
         self._on_saved(text)
+
+
+class WarningTypesDialog(tk.Toplevel):
+    """A checklist of the warning types: ticked = may pop up a notification (the Warnings tab shows all of them)."""
+
+    def __init__(self, master: tk.Misc, silenced: set[str], on_chosen: Callable[[set[str]], None]) -> None:
+        super().__init__(master)
+        self.title("Warning notifications")
+        self.resizable(False, False)
+        self.transient(master)  # type: ignore[arg-type]
+        self._on_chosen = on_chosen
+        self._unknown = {code for code in silenced if code not in warning_types.KNOWN_TYPES}  # kept as they are
+
+        body = ttk.Frame(self, padding=14)
+        body.pack(fill="both", expand=True)
+        ttk.Label(
+            body,
+            text="Tick the kinds of warning that may pop up a notification. The Warnings tab and its unread counter "
+            "always show every warning.",
+            foreground=COLOR_MUTED,
+            wraplength=700,
+        ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 8))
+        self.vars: dict[str, tk.BooleanVar] = {}
+        for index, (code, meaning) in enumerate(warning_types.WARNING_TYPES, start=1):
+            self.vars[code] = tk.BooleanVar(value=code not in silenced)
+            ttk.Checkbutton(body, text=code, variable=self.vars[code]).grid(
+                row=index, column=0, sticky="w", pady=2, padx=(0, 16)
+            )
+            ttk.Label(body, text=meaning, foreground=COLOR_MUTED, wraplength=520).grid(
+                row=index, column=1, sticky="w", pady=2
+            )
+
+        buttons = ttk.Frame(body)
+        buttons.grid(row=len(warning_types.WARNING_TYPES) + 1, column=0, columnspan=2, sticky="ew", pady=(12, 0))
+        buttons.columnconfigure(3, weight=1)
+        ttk.Button(buttons, text="All", command=lambda: self._set_all(True)).grid(row=0, column=0, padx=(0, 6))
+        ttk.Button(buttons, text="None", command=lambda: self._set_all(False)).grid(row=0, column=1, padx=(0, 6))
+        ttk.Button(buttons, text="Defaults", command=self._set_defaults).grid(row=0, column=2)
+        ttk.Button(buttons, text="Cancel", command=self.destroy).grid(row=0, column=4, padx=(0, 6))
+        ok_button = ttk.Button(buttons, text="OK", command=self._ok)
+        ok_button.grid(row=0, column=5)
+
+        self.bind("<Escape>", lambda _event: self.destroy())
+        center_dialog(self, master, focus=ok_button)
+        self.grab_set()
+
+    def _set_all(self, value: bool) -> None:
+        for var in self.vars.values():
+            var.set(value)
+
+    def _set_defaults(self) -> None:
+        for code, var in self.vars.items():
+            var.set(code not in warning_types.DEFAULT_SILENCED)
+
+    def _ok(self) -> None:
+        silenced = {code for code, var in self.vars.items() if not var.get()} | self._unknown
+        self.destroy()
+        self._on_chosen(silenced)
 
 
 class DoctorDialog(tk.Toplevel):
@@ -2038,6 +2125,7 @@ class MainWindow(tk.Tk):
         # Looks for a "come forward" note from a second start of the GUI (see gui_instance).
         self._instance_job: Optional[str] = self.after(500, self._poll_instance)
         self._notifications = config_manager.get_gui_notifications_enabled(config)
+        self._silenced_warning_types = set(config_manager.get_gui_silenced_warning_types(config))
         self._minimize_to_tray = config_manager.get_gui_minimize_to_tray(config)
         self._close_to_tray = config_manager.get_gui_close_to_tray(config)
         self._notified_warning_id: Optional[int] = None  # newest warning already announced (None = not looked yet)
@@ -2064,6 +2152,17 @@ class MainWindow(tk.Tk):
 
         self.status_bar = ttk.Label(self.footer, text=DEFAULT_STATUS_TEXT, anchor="w", padding=(10, 3))
         self.status_bar.grid(row=0, column=0, sticky="ew")
+        # The queue figures sit in the middle of the footer, whatever the messages on the left say.
+        self.queue_label = ttk.Label(self.footer, text="", foreground=COLOR_MUTED)
+        self.queue_label.place(relx=0.5, rely=0.5, anchor="center")
+        # Its hover text changes with what it shows (the queue figures, or the job in progress).
+        self._queue_tip = Tooltip(self.queue_label)
+        self._queue_tip_text = gui_tooltips.CONTROL_HELP["queue_counts"]
+        self.queue_label.bind(
+            "<Enter>", lambda event: self._queue_tip.schedule(self._queue_tip_text, event.x_root, event.y_root - 70)
+        )
+        self.queue_label.bind("<Leave>", lambda _event: self._queue_tip.hide())
+        self.queue_label.bind("<ButtonPress>", lambda _event: self._queue_tip.hide())
         self.footer.pack(fill="x", side="bottom")
 
         self.notebook = ttk.Notebook(self)
@@ -2380,6 +2479,7 @@ class MainWindow(tk.Tk):
                 gui_daemon.build_view(self._snapshot, now, self._starting_since, self._stopping_since)
             )
             self.log_tab.set_daemon_state(self._snapshot.running, self._snapshot.log_on)
+            self._update_queue_label(now)
             self._update_tray_icon()
         except Exception as exc:  # a status hiccup must never kill the GUI loop
             self.control_bar.status_label.configure(text=f"Daemon status unavailable: {exc}")
@@ -2387,6 +2487,25 @@ class MainWindow(tk.Tk):
             if self._daemon_job is not None:
                 self.after_cancel(self._daemon_job)
             self._daemon_job = self.after(DAEMON_REFRESH_INTERVAL_MS, self._update_daemon_view)
+
+    def _update_queue_label(self, now: float) -> None:
+        """The footer's middle: the job in progress ("Processing 3 of 36: ..."), else the queue figures.
+
+        The figures cost one query per change of state.db; the due count follows the clock.
+        """
+        progress = self._snapshot.progress if self._snapshot.running else None
+        if progress is not None:
+            text = gui_daemon.progress_summary(progress)
+            self._queue_tip_text = gui_daemon.progress_detail(progress, now)
+        else:
+            try:
+                counts = gui_data.load_queue_counts(now)
+            except Exception:  # a locked database just leaves the last text
+                return
+            text = gui_data.queue_text(counts)
+            self._queue_tip_text = gui_data.queue_tip(counts, gui_tooltips.CONTROL_HELP["queue_counts"])
+        if text != self.queue_label.cget("text"):
+            self.queue_label.configure(text=text)
 
     def _note_unexpected_exit(self, now: float) -> None:
         """Tell the user when a daemon this GUI just started disappears without Stop/Restart being used."""
@@ -2511,6 +2630,10 @@ class MainWindow(tk.Tk):
 
     def _after_settings_saved(self, message: str) -> None:
         self._refresh_doctor_attention()  # saving the Settings creates config.json
+        try:  # the choice of warnings that notify applies at once
+            self._silenced_warning_types = set(config_manager.get_gui_silenced_warning_types())
+        except Exception:
+            pass
         self.set_status(message)
         self.mappings_tab.refresh()  # the default recheck shown in the editor may have changed
         self._update_daemon_view()  # shows the Restart button right away when a running daemon is affected
@@ -2646,7 +2769,10 @@ class MainWindow(tk.Tk):
         if self._notified_warning_id is None:
             fresh = []  # what was already there at start is not news
         else:
-            fresh = [row for row in warnings if row.id > self._notified_warning_id]
+            fresh = [
+                row for row in warnings
+                if row.id > self._notified_warning_id and warning_types.wants_notice(row.kind, self._silenced_warning_types)
+            ]
         if warnings:
             self._notified_warning_id = max(row.id for row in warnings)
         elif self._notified_warning_id is None:

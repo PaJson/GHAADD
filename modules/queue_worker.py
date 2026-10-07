@@ -4,7 +4,7 @@ import time
 import os
 
 from modules.config_manager import get_folder_settings, get_max_emails_to_process, get_recheck_intervals_minutes
-from modules.daemon_lock import publishing_current_job
+from modules.daemon_lock import clear_queue_progress, publish_queue_progress, publishing_current_job
 from modules.dry_run_mode import is_dry_run
 from modules.db_manager import (
     enqueue_job,
@@ -1062,6 +1062,23 @@ def process_queue_once(
     job_filter_ids: Optional[list[int]] = None,
     should_pause: Optional[Callable[[], bool]] = None,
 ) -> QueueCycleStats:
+    """Process due queue rows (see `_process_queue_once`), publishing "job 3 of 36" for the GUI meanwhile.
+
+    The progress is cleared however the cycle ends (finished, paused, or an exception).
+    """
+    try:
+        return _process_queue_once(connection, github_token, limit, job_filter_ids, should_pause)
+    finally:
+        clear_queue_progress()
+
+
+def _process_queue_once(
+    connection,
+    github_token: Optional[str],
+    limit: Optional[int] = None,
+    job_filter_ids: Optional[list[int]] = None,
+    should_pause: Optional[Callable[[], bool]] = None,
+) -> QueueCycleStats:
     """Process due queue rows and re-check each job using configured intervals.
 
     should_pause is checked before each job; when it returns True the cycle
@@ -1133,6 +1150,7 @@ def process_queue_once(
             f"({attempt_schedule}, "
             f"expected_commit={expected_commit or 'unknown'})"
         )
+        publish_queue_progress(index, len(due_jobs), repo, tag, release_type, expected_commit)
 
         current_commit, current_commit_reason = get_current_commit_hash(
             repo,

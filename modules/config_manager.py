@@ -11,6 +11,7 @@ from typing import Any, Callable, Dict, Optional, TypedDict, TypeVar
 from filelock import FileLock, Timeout
 
 from modules.dry_run_mode import is_dry_run
+from modules.warning_types import DEFAULT_SILENCED as DEFAULT_SILENCED_WARNING_TYPES
 
 DEFAULT_ENABLE_POLLING = False
 DEFAULT_POLL_INTERVAL_SECONDS = 300
@@ -279,6 +280,7 @@ def _hand_edited_defaults():
         ("gui.close_to_tray", False),
         ("gui.start_minimized", False),
         ("gui.start_daemon", False),
+        ("gui.silenced_warning_types", list(DEFAULT_SILENCED_WARNING_TYPES)),
     ]
 
 
@@ -445,6 +447,18 @@ def get_gui_notifications_enabled(config=None):
     """Show tray notifications for new warnings, failed jobs, unmapped repositories and a stopped daemon (gui.notifications, default true)."""
     config = config if config is not None else load_config()
     return _gui_flag(config, "notifications", True)
+
+
+def get_gui_silenced_warning_types(config=None) -> list[str]:
+    """Warning types that never pop up a notification (gui.silenced_warning_types; default API and LIMIT).
+
+    The Warnings tab still shows them. A value that is not a list of strings gives the default.
+    """
+    config = config if config is not None else load_config()
+    value = _get_nested(config, "gui", "silenced_warning_types")
+    if isinstance(value, list) and all(isinstance(item, str) for item in value):
+        return sorted({item.strip().upper() for item in value if item.strip()})
+    return list(DEFAULT_SILENCED_WARNING_TYPES)
 
 
 def get_gui_start_minimized(config=None):

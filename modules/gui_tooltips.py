@@ -86,6 +86,13 @@ STATUS_LEGEND_TITLE = "Status"
 
 # --- Buttons and small controls.
 CONTROL_HELP = {
+    "queue_counts": "Jobs waiting in the queue.\n"
+                    "Due now: their check time has come, so the next poll (or Poll now) processes them. This is the "
+                    "number the daemon prints as \"Processing N due queue job(s)\".\n"
+                    "Later: scheduled re-checks of recent releases that are not due yet.",
+    "choose_warnings": "Choose which kinds of warning may pop up a notification. The Warnings tab and its unread "
+                       "counter still show every warning. By default API (a release that was replaced or removed) "
+                       "and LIMIT (which has its own notification) are silent. Applies at once after Save.",
     "poll_now": "Poll the mailbox now and process everything that is due, then restart the countdown.\n"
                 "Also works while paused (one poll, then it stays paused) and while polling is switched off.",
     "poll_one": "Poll one item: take at most one new notification and process at most one queue item "

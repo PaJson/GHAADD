@@ -71,6 +71,83 @@ _limit_cache: StatCache[frozenset[str]] = StatCache(_state_db_files, _load_limit
 _counts_cache: StatCache[dict[str, dict[str, Any]]] = StatCache(_state_db_files, _load_folder_counts, max_age=30.0)
 
 
+@dataclass(frozen=True)
+class _PendingJob:
+    next_check: float  # when this job is due
+    later_steps: tuple[float, ...]  # when the re-check steps AFTER this poll's step are due (created_at + interval)
+
+
+def _load_pending_jobs() -> list[_PendingJob]:
+    """Every pending job with the times of its remaining re-check steps, oldest check time first."""
+    connection = db_manager.open_database()
+    try:
+        rows = db_manager.get_pending_jobs(connection)
+    finally:
+        connection.close()
+    intervals_by_repo: dict[str, list[int]] = {}
+    jobs = []
+    for row in rows:
+        repo = row["repo"]
+        if repo not in intervals_by_repo:
+            intervals_by_repo[repo] = mapping_manager.get_repository_recheck_intervals_minutes(repo)
+        intervals = intervals_by_repo[repo]
+        created = float(row["created_at"])
+        # Processing a job at attempt N runs step N and schedules step N+1 at created_at + interval[N]; from attempt
+        # len(intervals) on, the processing is the last one and nothing follows.
+        later = tuple(created + minutes * 60 for minutes in intervals[int(row["attempt_count"]):])
+        jobs.append(_PendingJob(float(row["next_check_time"]), later))
+    jobs.sort(key=lambda job: job.next_check)
+    return jobs
+
+
+# One load per change of state.db (and at most 30 s old, which also picks up a changed mapping.json); what is due
+# and what is behind depends on the clock, so that is worked out per call.
+_pending_cache: StatCache[list[_PendingJob]] = StatCache(_state_db_files, _load_pending_jobs, max_age=30.0)
+
+
+@dataclass(frozen=True)
+class QueueCounts:
+    pending: int  # jobs waiting in the queue
+    due: int  # of those, the ones whose check time has come (the next poll processes every one of them, once)
+    behind: int = 0  # of the due ones: after this poll's step the next step is already past too, so they are due again
+    catch_up_polls: int = 0  # polls until no due job is behind any more (0 when nothing is due)
+
+
+def load_queue_counts(now: Optional[float] = None) -> QueueCounts:
+    """How many jobs are pending, how many are due now (what "Processing N due queue job(s)" reports) and how many lag."""
+    now = time.time() if now is None else now
+    jobs = _pending_cache.get()
+    due = [job for job in jobs if job.next_check <= now]
+    behind = sum(1 for job in due if job.later_steps and job.later_steps[0] <= now)
+    # a job with k steps already past takes k + 1 polls: one for the step it is on and one for each missed step
+    catch_up = max((sum(1 for step in job.later_steps if step <= now) + 1 for job in due), default=0)
+    return QueueCounts(pending=len(jobs), due=len(due), behind=behind, catch_up_polls=catch_up)
+
+
+def queue_text(counts: Optional[QueueCounts]) -> str:
+    """The footer's queue text; empty when the counts are unknown."""
+    if counts is None:
+        return ""
+    if counts.pending == 0:
+        return "Queue: nothing pending"
+    later = counts.pending - counts.due
+    behind = f" ({counts.behind} behind schedule)" if counts.behind else ""
+    return f"Queue: {counts.due} due now{behind}, {later} later"
+
+
+def queue_tip(counts: Optional[QueueCounts], base: str) -> str:
+    """The hover text: the general explanation (`base`), plus what "behind schedule" means right now."""
+    if counts is None or not counts.behind:
+        return base
+    polls = counts.catch_up_polls
+    return (
+        f"{base}\n\n"
+        f"{counts.behind} of the {counts.due} due jobs are behind schedule: their next re-check time has already "
+        "passed as well, so after this poll's step they are due again straight away. Every poll gives each due job "
+        f"one step, so the last of them needs {polls} poll{'s' if polls != 1 else ''} to catch up."
+    )
+
+
 def load_repo_table(now: Optional[float] = None) -> RepoTable:
     """Load rows for the Mappings table, most recently worked-on repository first."""
     now = time.time() if now is None else now
@@ -148,6 +225,7 @@ def load_settings_form() -> dict[str, Any]:
         "notifications": config_manager.get_gui_notifications_enabled(config),
         "minimize_to_tray": config_manager.get_gui_minimize_to_tray(config),
         "close_to_tray": config_manager.get_gui_close_to_tray(config),
+        "silenced_warning_types": config_manager.get_gui_silenced_warning_types(config),  # a list, not a field
     }
 
 

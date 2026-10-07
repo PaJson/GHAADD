@@ -29,6 +29,72 @@ DOT_STOPPED = "stopped"
 
 
 @dataclass(frozen=True)
+class QueueProgress:
+    """Which queue job the daemon is on: "3 of 36" and what it is."""
+
+    index: int
+    total: int
+    repo: str
+    tag: str = ""
+    release_type: str = ""
+    commit: str = ""
+    since: Optional[float] = None
+
+
+def parse_progress(raw: object) -> Optional[QueueProgress]:
+    """The status file's queue_progress as a QueueProgress; None when absent or not usable."""
+    if not isinstance(raw, dict):
+        return None
+    try:
+        index, total = int(raw["index"]), int(raw["total"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    repo = raw.get("repo")
+    if total <= 0 or not 1 <= index <= total or not isinstance(repo, str) or not repo:
+        return None
+    since = raw.get("since")
+    return QueueProgress(
+        index=index,
+        total=total,
+        repo=repo,
+        tag=str(raw.get("tag") or ""),
+        release_type=str(raw.get("release_type") or ""),
+        commit=str(raw.get("commit") or ""),
+        since=float(since) if isinstance(since, (int, float)) and not isinstance(since, bool) else None,
+    )
+
+
+def _shorten(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def progress_summary(progress: Optional[QueueProgress], tag_limit: int = 24) -> str:
+    """One line for the footer: "Processing 3 of 36: owner/repo (Release) tag @ 2bf8677"."""
+    if progress is None:
+        return ""
+    kind = f" ({progress.release_type})" if progress.release_type else ""
+    tag = f" {_shorten(progress.tag, tag_limit)}" if progress.tag else ""
+    commit = f" @ {progress.commit[:7]}" if progress.commit else ""
+    return f"Processing {progress.index} of {progress.total}: {progress.repo}{kind}{tag}{commit}"
+
+
+def progress_detail(progress: Optional[QueueProgress], now: Optional[float] = None) -> str:
+    """The full text for the hover box: nothing cut off."""
+    if progress is None:
+        return ""
+    lines = [f"Processing job {progress.index} of {progress.total} of this poll", f"Repository: {progress.repo}"]
+    if progress.release_type:
+        lines.append(f"Release type: {progress.release_type}")
+    if progress.tag:
+        lines.append(f"Tag: {progress.tag}")
+    if progress.commit:
+        lines.append(f"Commit: {progress.commit}")
+    if progress.since is not None and now is not None:
+        lines.append(f"On this job for {format_countdown(max(0.0, now - progress.since))}")
+    return "\n".join(lines)
+
+
+@dataclass(frozen=True)
 class DaemonSnapshot:
     running: bool = False
     pid: Optional[int] = None
@@ -38,6 +104,7 @@ class DaemonSnapshot:
     log_on: bool = False  # effective terminal-log state: the override, else terminal_log.enabled
     restart_needed: bool = False  # config.json settings differ from the ones the daemon started with
     polling_idle: bool = False  # polling.enabled was off when it started: it polls only on Poll now
+    progress: Optional[QueueProgress] = None  # the queue job in progress, while a cycle runs
 
 
 @dataclass(frozen=True)
@@ -148,6 +215,7 @@ class SnapshotReader:
             log_on=log_on,
             restart_needed=restart_needed,
             polling_idle=bool(status.get("polling_idle")),
+            progress=parse_progress(status.get("queue_progress")),
         )
 
 
@@ -216,6 +284,8 @@ def build_view(
 
     if snapshot.paused:
         countdown = "Polling paused"
+    elif snapshot.progress is not None:
+        countdown = ""  # the footer's middle says "Processing 3 of 36: ..." (no room for it twice)
     elif snapshot.current_repo:
         countdown = f"Processing {snapshot.current_repo}"
     elif snapshot.polling_idle:

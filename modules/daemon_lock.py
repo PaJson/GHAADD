@@ -28,6 +28,7 @@ class DaemonStatus(TypedDict):
     log_active: Optional[bool]  # whether the terminal log file is really open (None: daemon does not say)
     mapping_format: Optional[int]  # app_info.MAPPING_FORMAT the daemon understands (None: an older daemon)
     polling_idle: bool  # started with polling switched off: it only polls on "Poll now"
+    queue_progress: Optional[dict]  # {"index", "total", "repo", "tag", "release_type", "commit", "since"} while a queue cycle runs
 
 
 def get_daemon_lock_path() -> str:
@@ -128,6 +129,7 @@ def get_daemon_status() -> DaemonStatus:
             "log_active": None,
             "mapping_format": None,
             "polling_idle": False,
+            "queue_progress": None,
         }
 
     payload = _read_status_payload()
@@ -143,7 +145,31 @@ def get_daemon_status() -> DaemonStatus:
         "log_active": payload.get("log_active") if isinstance(payload.get("log_active"), bool) else None,
         "mapping_format": payload.get("mapping_format") if isinstance(payload.get("mapping_format"), int) else None,
         "polling_idle": payload.get("polling_idle") is True,
+        "queue_progress": payload.get("queue_progress") if isinstance(payload.get("queue_progress"), dict) else None,
     }
+
+
+def publish_queue_progress(
+    index: int, total: int, repo: str, tag: str, release_type: Optional[str] = None, commit: Optional[str] = None
+) -> None:
+    """Publish which queue job of the cycle is being worked on ("3 of 36" and what it is), for the GUI.
+
+    A no-op unless this process holds the daemon lock, like `publishing_current_job`.
+    """
+    if not _lock_held:
+        return
+    update_daemon_status(
+        queue_progress={
+            "index": index, "total": total, "repo": repo, "tag": tag,
+            "release_type": release_type, "commit": commit, "since": time.time(),
+        }
+    )
+
+
+def clear_queue_progress() -> None:
+    """The cycle is over (however it ended): nothing is in progress any more."""
+    if _lock_held:
+        update_daemon_status(queue_progress=None)
 
 
 @contextmanager
