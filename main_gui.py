@@ -1738,8 +1738,8 @@ class SettingsDialog(tk.Toplevel):
         startup.columnconfigure(0, weight=1)
         for index, (key, text) in enumerate(
             (
-                ("start_minimized", "Start the GUI minimized (in the tray when there is one)"),
-                ("start_daemon", "Start the daemon when the GUI starts, if it is not running"),
+                ("start_daemon", "Start the daemon when the GUI starts"),
+                ("start_minimized", "Start the GUI minimized"),
             ),
             start=1,
         ):
@@ -1748,7 +1748,10 @@ class SettingsDialog(tk.Toplevel):
             attach_tooltip(gui_check, gui_tooltips.CONTROL_HELP[key])
         if autostart.is_supported():
             self._autostart_check = ttk.Checkbutton(
-                startup, text="Start the daemon when I log in", variable=self.autostart_var, state="disabled"
+                startup,
+                text="Start the daemon at login or boot" if sys.platform.startswith("linux") else "Start the daemon when I log in",
+                variable=self.autostart_var,
+                state="disabled",
             )
             self._autostart_check.grid(row=0, column=0, sticky="w")
             attach_tooltip(self._autostart_check, gui_tooltips.CONTROL_HELP["autostart"])
@@ -2246,9 +2249,9 @@ class MainWindow(tk.Tk):
             self.after_idle(self._start_hidden)
 
     def _start_hidden(self) -> None:
-        """Hide in the tray when there is one, else minimize to the taskbar."""
+        """Do what the minimize button does: hide in the tray (tray active and minimize_to_tray on), else minimize to the taskbar."""
         try:
-            if self._tray_active():
+            if self._tray_active() and self._minimize_to_tray:
                 self.withdraw()
             else:
                 self.iconify()
@@ -2937,7 +2940,7 @@ class MainWindow(tk.Tk):
 def main() -> None:
     parser = argparse.ArgumentParser(description="GHAADD GUI")
     parser.add_argument("--theme", help="ttk theme to use (default: native Windows theme; try 'clam')")
-    parser.add_argument("--minimized", action="store_true", help="Start minimized (hidden in the tray when there is one), whatever the Settings say.")
+    parser.add_argument("--minimized", action="store_true", help="Start minimized (like the minimize button: in the tray, or on the taskbar), whatever the Settings say.")
     parser.add_argument("--start-daemon", action="store_true", help="Start the daemon when the window opens if none is running, whatever the Settings say.")
     args = parser.parse_args()
     if not gui_instance.acquire():

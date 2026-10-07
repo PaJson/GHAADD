@@ -462,7 +462,7 @@ def get_gui_silenced_warning_types(config=None) -> list[str]:
 
 
 def get_gui_start_minimized(config=None):
-    """Open the GUI minimized (hidden in the tray when there is one) instead of showing the window (gui.start_minimized, default false)."""
+    """Open the GUI minimized (as the minimize button does: in the tray, or on the taskbar) instead of showing the window (gui.start_minimized, default false)."""
     config = config if config is not None else load_config()
     return _gui_flag(config, "start_minimized", False)
 

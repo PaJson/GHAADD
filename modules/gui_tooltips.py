@@ -116,8 +116,9 @@ CONTROL_HELP = {
                         "Off by default on Linux, where many desktops show no tray icon. Applies the next time the GUI starts.",
     "close_to_tray": "The window's close button hides it in the tray instead of ending the GUI. "
                      "Use the tray menu's Quit to close it for real. Applies the next time the GUI starts.",
-    "start_minimized": "Open GHAADD hidden in the system tray (or minimized to the taskbar when there is no tray icon) "
-                       "instead of showing the window. Use the tray icon to bring it up. Applies the next time the GUI starts.",
+    "start_minimized": "Open GHAADD minimized instead of showing the window, the way the minimize button leaves it: "
+                       "hidden in the tray when \"Show the tray icon\" and \"Minimize to the tray\" are on, "
+                       "otherwise on the taskbar. Applies the next time the GUI starts.",
     "start_daemon": "When the GUI starts and no daemon is running, start it (the same as the Start button).\n"
                     "A daemon that is already running is left alone, and the GUI never stops it on close.\n"
                     "Applies the next time the GUI starts.",
@@ -132,7 +133,8 @@ CONTROL_HELP = {
                         "Linux: an application-menu launcher (\"ghaadd.desktop\"). It happens at once, not on Save.",
     "autostart": "Start the polling daemon by itself when you log in, with no window.\n"
                  "Windows: a scheduled task that also restarts it after a failure (or the Run key if the task cannot be made).\n"
-                 "Linux: a systemd user unit. macOS: a launchd agent.\n"
+                 "Linux: a systemd user unit; it starts when you log in, or already at boot if you run "
+                 "\"loginctl enable-linger $USER\" once. macOS: a launchd agent.\n"
                  "A normal Stop is respected; nothing is started until the next login.",
     "restart": "Settings changed since the daemon started.\n"
                "Click to restart it: the job in progress finishes, the daemon stops,\n"
