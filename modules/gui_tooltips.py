@@ -60,7 +60,10 @@ COLUMN_HELP = {
     "tag": "Tag of the newest release for this repository.\n(R) = Release, (P) = Pre-release.",
     "last_check": "When this repository's newest release was last worked on (a check or a download).",
     "step": "Re-check step of a new release, e.g. 2 / 5: the release is checked again at the intervals from "
-            "Settings (or this repository's own) in case files are added later.\n- = nothing is waiting.",
+            "Settings (or this repository's own) in case files are added later.\n"
+            "\"(+2)\" = two more jobs of this repository are waiting (for example older builds that are still being "
+            "re-checked); hover the cell to list them. The step and the next check shown are the first one's.\n"
+            "- = nothing is waiting.",
     "next_check": "When the next re-check is due.\n- = nothing is waiting.",
     "files": "Files held for the newest release: downloaded plus already present.\n"
              "\"8 / 16\" while some are still missing.",

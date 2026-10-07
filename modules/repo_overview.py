@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Callable, Collection, Mapping, Optional
+from typing import Any, Callable, Collection, Mapping, Optional, Sequence
 
 from modules import gui_tooltips
 
@@ -42,6 +42,8 @@ class RepoRow:
     limit_warning: bool = False  # over its limit, or a folder-limit warning is on record
     files_total: str = ""  # the newest release's file count (total_items), shown in the editor
     limit_note: str = ""  # hover text for the Limit cell ("12 of 15 allowed folders, counted ...")
+    pending_count: int = 0  # PENDING jobs of this repository (the Recheck cell reads "2 / 5 (+2)" for 3 of them)
+    pending_note: str = ""  # hover text for the Recheck cell: every pending job, when there is more than one
 
 
 def release_marker(release_type: Any) -> str:
@@ -105,6 +107,34 @@ def format_total_files(summary: Optional[Mapping[str, Any]]) -> str:
     return str(total) if total > 0 else NO_VALUE
 
 
+def format_step(attempts: Any, steps: int, pending_count: int) -> str:
+    """"2 / 5", with " (+2)" when two more jobs of the same repository are waiting too."""
+    text = f"{int(attempts or 0)} / {steps}"
+    return f"{text} (+{pending_count - 1})" if pending_count > 1 else text
+
+
+def format_pending_note(jobs: Sequence[Mapping[str, Any]], steps: int, now: float) -> str:
+    """Hover text listing every pending job (earliest check first); empty for none or a single job.
+
+    The Recheck and Next check cells describe the first job of this list; the Tag, Last check and Files cells
+    describe the newest job, which is why a row can seem to mix two.
+    """
+    if len(jobs) < 2:
+        return ""
+    lines = [
+        f"{len(jobs)} jobs of this repository are waiting. The Recheck and Next check cells show the first one; "
+        "the Tag, Last check and Files cells show the newest release."
+    ]
+    for job in jobs:
+        due = float(job.get("next_check") or 0)
+        when = f"{format_timestamp(due)} (due now)" if due <= now else format_timestamp(due)
+        lines.append(
+            f"• {format_tag(job.get('tag'), job.get('release_type')) or NO_VALUE}: "
+            f"step {int(job.get('attempts') or 0)} / {steps}, next check {when}"
+        )
+    return "\n".join(lines)
+
+
 def derive_status(
     inactive: bool, summary: Optional[Mapping[str, Any]], now: float, running: bool = False
 ) -> str:
@@ -150,8 +180,11 @@ def build_rows(
         status = derive_status(inactive, summary, now, running=repo.lower() == running_key)
 
         pending_check = summary.get("pending_next_check") if summary else None
+        steps = intervals_for(entry)
+        pending_count = int(summary.get("pending_count") or 0) if summary else 0
+        pending_jobs = summary.get("pending_jobs") or [] if summary else []
         if summary and pending_check is not None:
-            step = f"{int(summary.get('pending_attempts') or 0)} / {intervals_for(entry)}"
+            step = format_step(summary.get("pending_attempts"), steps, pending_count)
         else:
             step = NO_VALUE
 
@@ -176,6 +209,8 @@ def build_rows(
                 last_activity=float(summary.get("last_activity") or 0) if summary else 0.0,
                 limit_warning=over or repo.lower() in limit_warned,
                 limit_note=limit_note,
+                pending_count=pending_count,
+                pending_note=format_pending_note(pending_jobs, steps, now),
             )
         )
 

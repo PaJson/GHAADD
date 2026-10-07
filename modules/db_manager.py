@@ -745,6 +745,8 @@ def get_repo_job_summaries(connection):
             "latest_total": 0,
             "pending_next_check": None,
             "pending_attempts": 0,
+            "pending_count": 0,  # how many PENDING jobs the repo has (several builds/releases can wait at once)
+            "pending_jobs": [],  # those jobs, earliest check time first: {"tag", "release_type", "attempts", "next_check"}
         }
 
     latest_rows = connection.execute(
@@ -768,7 +770,7 @@ def get_repo_job_summaries(connection):
 
     pending_rows = connection.execute(
         """
-        SELECT repo, next_check_time, attempt_count
+        SELECT repo, tag, release_type, next_check_time, attempt_count
         FROM job_queue
         WHERE status = 'PENDING'
         ORDER BY next_check_time DESC, id DESC
@@ -779,6 +781,17 @@ def get_repo_job_summaries(connection):
         summary = summaries[row["repo"].lower()]
         summary["pending_next_check"] = row["next_check_time"]
         summary["pending_attempts"] = row["attempt_count"]
+        summary["pending_count"] += 1
+        summary["pending_jobs"].append(
+            {
+                "tag": row["tag"],
+                "release_type": row["release_type"],
+                "attempts": row["attempt_count"],
+                "next_check": row["next_check_time"],
+            }
+        )
+    for summary in summaries.values():
+        summary["pending_jobs"].reverse()  # earliest check time first, the one the row's Recheck cells describe
 
     return summaries
 

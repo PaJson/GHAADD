@@ -699,7 +699,8 @@ class MappingsTab(ttk.Frame):
         bold.configure(weight="bold")
         stamp = font.measure("2026-10-07 00:00") + 47  # text plus the cell's side margins (Windows 135, Linux 174)
         heading = bold.measure("Recheck") + 17
-        wanted = {"last_check": stamp, "next_check": stamp, "step": heading}
+        step = font.measure("5 / 5 (+99)") + 20  # "2 / 5 (+2)": the step plus the jobs that are waiting besides it
+        wanted = {"last_check": stamp, "next_check": stamp, "step": max(heading, step)}
         listed = {key: width for key, _title, width, _anchor in self.TABLE_COLUMNS}
         return {key: max(listed[key], width) for key, width in wanted.items()}
 
@@ -789,6 +790,9 @@ class MappingsTab(ttk.Frame):
         if key == "limit" and row.limit_note:  # what the "12 / 15" means and when it was counted
             self._tip_cell = (iid, key)
             self._tooltip.schedule(row.limit_note, event.x_root, event.y_root)
+        elif key == "step" and row.pending_note:  # several jobs of this repository are waiting: list them all
+            self._tip_cell = (iid, key)
+            self._tooltip.schedule(row.pending_note, event.x_root, event.y_root)
         elif self._cell_display(row, key) != full:  # only text that is cut off gets a tooltip
             self._tip_cell = (iid, key)
             self._tooltip.schedule(full, event.x_root, event.y_root)
