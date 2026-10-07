@@ -26,6 +26,50 @@ from modules.queue_reports import build_queue_status_options, print_queue_status
 from modules.queue_worker import process_selected_pending_jobs
 
 
+# Options that only change what another command does, and the commands they work with. Given without one of those
+# commands they would silently do nothing (and the program would carry on polling), so they are rejected instead.
+MODIFIER_COMMANDS: dict[str, tuple[str, ...]] = {
+    "json": ("queue_status", "mapping_validate", "doctor", "perf_report", "lifecycle_log", "move_complete_to_destination"),
+    "queue_all": ("queue_status",),
+    "queue_limit": ("queue_status",),
+    "queue_hours": ("queue_status",),
+    "queue_date": ("queue_status",),
+    "queue_repo_filter": ("queue_status",),
+    "queue_status_filter": ("queue_status",),
+    "queue_report": ("queue_status",),
+    "queue_report_only": ("queue_status",),
+    "queue_report_csv": ("queue_status",),
+    "lifecycle_limit": ("lifecycle_log",),
+    "lifecycle_type": ("lifecycle_log",),
+    "lifecycle_repo_filter": ("lifecycle_log",),
+    "purge_type": ("purge",),
+    "purge_status": ("purge_jobs",),
+    "purge_repository": ("purge", "purge_jobs"),
+    "purge_age": ("purge", "purge_jobs"),
+    "purge_oldest": ("purge", "purge_jobs"),
+    "autostart_mode": ("install_autostart",),
+    "task_trigger": ("install_autostart",),
+    "shortcut_dir": ("create_shortcuts", "remove_shortcuts"),
+}
+
+
+def _is_given(value: object) -> bool:
+    return value is not None and value is not False
+
+
+def find_unused_options(parsed: argparse.Namespace) -> list[str]:
+    """Messages for options that were given without a command they belong to (empty when all is well)."""
+    problems = []
+    for option, commands in MODIFIER_COMMANDS.items():
+        if not _is_given(getattr(parsed, option, None)):
+            continue
+        if any(_is_given(getattr(parsed, command, None)) for command in commands):
+            continue
+        flags = " or ".join("--" + command.replace("_", "-") for command in commands)
+        problems.append(f"--{option.replace('_', '-')} has no effect without {flags}")
+    return problems
+
+
 def parse_cli_args(args: list[str], version: str) -> argparse.Namespace:
     """Parse command-line arguments for the main entrypoint."""
     parser = argparse.ArgumentParser(
@@ -96,8 +140,8 @@ def parse_cli_args(args: list[str], version: str) -> argparse.Namespace:
 
     autostart_group = parser.add_argument_group("autostart options")
     autostart_group.add_argument("--install-autostart", action="store_true", help="Start the polling daemon automatically at login (Linux: systemd user unit; Windows: per-user Run entry).")
-    autostart_group.add_argument("--autostart-mode", choices=("auto", "task", "runkey"), default="auto", help="Windows only, with --install-autostart: auto = a Task Scheduler task that runs the daemon and restarts it after a failure, or the registry Run key if the task cannot be created (default); task = only the task; runkey = only the Run key (starts the daemon at login, no restart).")
-    autostart_group.add_argument("--task-trigger", choices=("logon", "manual"), default="logon", help="With --autostart-mode task: start at login (default) or only when you start the task yourself (schtasks /Run /TN GHAADD).")
+    autostart_group.add_argument("--autostart-mode", choices=("auto", "task", "runkey"), default=None, help="Windows only, with --install-autostart: auto = a Task Scheduler task that runs the daemon and restarts it after a failure, or the registry Run key if the task cannot be created (default); task = only the task; runkey = only the Run key (starts the daemon at login, no restart).")
+    autostart_group.add_argument("--task-trigger", choices=("logon", "manual"), default=None, help="With --autostart-mode task: start at login (default) or only when you start the task yourself (schtasks /Run /TN GHAADD).")
     autostart_group.add_argument("--uninstall-autostart", action="store_true", help="Remove the automatic start at login (a running daemon is left running).")
     autostart_group.add_argument("--autostart-status", action="store_true", help="Show whether the daemon starts automatically at login.")
     autostart_group.add_argument("--create-shortcuts", action="store_true", help="Create the GHAADD shortcuts (Windows: \"GHAADD\" for the window and \"GHAADD daemon\" in the Start menu, so notifications say GHAADD instead of Python; Linux: an application-menu launcher).")
@@ -226,7 +270,14 @@ def parse_cli_args(args: list[str], version: str) -> argparse.Namespace:
         ),
     )
 
-    return parser.parse_args(args)
+    parsed = parser.parse_args(args)
+    problems = find_unused_options(parsed)
+    if problems:
+        parser.error("; ".join(problems) + ". Nothing was started.")
+    # The two options with a default were left unset above so that "given" could be told from "not given".
+    parsed.autostart_mode = parsed.autostart_mode or "auto"
+    parsed.task_trigger = parsed.task_trigger or "logon"
+    return parsed
 
 
 def handle_cli_command(parsed_args: argparse.Namespace, run_smoke_tests: Callable[[], None]) -> bool:
