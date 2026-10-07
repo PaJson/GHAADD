@@ -373,6 +373,22 @@ Key behavior:
 - terminal_log.keep_files
 	- Number of log files to keep (default 30, including the current one). The oldest GHAADD log files (names matching YYYYMMDD_HHMMSS.log) beyond this are deleted when the polling daemon starts and after every rollover. 0 keeps everything. Never applied in --dry-run.
 
+## Starting the daemon automatically
+
+The polling daemon can start by itself when you log in, so you do not have to press Start after every restart:
+
+```bash
+python main.py --install-autostart      # set it up (and, on Linux, start it now)
+python main.py --autostart-status       # is it set up?
+python main.py --uninstall-autostart    # remove it (a running daemon is left running)
+```
+
+- **Linux:** installs a systemd *user* unit, `~/.config/systemd/user/ghaadd.service` (no root needed), and enables it. systemd restarts the daemon if it crashes, after 60 seconds; a normal stop (the GUI's Stop button or `--stop`) is respected and it stays stopped until you start it again. To have it run at boot without anyone logging in, run `loginctl enable-linger $USER` once. Logs go to the journal (`journalctl --user -u ghaadd`) and, if switched on, to the terminal log files. Inside WSL this needs systemd enabled for the distribution.
+- **Windows, Run key (the default):** adds a per-user entry (no admin rights) to the registry's Run key that runs `main.py --daemon-detached` at login. That starts the daemon without any window, the same way the GUI's Start button does. Windows does not restart it after a crash.
+- **Windows, Task Scheduler:** `python main.py --install-autostart --autostart-mode task` creates a scheduled task "GHAADD" that runs the daemon itself without a window (`pythonw.exe main.py --poll`) and restarts it after a failure (every minute, up to 999 times; a normal Stop is not restarted). It runs as you, only while you are logged in, so it needs neither admin rights nor a stored password. By default it starts at login; add `--task-trigger manual` for a task with no trigger that you start yourself with `schtasks /Run /TN GHAADD` (or from the Task Scheduler window) and that is then kept running. `--uninstall-autostart` removes the task and the Run key, whichever exist, and `--autostart-status` shows both. Errors of a window-less daemon go to `ghaadd.daemon.stderr.log`.
+- `python main.py --daemon-detached` starts the daemon in the background and returns; it does nothing when one is already running (the daemon allows only one instance).
+- macOS is not supported yet.
+
 ## Download Path Routing
 
 Destination directory resolution order (most specific first):

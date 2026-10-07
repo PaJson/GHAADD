@@ -94,6 +94,14 @@ def parse_cli_args(args: list[str], version: str) -> argparse.Namespace:
     control_group.add_argument("--log-on", action="store_true", help="Start writing terminal output to a new .log file in the running daemon (until it stops or --log-off).")
     control_group.add_argument("--log-off", action="store_true", help="Stop writing the .log file in the running daemon.")
 
+    autostart_group = parser.add_argument_group("autostart options")
+    autostart_group.add_argument("--install-autostart", action="store_true", help="Start the polling daemon automatically at login (Linux: systemd user unit; Windows: per-user Run entry).")
+    autostart_group.add_argument("--autostart-mode", choices=("runkey", "task"), default="runkey", help="Windows only, with --install-autostart: runkey = start at login through the registry Run key (default); task = a Task Scheduler task that runs the daemon and restarts it after a failure.")
+    autostart_group.add_argument("--task-trigger", choices=("logon", "manual"), default="logon", help="With --autostart-mode task: start at login (default) or only when you start the task yourself (schtasks /Run /TN GHAADD).")
+    autostart_group.add_argument("--uninstall-autostart", action="store_true", help="Remove the automatic start at login (a running daemon is left running).")
+    autostart_group.add_argument("--autostart-status", action="store_true", help="Show whether the daemon starts automatically at login.")
+    autostart_group.add_argument("--daemon-detached", action="store_true", help="Start the polling daemon in the background (no console window) and return; does nothing if one is running.")
+
     queue_group = parser.add_argument_group("queue status/reporting options")
     queue_group.add_argument("--queue-status", action="store_true", help="Print current queue counts and scheduling details.")
     queue_group.add_argument("--json", action="store_true", help="Output JSON for compatible commands (queue-status, mapping-validate, doctor).")
@@ -220,6 +228,32 @@ def parse_cli_args(args: list[str], version: str) -> argparse.Namespace:
 
 def handle_cli_command(parsed_args: argparse.Namespace, run_smoke_tests: Callable[[], None]) -> bool:
     """Execute one-shot command-line operations after parsing."""
+    if parsed_args.install_autostart or parsed_args.uninstall_autostart or parsed_args.autostart_status:
+        from modules import autostart  # imported here: only these commands need it
+
+        if parsed_args.install_autostart:
+            result = autostart.install_autostart(mode=parsed_args.autostart_mode, trigger=parsed_args.task_trigger)
+            print(result.message, file=sys.stdout if result.ok else sys.stderr)
+        elif parsed_args.uninstall_autostart:
+            result = autostart.uninstall_autostart()
+            print(result.message, file=sys.stdout if result.ok else sys.stderr)
+        else:
+            status = autostart.autostart_status()
+            print(f"Autostart: {status.detail}")
+        return True
+
+    if parsed_args.daemon_detached:
+        if is_daemon_running():
+            print("A GHAADD daemon is already running.")
+            return True
+        from modules import daemon_launcher
+
+        try:
+            print(f"Daemon started in the background (PID {daemon_launcher.start_daemon()}).")
+        except OSError as exc:
+            print(f"Could not start the daemon: {exc}", file=sys.stderr)
+        return True
+
     if parsed_args.perf_report:
         from modules import perf_report  # imported here: it pulls in the GUI data modules, no other command needs them
 

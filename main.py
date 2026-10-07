@@ -32,6 +32,25 @@ from modules.mapping_manager import ensure_mapping_file, warn_about_missing_mapp
 from modules.queue_worker import process_queue_once, run_ingest_and_queue_cycle, run_single_cycle
 
 
+def _ensure_standard_streams():
+    """Give a console-less run (pythonw.exe, e.g. from Task Scheduler) real stdout/stderr objects.
+
+    Without a console both are None, which breaks the TeeStream wrapping and any write to them. Output is
+    dropped (the terminal log mirrors it when switched on) and errors go to the same file as for a GUI-started
+    daemon, so a crash leaves a trace.
+    """
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")
+    if sys.stderr is None:
+        try:
+            from modules.daemon_launcher import get_stderr_path
+
+            sys.stderr = open(get_stderr_path(), "a", encoding="utf-8", errors="replace")
+        except OSError:
+            sys.stderr = open(os.devnull, "w", encoding="utf-8")
+
+
+_ensure_standard_streams()
 _ORIGINAL_STDOUT = sys.stdout
 _ORIGINAL_STDERR = sys.stderr
 
