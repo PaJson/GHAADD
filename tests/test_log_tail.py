@@ -1,4 +1,4 @@
-"""Tests for the live log tailer (modules/log_tail.py).
+"""Tests for the terminal log tailer (modules/log_tail.py).
 
 Run from the project root: python -m unittest discover -s tests -t .
 """

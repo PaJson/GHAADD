@@ -178,9 +178,9 @@ def collect(repeat: int = DEFAULT_REPEAT) -> dict[str, Any]:
     def log_directory() -> str:
         return os.path.expandvars(os.path.expanduser(config_manager.get_terminal_log_settings()["directory"] or ""))
 
-    add("log tail", f"open the live log (last {LOG_TAIL_LINES} lines)",
+    add("log tail", f"open the terminal log (last {LOG_TAIL_LINES} lines)",
         lambda: log_tail.LogTailer(log_directory).poll())
-    add("log tail", "live log poll, nothing new",
+    add("log tail", "terminal log poll, nothing new",
         lambda: _lazy(keep, "tailer", lambda: log_tail.LogTailer(log_directory)).poll())
 
     report = {

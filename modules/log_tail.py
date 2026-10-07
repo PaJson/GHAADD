@@ -1,4 +1,4 @@
-"""Tail the daemon's terminal log files for the GUI's Live log tab (no Tk, no threads).
+"""Tail the daemon's terminal log files for the GUI's Terminal log tab (no Tk, no threads).
 
 The GUI cannot read the daemon's stdout, so it follows the newest
 YYYYMMDD_HHMMSS[_n].log file instead (see modules/log_files.py). `LogTailer.poll()`
