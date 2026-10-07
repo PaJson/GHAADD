@@ -117,7 +117,7 @@ def systemd_unit_text(python: str, script: str, workdir: str) -> str:
         "[Service]\n"
         "Type=simple\n"
         f"WorkingDirectory={_systemd_quote(workdir)}\n"
-        f"ExecStart={_systemd_quote(python)} {_systemd_quote(script)} --poll\n"
+        f"ExecStart={_systemd_quote(python)} {_systemd_quote(script)} --daemon\n"
         "Environment=PYTHONIOENCODING=utf-8\n"
         "Restart=on-failure\n"
         "RestartSec=60\n"
@@ -369,7 +369,7 @@ def _windows_user() -> str:
 
 
 def _install_task(runner: Runner, trigger: str, python: Optional[str]) -> AutostartResult:
-    xml = task_xml(windowless_python(python), f'"{main_script_path()}" --poll', _APP_DIR, _windows_user(), trigger)
+    xml = task_xml(windowless_python(python), f'"{main_script_path()}" --daemon', _APP_DIR, _windows_user(), trigger)
     handle, path = tempfile.mkstemp(suffix=".xml", prefix="ghaadd_task_")
     try:
         with os.fdopen(handle, "w", encoding="utf-16", newline="") as file:  # schtasks wants UTF-16 with a BOM
@@ -426,7 +426,7 @@ def launchd_plist_bytes(python: str, script: str, workdir: str) -> bytes:
     return plistlib.dumps(
         {
             "Label": LAUNCHD_LABEL,
-            "ProgramArguments": [python, script, "--poll"],
+            "ProgramArguments": [python, script, "--daemon"],
             "WorkingDirectory": workdir,
             "RunAtLoad": True,
             "KeepAlive": {"SuccessfulExit": False},

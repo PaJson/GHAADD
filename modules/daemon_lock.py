@@ -27,6 +27,7 @@ class DaemonStatus(TypedDict):
     config_fingerprint: Optional[str]  # config_manager.get_config_fingerprint() the daemon started with
     log_active: Optional[bool]  # whether the terminal log file is really open (None: daemon does not say)
     mapping_format: Optional[int]  # app_info.MAPPING_FORMAT the daemon understands (None: an older daemon)
+    polling_idle: bool  # started with polling switched off: it only polls on "Poll now"
 
 
 def get_daemon_lock_path() -> str:
@@ -126,6 +127,7 @@ def get_daemon_status() -> DaemonStatus:
             "config_fingerprint": None,
             "log_active": None,
             "mapping_format": None,
+            "polling_idle": False,
         }
 
     payload = _read_status_payload()
@@ -140,6 +142,7 @@ def get_daemon_status() -> DaemonStatus:
         "config_fingerprint": payload.get("config_fingerprint") if isinstance(payload.get("config_fingerprint"), str) else None,
         "log_active": payload.get("log_active") if isinstance(payload.get("log_active"), bool) else None,
         "mapping_format": payload.get("mapping_format") if isinstance(payload.get("mapping_format"), int) else None,
+        "polling_idle": payload.get("polling_idle") is True,
     }
 
 

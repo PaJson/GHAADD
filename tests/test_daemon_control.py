@@ -27,10 +27,10 @@ class FakeTime:
         self.now += seconds
 
 
-def _state(paused=False, request=None, log_override=None, stop=None, check=None):
+def _state(paused=False, request=None, log_override=None, stop=None, check=None, single=None):
     return {
         "paused": paused, "poll_now_request": request, "log_override": log_override, "stop_request": stop,
-        "check_folders_request": check,
+        "check_folders_request": check, "single_request": single,
     }
 
 
@@ -116,6 +116,13 @@ class ControlStateTests(unittest.TestCase):
         daemon_control.set_log_override(True)
         daemon_control.reset_log_override_on_startup(self.connection)
         self.assertEqual(self.read(), _state(False, stamp, None))
+
+    def test_single_request_round_trips_and_every_request_differs(self) -> None:
+        first = daemon_control.request_single_poll()
+        second = daemon_control.request_single_poll()
+        self.assertNotEqual(first, second)
+        self.assertEqual(self.read()["single_request"], second)
+        self.assertIsNone(self.read()["poll_now_request"])  # the other requests are not touched
 
     def test_pause_writes_keep_log_override(self) -> None:
         daemon_control.set_log_override(False)
@@ -210,14 +217,86 @@ class ControlWatcherTests(unittest.TestCase):
         self.assertEqual(watcher.wait(600), "forced")
         self.assertEqual(watcher.last_handled_request, 50.0)
 
-    def test_request_during_pause_waits_for_resume(self) -> None:
+    def test_single_poll_request_ends_the_wait_as_single(self) -> None:
+        watcher, fake = self.make_watcher(lambda t: _state(single=5.0 if t >= 4 else None))
+        self.assertEqual(watcher.wait(600), "single")
+        self.assertLess(fake.now, 6)
+        self.assertFalse(watcher.forced_while_paused)
+
+    def test_single_poll_request_works_while_paused_and_idle(self) -> None:
+        watcher, fake = self.make_watcher(lambda t: _state(paused=True, single=5.0 if t >= 3 else None))
+        self.assertEqual(watcher.wait(600), "single")
+        self.assertTrue(watcher.forced_while_paused)  # the pause is not allowed to interrupt that one item
+        watcher, fake = self.make_watcher(lambda t: _state(single=5.0 if t >= 3 else None))
+        self.assertEqual(watcher.wait(0, idle=True), "single")
+
+    def test_a_single_request_is_used_up_and_one_from_before_startup_is_ignored(self) -> None:
+        watcher, _ = self.make_watcher(lambda t: _state(single=7.0))
+        self.assertEqual(watcher.wait(5), "elapsed")
+        watcher, _ = self.make_watcher(lambda t: _state(single=5.0 if t >= 1 else None))
+        self.assertEqual(watcher.wait(600), "single")
+        self.assertEqual(watcher.wait(5), "elapsed")
+
+    def test_poll_now_wins_when_both_are_requested(self) -> None:
+        watcher, _ = self.make_watcher(lambda t: _state(request=5.0 if t >= 2 else None, single=6.0 if t >= 2 else None))
+        self.assertEqual(watcher.wait(600), "forced")
+        self.assertEqual(watcher.wait(600), "single")  # the other one is still waiting its turn
+
+    def test_idle_wait_has_no_countdown_and_ends_only_with_a_poll_now(self) -> None:
+        watcher, fake = self.make_watcher(lambda t: _state(request=5.0 if t >= 5000 else None))
+        reported = []
+        self.assertEqual(watcher.wait(0, on_change=lambda paused, at: reported.append((paused, at)), idle=True), "forced")
+        self.assertGreaterEqual(fake.now, 5000)  # a normal wait(0) would have returned at once
+        self.assertEqual(reported, [(False, None)])  # no next-poll time is ever published
+
+    def test_idle_wait_ends_with_a_stop(self) -> None:
+        watcher, fake = self.make_watcher(lambda t: _state(stop=9.0 if t >= 7 else None))
+        self.assertEqual(watcher.wait(0, idle=True), "stop")
+        self.assertLess(fake.now, 9)
+
+    def test_idle_wait_honours_poll_now_while_paused(self) -> None:
+        watcher, fake = self.make_watcher(lambda t: _state(paused=True, request=5.0 if t >= 3 else None))
+        self.assertEqual(watcher.wait(0, idle=True), "forced")
+        self.assertLess(fake.now, 6)
+        self.assertTrue(watcher.forced_while_paused)
+
+    def test_request_during_pause_polls_at_once_and_the_pause_goes_on(self) -> None:
         def state(t):
-            return _state(paused=2 <= t < 20, request=5.0 if t >= 3 else None)
+            return _state(paused=2 <= t, request=5.0 if t >= 3 else None, stop=9.0 if t >= 100 else None)
 
         watcher, fake = self.make_watcher(state)
         self.assertEqual(watcher.wait(600), "forced")
-        self.assertGreaterEqual(fake.now, 20)
-        self.assertLess(fake.now, 22)
+        self.assertLess(fake.now, 6)  # not held back until a resume
+        self.assertTrue(watcher.forced_while_paused)
+        self.assertEqual(watcher.last_handled_request, 5.0)
+        # the request is used up: the next wait stays frozen (until the stop at t=100) instead of firing again
+        self.assertEqual(watcher.wait(600), "stop")
+        self.assertGreaterEqual(fake.now, 100)
+
+    def test_a_poll_made_while_paused_runs_to_the_end_but_the_next_cycle_pauses_again(self) -> None:
+        state = {"paused": True, "request": None}
+        watcher, _ = self.make_watcher(lambda t: _state(paused=state["paused"], request=state["request"]))
+        state["request"] = 5.0
+        self.assertEqual(watcher.wait(600), "forced")
+        watcher.begin_cycle()
+        self.assertFalse(watcher.checkpoint())  # the one poll the user asked for is not interrupted by the pause
+        self.assertFalse(watcher.cycle_interrupted)
+        watcher.begin_cycle()  # an ordinary cycle after it
+        self.assertTrue(watcher.checkpoint())
+        self.assertTrue(watcher.cycle_interrupted)
+
+    def test_a_poll_made_while_paused_still_obeys_stop(self) -> None:
+        state = {"stop": None}
+        watcher, _ = self.make_watcher(lambda t: _state(paused=True, request=5.0 if t >= 1 else None, stop=state["stop"]))
+        self.assertEqual(watcher.wait(600), "forced")
+        watcher.begin_cycle()
+        state["stop"] = 9.0
+        self.assertTrue(watcher.checkpoint())
+
+    def test_a_poll_made_while_not_paused_is_not_marked(self) -> None:
+        watcher, _ = self.make_watcher(lambda t: _state(request=5.0 if t >= 2 else None))
+        self.assertEqual(watcher.wait(600), "forced")
+        self.assertFalse(watcher.forced_while_paused)
 
     def test_on_change_reports_start_and_flips(self) -> None:
         calls = []

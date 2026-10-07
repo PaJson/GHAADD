@@ -22,6 +22,7 @@ SETTINGS_KEYS = {
     "dest_check": "processing.destination_check_every_n_polls",
     "default_limit": "processing.default_limit",
     "default_subfolder": "paths.default_subfolder",
+    "polling_enabled": "polling.enabled",
     "interval": "polling.interval_seconds",
     "jitter_min": "polling.jitter_min_seconds",
     "jitter_max": "polling.jitter_max_seconds",
@@ -29,6 +30,12 @@ SETTINGS_KEYS = {
     "log_enabled": "terminal_log.enabled",
     "log_max_mb": "terminal_log.max_file_mb",
     "log_keep": "terminal_log.keep_files",
+    "start_minimized": "gui.start_minimized",
+    "start_daemon": "gui.start_daemon",
+    "tray": "gui.tray",
+    "notifications": "gui.notifications",
+    "minimize_to_tray": "gui.minimize_to_tray",
+    "close_to_tray": "gui.close_to_tray",
 }
 
 MIN_POLL_INTERVAL_SECONDS = 10
@@ -253,6 +260,7 @@ def build_settings_changes(form: Mapping[str, Any]) -> FormResult:
         "dest_check": dest_check,
         "default_limit": default_limit,
         "default_subfolder": default_subfolder,
+        "polling_enabled": bool(form.get("polling_enabled", config_manager.get_polling_settings({})["enabled"])),
         "interval": interval,
         "jitter_min": jitter_min,
         "jitter_max": jitter_max,
@@ -260,6 +268,12 @@ def build_settings_changes(form: Mapping[str, Any]) -> FormResult:
         "log_enabled": bool(form.get("log_enabled", False)),
         "log_max_mb": log_max_mb,
         "log_keep": log_keep,
+        "start_minimized": bool(form.get("start_minimized", False)),
+        "start_daemon": bool(form.get("start_daemon", False)),
+        "tray": bool(form.get("tray", True)),
+        "notifications": bool(form.get("notifications", True)),
+        "minimize_to_tray": bool(form.get("minimize_to_tray", config_manager.get_gui_minimize_to_tray({}))),
+        "close_to_tray": bool(form.get("close_to_tray", False)),
     }
     result.changes = {SETTINGS_KEYS[key]: value for key, value in values.items()}
     return result

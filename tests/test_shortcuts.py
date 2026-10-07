@@ -134,7 +134,45 @@ class CommandLineTests(unittest.TestCase):
         parsed = cli_commands.parse_cli_args(["--create-shortcuts", "--shortcut-dir", "X"], "x")
         with mock.patch("modules.shortcuts.create_shortcuts", return_value=shortcuts.AutostartResult(True, "done")) as create:
             self.assertTrue(cli_commands.handle_cli_command(parsed, lambda: None))
-        create.assert_called_once_with("X")
+        create.assert_called_once_with("X", options=())
+
+    def test_the_gui_options_reach_the_shortcut(self) -> None:
+        parsed = cli_commands.parse_cli_args(["--create-shortcuts", "--shortcut-minimized", "--shortcut-start-daemon"], "x")
+        with mock.patch("modules.shortcuts.create_shortcuts", return_value=shortcuts.AutostartResult(True, "done")) as create:
+            cli_commands.handle_cli_command(parsed, lambda: None)
+        create.assert_called_once_with(None, options=("--minimized", "--start-daemon"))
+
+    def test_the_gui_options_are_rejected_without_create_shortcuts(self) -> None:
+        with mock.patch("sys.stderr"), self.assertRaises(SystemExit):
+            cli_commands.parse_cli_args(["--shortcut-minimized"], "x")
+
+
+class GuiOptionTests(unittest.TestCase):
+    def test_only_the_ticked_choices_become_options(self) -> None:
+        self.assertEqual(shortcuts.gui_options(), ())
+        self.assertEqual(shortcuts.gui_options(minimized=True), ("--minimized",))
+        self.assertEqual(shortcuts.gui_options(start_daemon=True), ("--start-daemon",))
+        self.assertEqual(shortcuts.gui_options(True, True), ("--minimized", "--start-daemon"))
+
+    def test_windows_only_the_gui_shortcut_gets_them(self) -> None:
+        gui, daemon = shortcuts.windows_specs("C:\\x", "C:\\py\\python.exe", ("--minimized", "--start-daemon"))
+        self.assertTrue(gui.arguments.endswith('main_gui.py" --minimized --start-daemon'))
+        self.assertNotIn("--minimized", daemon.arguments)
+        plain, _ = shortcuts.windows_specs("C:\\x", "C:\\py\\python.exe")
+        self.assertTrue(plain.arguments.endswith('main_gui.py"'))  # none ticked: exactly as before
+
+    def test_the_created_message_says_what_the_shortcut_does(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as folder:
+            with_options = shortcuts.create_shortcuts(folder, FakePowerShell(), platform="win32", options=("--minimized",))
+            without = shortcuts.create_shortcuts(folder, FakePowerShell(), platform="win32")
+        self.assertIn("starts with --minimized", with_options.message)
+        self.assertNotIn("starts with", without.message)
+
+    def test_linux_launcher_gets_them_on_the_exec_line(self) -> None:
+        text = shortcuts.desktop_entry_text("/usr/bin/python3", "/opt/g/main_gui.py", "", "/opt/g", ("--minimized",))
+        self.assertIn('Exec="/usr/bin/python3" "/opt/g/main_gui.py" --minimized', text)
+        plain = shortcuts.desktop_entry_text("/usr/bin/python3", "/opt/g/main_gui.py", "", "/opt/g")
+        self.assertIn('Exec="/usr/bin/python3" "/opt/g/main_gui.py"\n', plain)
 
 
 if __name__ == "__main__":

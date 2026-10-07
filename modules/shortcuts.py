@@ -58,12 +58,31 @@ def start_menu_folder() -> str:
     return os.path.join(appdata, "Microsoft", "Windows", "Start Menu", "Programs")
 
 
-def windows_specs(directory: str, python: Optional[str] = None) -> list[ShortcutSpec]:
+GUI_OPTION_MINIMIZED = "--minimized"
+GUI_OPTION_START_DAEMON = "--start-daemon"
+
+
+def gui_options(minimized: bool = False, start_daemon: bool = False) -> tuple[str, ...]:
+    """The main_gui.py options a GUI shortcut should carry for the ticked startup choices."""
+    return tuple(
+        option for option, wanted in ((GUI_OPTION_MINIMIZED, minimized), (GUI_OPTION_START_DAEMON, start_daemon)) if wanted
+    )
+
+
+def _with_options(arguments: str, options: tuple[str, ...]) -> str:
+    return " ".join([arguments, *options])
+
+
+def _options_note(options: tuple[str, ...]) -> str:
+    return f" The GUI shortcut starts with {' '.join(options)}." if options else ""
+
+
+def windows_specs(directory: str, python: Optional[str] = None, options: tuple[str, ...] = ()) -> list[ShortcutSpec]:
     interpreter = windowless_python(python)
     icon = icon_path("ico")
     return [
         ShortcutSpec(
-            os.path.join(directory, GUI_SHORTCUT), interpreter, f'"{gui_script_path()}"', _APP_DIR,
+            os.path.join(directory, GUI_SHORTCUT), interpreter, _with_options(f'"{gui_script_path()}"', options), _APP_DIR,
             icon if os.path.isfile(icon) else "", "GHAADD: GitHub release downloader (window)", APP_USER_MODEL_ID,
         ),
         ShortcutSpec(
@@ -181,12 +200,14 @@ def create_shortcuts(
     platform: Optional[str] = None,
     python: Optional[str] = None,
     home: Optional[str] = None,
+    options: tuple[str, ...] = (),
 ) -> AutostartResult:
+    """Make the shortcuts; `options` (see `gui_options`) are added to the GUI shortcut's command line."""
     system = platform if platform is not None else sys.platform
     if system == "win32":
-        return _create_windows(directory or start_menu_folder(), runner, python)
+        return _create_windows(directory or start_menu_folder(), runner, python, options)
     if system.startswith("linux"):
-        return _create_linux(directory, python, home)
+        return _create_linux(directory, python, home, options)
     return AutostartResult(False, f"Shortcuts are not supported on this system ({system}).")
 
 
@@ -212,8 +233,8 @@ def remove_shortcuts(
     return AutostartResult(True, "Removed: " + ", ".join(removed) if removed else "There were no shortcuts to remove.")
 
 
-def _create_windows(directory: str, runner: Runner, python: Optional[str]) -> AutostartResult:
-    specs = windows_specs(directory, python)
+def _create_windows(directory: str, runner: Runner, python: Optional[str], options: tuple[str, ...] = ()) -> AutostartResult:
+    specs = windows_specs(directory, python, options)
     try:
         os.makedirs(directory, exist_ok=True)
     except OSError as exc:
@@ -233,7 +254,7 @@ def _create_windows(directory: str, runner: Runner, python: Optional[str]) -> Au
     if result.returncode != 0:
         return AutostartResult(False, f"Creating the shortcuts failed: {(result.stderr or result.stdout).strip()}")
     names = " and ".join(f'"{os.path.basename(spec.path)}"' for spec in specs)
-    return AutostartResult(True, f"Created {names} in {directory}.")
+    return AutostartResult(True, f"Created {names} in {directory}." + _options_note(options))
 
 
 # ----- Linux (.desktop) -----
@@ -243,7 +264,7 @@ def _applications_folder(home: Optional[str] = None) -> str:
     return os.path.join(home or os.path.expanduser("~"), ".local", "share", "applications")
 
 
-def desktop_entry_text(python: str, script: str, icon: str, workdir: str) -> str:
+def desktop_entry_text(python: str, script: str, icon: str, workdir: str, options: tuple[str, ...] = ()) -> str:
     def quote(text: str) -> str:
         return '"' + text.replace("\\", "\\\\").replace('"', '\\"').replace("$", "\\$").replace("`", "\\`") + '"'
 
@@ -252,7 +273,7 @@ def desktop_entry_text(python: str, script: str, icon: str, workdir: str) -> str
         "Type=Application",
         f"Name={APP_NAME}",
         "Comment=GitHub release downloader",
-        f"Exec={quote(python)} {quote(script)}".replace("%", "%%"),
+        _with_options(f"Exec={quote(python)} {quote(script)}".replace("%", "%%"), options),
         f"Path={workdir}",
         "Terminal=false",
         "Categories=Utility;Network;",
@@ -263,10 +284,14 @@ def desktop_entry_text(python: str, script: str, icon: str, workdir: str) -> str
     return "\n".join(lines) + "\n"
 
 
-def _create_linux(directory: Optional[str], python: Optional[str], home: Optional[str]) -> AutostartResult:
+def _create_linux(
+    directory: Optional[str], python: Optional[str], home: Optional[str], options: tuple[str, ...] = ()
+) -> AutostartResult:
     folder = directory or _applications_folder(home)
     png = icon_path("png")
-    text = desktop_entry_text(python or sys.executable, gui_script_path(), png if os.path.isfile(png) else "", _APP_DIR)
+    text = desktop_entry_text(
+        python or sys.executable, gui_script_path(), png if os.path.isfile(png) else "", _APP_DIR, options
+    )
     path = os.path.join(folder, DESKTOP_FILE)
     try:
         os.makedirs(folder, exist_ok=True)
@@ -275,4 +300,4 @@ def _create_linux(directory: Optional[str], python: Optional[str], home: Optiona
         os.chmod(path, 0o755)
     except OSError as exc:
         return AutostartResult(False, f"Could not write {path}: {exc}")
-    return AutostartResult(True, f'Created "{DESKTOP_FILE}" in {folder}; "{APP_NAME}" now shows in your application menu.')
+    return AutostartResult(True, f'Created "{DESKTOP_FILE}" in {folder}; "{APP_NAME}" now shows in your application menu.' + _options_note(options))

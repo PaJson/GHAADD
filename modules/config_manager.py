@@ -277,6 +277,8 @@ def _hand_edited_defaults():
         ("gui.notifications", True),
         ("gui.minimize_to_tray", sys.platform != "linux"),
         ("gui.close_to_tray", False),
+        ("gui.start_minimized", False),
+        ("gui.start_daemon", False),
     ]
 
 
@@ -443,6 +445,18 @@ def get_gui_notifications_enabled(config=None):
     """Show tray notifications for new warnings, failed jobs, unmapped repositories and a stopped daemon (gui.notifications, default true)."""
     config = config if config is not None else load_config()
     return _gui_flag(config, "notifications", True)
+
+
+def get_gui_start_minimized(config=None):
+    """Open the GUI minimized (hidden in the tray when there is one) instead of showing the window (gui.start_minimized, default false)."""
+    config = config if config is not None else load_config()
+    return _gui_flag(config, "start_minimized", False)
+
+
+def get_gui_start_daemon(config=None):
+    """Start the polling daemon when the GUI starts and none is running (gui.start_daemon, default false)."""
+    config = config if config is not None else load_config()
+    return _gui_flag(config, "start_daemon", False)
 
 
 def get_default_download_dir(config: Optional[Dict[str, Any]] = None) -> str:

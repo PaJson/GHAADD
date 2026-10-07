@@ -31,6 +31,7 @@ from modules import (
     gui_data,
     gui_doctor,
     gui_forms,
+    gui_instance,
     gui_state,
     gui_tooltips,
     gui_tray,
@@ -49,7 +50,7 @@ ICON_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
 WINDOWS_APP_ID = APP_USER_MODEL_ID  # own taskbar identity, so the taskbar shows our icon instead of Python's
 DAEMON_REFRESH_INTERVAL_MS = 1000
 UNEXPECTED_EXIT_WINDOW_SECONDS = 120.0  # a daemon this GUI started that dies within this long is reported
-DEFAULT_STATUS_TEXT = "config.json · mapping.json · state.db"
+DEFAULT_STATUS_TEXT = ""  # the footer is empty until a message is shown
 
 COLOR_ERROR = "#b3261e"
 COLOR_WARNING = "#9a6700"
@@ -229,30 +230,41 @@ class ControlBar(ttk.Frame):
         gui_daemon.DOT_STOPPED: "#8a8a8a",
     }
 
-    def __init__(self, master: tk.Misc) -> None:
+    def __init__(self, master: tk.Misc, status_parent: Optional[tk.Misc] = None) -> None:
         super().__init__(master, padding=(10, 8))
 
-        self.status_dot = tk.Label(self, text="\u25cf", fg=self.DOT_COLORS[gui_daemon.DOT_STOPPED], font=("Segoe UI", 14))
+        # The daemon's status (dot, text, countdown) lives in the window's footer, at the right, when one is given.
+        status_frame = ttk.Frame(status_parent if status_parent is not None else self)
+        if status_parent is not None:
+            status_frame.grid(row=0, column=1, sticky="e", padx=(8, 10))
+        else:
+            status_frame.grid(row=0, column=0, sticky="w")
+        self.status_dot = tk.Label(status_frame, text="\u25cf", fg=self.DOT_COLORS[gui_daemon.DOT_STOPPED], font=("Segoe UI", 12))
         self.status_dot.grid(row=0, column=0, padx=(0, 4))
-        self.status_label = ttk.Label(self, text="Checking daemon\u2026")
+        self.status_label = ttk.Label(status_frame, text="Checking daemon\u2026")
         self.status_label.grid(row=0, column=1, sticky="w")
-        self.countdown_label = ttk.Label(self, text="", foreground=COLOR_MUTED)
+        self.countdown_label = ttk.Label(status_frame, text="", foreground=COLOR_MUTED)
         self.countdown_label.grid(row=0, column=2, padx=(16, 0), sticky="w")
 
-        self.columnconfigure(3, weight=1)  # spacer pushes buttons right
-
-        buttons = ttk.Frame(self)
-        buttons.grid(row=0, column=4, sticky="e")
-        self.start_button = ttk.Button(buttons, text="Start")
-        self.stop_button = ttk.Button(buttons, text="Stop")
-        self.pause_button = ttk.Button(buttons, text="Pause")
-        self.poll_button = ttk.Button(buttons, text="Poll now")
-        self.check_button = ttk.Button(buttons, text="Check folders")
+        # The buttons sit in three titled groups, centred in the bar, titles centred too.
+        self.columnconfigure(0, weight=1)
+        groups = ttk.Frame(self)
+        groups.grid(row=1, column=0)
+        box_padding = (8, 2, 8, 6)
+        daemon_box = ttk.LabelFrame(groups, text="Daemon", padding=box_padding, labelanchor="n")
+        polling_box = ttk.LabelFrame(groups, text="Polling", padding=box_padding, labelanchor="n")
+        tools_box = ttk.LabelFrame(groups, text="Tools", padding=box_padding, labelanchor="n")
+        self.start_button = ttk.Button(daemon_box, text="Start")
+        self.stop_button = ttk.Button(daemon_box, text="Stop")
+        self.pause_button = ttk.Button(daemon_box, text="Pause")
+        self.poll_button = ttk.Button(polling_box, text="Poll now")
+        self.single_button = ttk.Button(polling_box, text="Poll one")
+        self.check_button = ttk.Button(polling_box, text="Check folders")
         self.detailed_log = tk.BooleanVar(value=False)
-        self.log_check = ttk.Checkbutton(buttons, text="Terminal log", variable=self.detailed_log)
-        self.restart_button = ttk.Button(buttons, text="\u21bb Restart")
-        self.doctor_button = ttk.Button(buttons, text="Doctor")
-        self.settings_button = ttk.Button(buttons, text="Settings\u2026")
+        self.log_check = ttk.Checkbutton(tools_box, text="Terminal log", variable=self.detailed_log)
+        self.restart_button = ttk.Button(daemon_box, text="\u21bb Restart")  # shown only while it is needed
+        self.doctor_button = ttk.Button(tools_box, text="Doctor")
+        self.settings_button = ttk.Button(tools_box, text="Settings\u2026")
         bold = tkfont.nametofont("TkDefaultFont").copy()
         bold.configure(weight="bold")
         self._attention_font = bold  # keep a reference or Tk drops it
@@ -267,15 +279,18 @@ class ControlBar(ttk.Frame):
         self.restart_button.bind("<Leave>", lambda _event: self._restart_tip.hide())
         self.restart_button.bind("<ButtonPress>", lambda _event: self._restart_tip.hide())
 
-        for column, widget in enumerate(
-            (self.start_button, self.stop_button, self.pause_button, self.poll_button, self.check_button)
+        for box, widgets in (
+            (daemon_box, (self.start_button, self.stop_button, self.pause_button, self.restart_button)),
+            (polling_box, (self.poll_button, self.single_button, self.check_button)),
+            (tools_box, (self.log_check, self.doctor_button, self.settings_button)),
         ):
-            widget.grid(row=0, column=column, padx=(0, 6))
+            box.pack(side="left", padx=(0, 10))
+            for column, widget in enumerate(widgets):
+                widget.grid(row=0, column=column, padx=(0, 6) if widget is not widgets[-1] else 0)
+        self.log_check.grid_configure(padx=(0, 12))
+        attach_tooltip(self.poll_button, gui_tooltips.CONTROL_HELP["poll_now"])
+        attach_tooltip(self.single_button, gui_tooltips.CONTROL_HELP["poll_one"])
         attach_tooltip(self.check_button, gui_tooltips.CONTROL_HELP["check_folders"])
-        self.log_check.grid(row=0, column=5, padx=(6, 12))
-        self.doctor_button.grid(row=0, column=6, padx=(0, 6))
-        self.restart_button.grid(row=0, column=7, padx=(0, 6))
-        self.settings_button.grid(row=0, column=8)
         self.apply_view(gui_daemon.build_view(gui_daemon.DaemonSnapshot(), 0.0))
 
     def set_doctor_attention(self, reasons: list[str], highlight: bool) -> None:
@@ -302,6 +317,7 @@ class ControlBar(ttk.Frame):
             (self.stop_button, view.stop_enabled),
             (self.pause_button, view.pause_enabled),
             (self.poll_button, view.poll_enabled),
+            (self.single_button, view.poll_enabled),  # the same moments as Poll now
             (self.check_button, view.check_enabled),
             (self.log_check, view.log_enabled),
         ):
@@ -1589,7 +1605,15 @@ class SettingsDialog(tk.Toplevel):
 
         body = ttk.Frame(self, padding=14)
         body.pack(fill="both", expand=True)
-        body.columnconfigure(0, weight=1)
+        # Two columns of sections on top (what the daemon does on the left; the GUI's own settings and the log files
+        # on the right), the note and the buttons in a row of their own below.
+        left = ttk.Frame(body)
+        left.grid(row=0, column=0, sticky="nsew")
+        left.columnconfigure(0, weight=1)
+        right = ttk.Frame(body)
+        right.grid(row=0, column=1, sticky="nsew", padx=(14, 0))
+        right.columnconfigure(0, weight=1)
+        body.columnconfigure((0, 1), weight=1, uniform="settings")
 
         current = gui_data.load_settings_form()
         self._initial_form = dict(current)  # to tell whether the form has unsaved changes
@@ -1605,8 +1629,8 @@ class SettingsDialog(tk.Toplevel):
         def spin(frame: ttk.LabelFrame, key: str, low: int, high: int) -> ttk.Spinbox:
             return ttk.Spinbox(frame, from_=low, to=high, width=8, textvariable=self.vars[key])
 
-        processing = ttk.LabelFrame(body, text="Processing", padding=10)
-        processing.grid(row=0, column=0, sticky="ew")
+        processing = ttk.LabelFrame(left, text="Processing", padding=10)
+        processing.grid(row=1, column=0, sticky="ew", pady=(10, 0))
         processing.columnconfigure(1, weight=1)
         first_entry = ttk.Entry(processing, textvariable=self.vars["recheck"], width=28)
         row(processing, 0, "Default recheck (minutes)", first_entry)
@@ -1614,14 +1638,18 @@ class SettingsDialog(tk.Toplevel):
         row(processing, 2, "Destination check every N polls (0 = off)", spin(processing, "dest_check", 0, 999))
         row(processing, 3, "Default limit (new mappings, 0 = none)", spin(processing, "default_limit", 0, 9999))
 
-        polling = ttk.LabelFrame(body, text="Polling", padding=10)
-        polling.grid(row=1, column=0, sticky="ew", pady=(10, 0))
+        polling = ttk.LabelFrame(left, text="Polling", padding=10)
+        polling.grid(row=0, column=0, sticky="ew")
         polling.columnconfigure(1, weight=1)
-        row(polling, 0, "Interval (seconds)", spin(polling, "interval", gui_forms.MIN_POLL_INTERVAL_SECONDS, 86400))
-        row(polling, 1, "Jitter min (seconds)", spin(polling, "jitter_min", 0, 3600))
-        row(polling, 2, "Jitter max (seconds)", spin(polling, "jitter_max", 0, 3600))
+        # A checkbox carries its own text (not a separate label), so its keyboard focus ring wraps the text.
+        polling_check = ttk.Checkbutton(polling, text="Enable polling", variable=self.vars["polling_enabled"])
+        polling_check.grid(row=0, column=0, columnspan=2, sticky="w", pady=4)
+        attach_tooltip(polling_check, gui_tooltips.CONTROL_HELP["polling_enabled"])
+        row(polling, 1, "Interval (seconds)", spin(polling, "interval", gui_forms.MIN_POLL_INTERVAL_SECONDS, 86400))
+        row(polling, 2, "Jitter min (seconds)", spin(polling, "jitter_min", 0, 3600))
+        row(polling, 3, "Jitter max (seconds)", spin(polling, "jitter_max", 0, 3600))
 
-        paths = ttk.LabelFrame(body, text="Paths and logging", padding=10)
+        paths = ttk.LabelFrame(left, text="Paths", padding=10)
         paths.grid(row=2, column=0, sticky="ew", pady=(10, 0))
         paths.columnconfigure(1, weight=1)
         dir_frame = ttk.Frame(paths)
@@ -1632,9 +1660,15 @@ class SettingsDialog(tk.Toplevel):
         )
         row(paths, 0, "Default download folder", dir_frame)
         row(paths, 1, "Default subfolder (new mappings)", ttk.Entry(paths, textvariable=self.vars["default_subfolder"], width=28))
-        row(paths, 2, "Terminal log on at startup", ttk.Checkbutton(paths, variable=self.vars["log_enabled"]))
-        row(paths, 3, "Max log file (MB, 0 = no rollover)", spin(paths, "log_max_mb", 0, 1000))
-        row(paths, 4, "Keep log files (0 = all)", spin(paths, "log_keep", 0, 9999))
+
+        logging_box = ttk.LabelFrame(right, text="Logging", padding=10)
+        logging_box.grid(row=2, column=0, sticky="ew", pady=(10, 0))
+        logging_box.columnconfigure(1, weight=1)
+        ttk.Checkbutton(logging_box, text="Terminal log on at startup", variable=self.vars["log_enabled"]).grid(
+            row=0, column=0, columnspan=2, sticky="w", pady=4
+        )
+        row(logging_box, 1, "Max log file (MB, 0 = no rollover)", spin(logging_box, "log_max_mb", 0, 1000))
+        row(logging_box, 2, "Keep log files (0 = all)", spin(logging_box, "log_keep", 0, 9999))
 
         # Autostart lives in the operating system (not in config.json) and is applied on Save. Asking the
         # system (schtasks, systemctl, ...) can take a moment, so it happens in a thread and the box stays
@@ -1645,44 +1679,101 @@ class SettingsDialog(tk.Toplevel):
         self._autostart_check: Optional[ttk.Checkbutton] = None
         self._shortcuts_answer: list[Any] = []
         self._shortcuts_button: Optional[ttk.Button] = None
-        if autostart.is_supported() or shortcuts.is_supported():
-            startup = ttk.LabelFrame(body, text="Startup", padding=10)
-            startup.grid(row=3, column=0, sticky="ew", pady=(10, 0))
-            startup.columnconfigure(0, weight=1)
-            if autostart.is_supported():
-                self._autostart_check = ttk.Checkbutton(
-                    startup, text="Start the daemon when I log in", variable=self.autostart_var, state="disabled"
-                )
-                self._autostart_check.grid(row=0, column=0, sticky="w")
-                attach_tooltip(self._autostart_check, gui_tooltips.CONTROL_HELP["autostart"])
-                threading.Thread(target=self._probe_autostart, daemon=True).start()
-                self.after(100, self._apply_autostart_answer)
-            if shortcuts.is_supported():
-                self._shortcuts_button = ttk.Button(startup, text="Create shortcuts…", command=self._create_shortcuts)
-                self._shortcuts_button.grid(row=0, column=1, sticky="e")
-                attach_tooltip(self._shortcuts_button, gui_tooltips.CONTROL_HELP["create_shortcuts"])
+        # The tray settings are GUI-side (gui section of config.json) and apply the next time the GUI starts.
+        tray_box = ttk.LabelFrame(right, text="System tray", padding=10)
+        tray_box.grid(row=0, column=0, sticky="ew")
+        tray_box.columnconfigure((0, 1), weight=1, uniform="tray")
+        self._tray_checks: list[ttk.Checkbutton] = []
+        for index, (key, text) in enumerate(
+            (
+                ("tray", "Show the tray icon"),
+                ("notifications", "Show notifications"),
+                ("minimize_to_tray", "Minimize to the tray"),
+                ("close_to_tray", "Close to the tray"),
+            )
+        ):
+            tray_check = ttk.Checkbutton(tray_box, text=text, variable=self.vars[key])
+            tray_check.grid(row=index // 2, column=index % 2, sticky="w", pady=(0 if index < 2 else 4, 0))
+            attach_tooltip(tray_check, gui_tooltips.CONTROL_HELP[key])
+            if key != "tray":
+                self._tray_checks.append(tray_check)
+        if not gui_tray.tray_available():
+            ttk.Label(
+                tray_box, text="Needs the optional packages: pip install -r requirements-optional.txt", foreground=COLOR_MUTED
+            ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(6, 0))
+            for child in tray_box.winfo_children():
+                if isinstance(child, ttk.Checkbutton):
+                    child.state(["disabled"])  # the values are kept as they are; there is just nothing to switch
+        else:
+            self.vars["tray"].trace_add("write", lambda *_: self._enable_tray_checks())
+            self._enable_tray_checks()
+
+        startup = ttk.LabelFrame(right, text="Startup", padding=10)
+        startup.grid(row=1, column=0, sticky="ew", pady=(10, 0))
+        startup.columnconfigure(0, weight=1)
+        for index, (key, text) in enumerate(
+            (
+                ("start_minimized", "Start the GUI minimized (in the tray when there is one)"),
+                ("start_daemon", "Start the daemon when the GUI starts, if it is not running"),
+            ),
+            start=1,
+        ):
+            gui_check = ttk.Checkbutton(startup, text=text, variable=self.vars[key])
+            gui_check.grid(row=index, column=0, columnspan=2, sticky="w", pady=(4, 0))
+            attach_tooltip(gui_check, gui_tooltips.CONTROL_HELP[key])
+        if autostart.is_supported():
+            self._autostart_check = ttk.Checkbutton(
+                startup, text="Start the daemon when I log in", variable=self.autostart_var, state="disabled"
+            )
+            self._autostart_check.grid(row=0, column=0, sticky="w")
+            attach_tooltip(self._autostart_check, gui_tooltips.CONTROL_HELP["autostart"])
+            threading.Thread(target=self._probe_autostart, daemon=True).start()
+            self.after(100, self._apply_autostart_answer)
+        if shortcuts.is_supported():
+            self._shortcuts_button = ttk.Button(startup, text="Create shortcuts…", command=self._create_shortcuts)
+            self._shortcuts_button.grid(row=3, column=0, columnspan=2, sticky="w", pady=(10, 0))
+            attach_tooltip(self._shortcuts_button, gui_tooltips.CONTROL_HELP["create_shortcuts"])
 
         ttk.Label(
             body,
-            text="Changes apply the next time the daemon starts (new-repository defaults apply at once).",
+            text="Changes apply the next time the daemon starts (new-repository defaults apply at once). "
+            "The System tray and Startup choices apply the next time the GUI starts.",
             foreground=COLOR_MUTED,
+            wraplength=860,
         ).grid(
-            row=4, column=0, sticky="w", pady=(10, 0)
+            row=1, column=0, columnspan=2, sticky="w", pady=(10, 0)
         )
-        self.message = ttk.Label(body, text="", foreground=COLOR_ERROR, wraplength=440)
-        self.message.grid(row=5, column=0, sticky="w", pady=(6, 0))
+        self.message = ttk.Label(body, text="", foreground=COLOR_ERROR, wraplength=820)
+        self.message.grid(row=2, column=0, columnspan=2, sticky="w", pady=(6, 0))
         buttons = ttk.Frame(body)
-        buttons.grid(row=6, column=0, sticky="ew", pady=(10, 0))
+        buttons.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(10, 0))
         buttons.columnconfigure(1, weight=1)
         open_config_button = ttk.Button(buttons, text="Open config.json…", command=self._open_config)
         open_config_button.grid(row=0, column=0, sticky="w")
         attach_tooltip(open_config_button, gui_tooltips.CONTROL_HELP["open_config"])
-        ttk.Button(buttons, text="Cancel", command=self.destroy).grid(row=0, column=2, padx=(0, 6))
+        ttk.Button(buttons, text="Cancel", command=self._close_request).grid(row=0, column=2, padx=(0, 6))
         ttk.Button(buttons, text="Save", command=self._save).grid(row=0, column=3)
 
-        self.bind("<Escape>", lambda _event: self.destroy())
+        self.bind("<Escape>", lambda _event: self._close_request())
+        self.protocol("WM_DELETE_WINDOW", self._close_request)
         center_dialog(self, master, focus=first_entry)
         self.grab_set()
+
+    def _close_request(self) -> None:
+        """Escape, Cancel and the window's X: ask first when the form holds changes that were not saved."""
+        if self._form_changed() and not messagebox.askyesno(
+            "Settings",
+            "You have changes that are not saved.\n\nClose the window and discard them?",
+            icon="warning", default="no", parent=self,
+        ):
+            return
+        self.destroy()
+
+    def _enable_tray_checks(self) -> None:
+        """The other tray choices mean nothing while the tray icon itself is switched off."""
+        state = ["!disabled"] if self.vars["tray"].get() else ["disabled"]
+        for check in self._tray_checks:
+            check.state(state)
 
     def _form_changed(self) -> bool:
         """True when something in the form differs from what config.json had when the dialog opened."""
@@ -1729,12 +1820,16 @@ class SettingsDialog(tk.Toplevel):
         self._shortcuts_button.configure(state="disabled")
         self.message.configure(text="Creating the shortcuts…", foreground=COLOR_MUTED)
         self._shortcuts_answer.clear()
-        threading.Thread(target=self._make_shortcuts, args=(folder,), daemon=True).start()
+        # The ticked boxes count at once, saved or not: the GUI shortcut gets the matching options.
+        options = shortcuts.gui_options(
+            minimized=bool(self.vars["start_minimized"].get()), start_daemon=bool(self.vars["start_daemon"].get())
+        )
+        threading.Thread(target=self._make_shortcuts, args=(folder, options), daemon=True).start()
         self.after(100, self._apply_shortcuts_answer)
 
-    def _make_shortcuts(self, folder: str) -> None:
+    def _make_shortcuts(self, folder: str, options: tuple[str, ...]) -> None:
         try:
-            self._shortcuts_answer.append(shortcuts.create_shortcuts(folder))
+            self._shortcuts_answer.append(shortcuts.create_shortcuts(folder, options=options))
         except Exception as exc:  # report it instead of losing it in the thread
             self._shortcuts_answer.append(autostart.AutostartResult(False, f"Could not create the shortcuts: {exc}"))
 
@@ -1909,7 +2004,7 @@ class MainWindow(tk.Tk):
     DEFAULT_SIZE = "1280x720"
     MIN_SIZE = (1080, 520)  # narrower and the editor's last column (Active / Shared folder / buttons) is cut off
 
-    def __init__(self, theme: Optional[str] = None) -> None:
+    def __init__(self, theme: Optional[str] = None, start_minimized: bool = False, start_daemon: bool = False) -> None:
         super().__init__()
         self.title(APP_TITLE)
         # gui.refresh_seconds / gui.status_message_seconds in config.json (read once; a restart of the GUI applies changes)
@@ -1940,6 +2035,8 @@ class MainWindow(tk.Tk):
 
         self._tray: Optional[gui_tray.TrayIcon] = None
         self._tray_job: Optional[str] = None
+        # Looks for a "come forward" note from a second start of the GUI (see gui_instance).
+        self._instance_job: Optional[str] = self.after(500, self._poll_instance)
         self._notifications = config_manager.get_gui_notifications_enabled(config)
         self._minimize_to_tray = config_manager.get_gui_minimize_to_tray(config)
         self._close_to_tray = config_manager.get_gui_close_to_tray(config)
@@ -1948,21 +2045,26 @@ class MainWindow(tk.Tk):
         self._unmapped_tracker = gui_tray.NewItemTracker()
         self._failed_unseen = 0  # jobs that failed while the window was hidden (cleared when it is shown again)
 
-        self.control_bar = ControlBar(self)
+        # The footer holds the status messages on the left and the daemon's status on the right.
+        self.footer = ttk.Frame(self)
+        self.footer.columnconfigure(0, weight=1)
+        self.control_bar = ControlBar(self, status_parent=self.footer)
         self.control_bar.pack(fill="x")
         self.control_bar.settings_button.configure(command=self._open_settings)
         self.control_bar.start_button.configure(command=self._on_start)
         self.control_bar.stop_button.configure(command=self._on_stop)
         self.control_bar.pause_button.configure(command=self._on_pause)
         self.control_bar.poll_button.configure(command=self._on_poll_now)
+        self.control_bar.single_button.configure(command=self._on_single_poll)
         self.control_bar.check_button.configure(command=self._on_check_folders)
         self.control_bar.log_check.configure(command=self._on_log_toggle)
         self.control_bar.restart_button.configure(command=self._on_restart)
         self.control_bar.doctor_button.configure(command=self._open_doctor)
         ttk.Separator(self).pack(fill="x")
 
-        self.status_bar = ttk.Label(self, text=DEFAULT_STATUS_TEXT, anchor="w", padding=(10, 3))
-        self.status_bar.pack(fill="x", side="bottom")
+        self.status_bar = ttk.Label(self.footer, text=DEFAULT_STATUS_TEXT, anchor="w", padding=(10, 3))
+        self.status_bar.grid(row=0, column=0, sticky="ew")
+        self.footer.pack(fill="x", side="bottom")
 
         self.notebook = ttk.Notebook(self)
         self.notebook.pack(fill="both", expand=True, padx=8, pady=8)
@@ -1991,6 +2093,31 @@ class MainWindow(tk.Tk):
         self._refresh_status_tabs()  # titles and read marks from the start, not after the first tick
         self._refresh_doctor_attention()
         self._start_tray(config)
+        self._apply_launch_options(
+            start_minimized or config_manager.get_gui_start_minimized(config),
+            start_daemon or config_manager.get_gui_start_daemon(config),
+        )
+
+    def _apply_launch_options(self, start_minimized: bool, start_daemon: bool) -> None:
+        """Do what was asked for at launch: start the daemon if none runs, and begin minimized."""
+        if start_daemon and not self._snapshot.running:
+            error = gui_daemon.do_start()
+            self.set_status(error or "Starting the daemon…")
+            if error is None:
+                self._starting_since = self._gui_started_at = time.time()
+                self._update_daemon_view()
+        if start_minimized:
+            self.after_idle(self._start_hidden)
+
+    def _start_hidden(self) -> None:
+        """Hide in the tray when there is one, else minimize to the taskbar."""
+        try:
+            if self._tray_active():
+                self.withdraw()
+            else:
+                self.iconify()
+        except tk.TclError:
+            pass
 
     def set_status(self, text: str) -> None:
         """Show a message in the status bar for a few seconds, then restore the default."""
@@ -2330,6 +2457,12 @@ class MainWindow(tk.Tk):
     def _on_poll_now(self) -> None:
         self._report(gui_daemon.do_poll_now(), "Poll requested; it runs within a second.")
 
+    def _on_single_poll(self) -> None:
+        self._report(
+            gui_daemon.do_single_poll(),
+            "Single poll requested: one notification and one queue item, within a second.",
+        )
+
     def _on_check_folders(self) -> None:
         self._report(
             gui_daemon.do_check_folders(),
@@ -2467,6 +2600,8 @@ class MainWindow(tk.Tk):
                             self._on_start()
                     elif action == gui_tray.ACTION_POLL:
                         self._on_poll_now()
+                    elif action == gui_tray.ACTION_SINGLE:
+                        self._on_single_poll()
                     elif action == gui_tray.ACTION_PAUSE:
                         self._on_pause()
                     elif action == gui_tray.ACTION_QUIT:
@@ -2549,12 +2684,27 @@ class MainWindow(tk.Tk):
             pass
         self.destroy()
 
+    def _poll_instance(self) -> None:
+        """Another start of the GUI asked this window to come forward (also when it is hidden or minimized)."""
+        try:
+            if gui_instance.take_show_request():
+                self._show_from_tray()
+        except tk.TclError:
+            return
+        finally:
+            if self._instance_job is not None:
+                self._instance_job = self.after(500, self._poll_instance)
+
     def destroy(self) -> None:
         """Cancel pending timers first, so nothing fires into a window that is already gone."""
-        for job in (self._tick_job, self._status_reset_job, self._daemon_job, self._verify_log_job, self._tray_job):
+        for job in (
+            self._tick_job, self._status_reset_job, self._daemon_job, self._verify_log_job, self._tray_job,
+            self._instance_job,
+        ):
             if job is not None:
                 self.after_cancel(job)
         self._tick_job = self._status_reset_job = self._daemon_job = self._verify_log_job = self._tray_job = None
+        self._instance_job = None
         if self._tray is not None:
             tray, self._tray = self._tray, None
             tray.stop()
@@ -2615,8 +2765,19 @@ class MainWindow(tk.Tk):
 def main() -> None:
     parser = argparse.ArgumentParser(description="GHAADD GUI")
     parser.add_argument("--theme", help="ttk theme to use (default: native Windows theme; try 'clam')")
+    parser.add_argument("--minimized", action="store_true", help="Start minimized (hidden in the tray when there is one), whatever the Settings say.")
+    parser.add_argument("--start-daemon", action="store_true", help="Start the daemon when the window opens if none is running, whatever the Settings say.")
     args = parser.parse_args()
-    MainWindow(theme=args.theme).mainloop()
+    if not gui_instance.acquire():
+        # Another window is already open: bring it forward (unless this start was meant to stay out of the way)
+        # instead of opening a second one.
+        if not (args.minimized or config_manager.get_gui_start_minimized()):
+            gui_instance.request_show()
+        return
+    try:
+        MainWindow(theme=args.theme, start_minimized=args.minimized, start_daemon=args.start_daemon).mainloop()
+    finally:
+        gui_instance.release()
 
 
 if __name__ == "__main__":

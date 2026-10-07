@@ -225,14 +225,23 @@ def run_internal_smoke_tests():
     print("\n🎉 Smoke tests complete.")
 
 
-def run_polling_loop(interval_seconds, jitter_min_seconds, jitter_max_seconds, terminal_log=None, config_fingerprint=None):
-    """Run processing continuously with randomized jitter between cycles."""
+def run_polling_loop(
+    interval_seconds, jitter_min_seconds, jitter_max_seconds, terminal_log=None, config_fingerprint=None, idle=False
+):
+    """Run processing continuously with randomized jitter between cycles.
+
+    With `idle` (polling.enabled is false, started with --daemon) nothing is polled on a schedule: the daemon
+    waits and does one cycle per "Poll now" request (--poll-now / the GUI button), then waits again.
+    """
     if jitter_min_seconds > jitter_max_seconds:
         jitter_min_seconds, jitter_max_seconds = jitter_max_seconds, jitter_min_seconds
 
-    print(
-        f"Polling enabled. Base interval: {interval_seconds}s, jitter: {jitter_min_seconds}-{jitter_max_seconds}s."
-    )
+    if idle:
+        print("Polling is switched off (polling.enabled is false): idle. The mailbox is polled only on Poll now (--poll-now).")
+    else:
+        print(
+            f"Polling enabled. Base interval: {interval_seconds}s, jitter: {jitter_min_seconds}-{jitter_max_seconds}s."
+        )
     print("Press Ctrl+C to stop.\n")
 
     destination_check_every_n_polls = get_destination_check_every_n_polls()
@@ -285,7 +294,7 @@ def run_polling_loop(interval_seconds, jitter_min_seconds, jitter_max_seconds, t
             reset_log_override_on_startup(connection)
             update_daemon_status(
                 paused=False, next_poll_at=None, last_forced_poll_handled=None, current_job=None,
-                config_fingerprint=config_fingerprint, log_active=log_is_active(),
+                config_fingerprint=config_fingerprint, log_active=log_is_active(), polling_idle=bool(idle),
             )
         watcher = ControlWatcher(
             connection=connection,
@@ -296,11 +305,38 @@ def run_polling_loop(interval_seconds, jitter_min_seconds, jitter_max_seconds, t
         if destination_check_every_n_polls > 0:
             run_folder_checks("at start")  # counts and warnings are there right away, not after N polls
 
+        def announce_requested_poll(wait_result):
+            """Say which poll was asked for; and note that a pause goes on afterwards."""
+            what = "Single poll requested (one notification, one queue item)" if wait_result == "single" else "Poll now requested"
+            print(f"⏩ {what}." + (" Polling stays paused afterwards." if watcher.forced_while_paused else ""))
+            if control_enabled:
+                update_daemon_status(last_forced_poll_handled=watcher.last_handled_request)
+
+        def wait_for_poll_now():
+            """Idle mode: wait (no countdown) until Poll now / Single poll or Stop; the request, or None on Stop."""
+            wait_result = watcher.wait(0, on_change=publish_wait_state, idle=True)
+            if wait_result == "stop":
+                print("⏹️  Stop requested; exiting.")
+                return None
+            announce_requested_poll(wait_result)
+            return wait_result
+
+        single_next = False  # the coming cycle was asked for as a Single poll
+        if idle:
+            requested = wait_for_poll_now()
+            if requested is None:
+                return
+            single_next = requested == "single"
+
         while True:
             started = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            print(f"=== Poll cycle {cycle} @ {started} ===")
+            print(f"=== {'Single poll' if single_next else 'Poll cycle'} {cycle} @ {started} ===")
             watcher.begin_cycle()
-            run_ingest_and_queue_cycle(connection, GITHUB_TOKEN, should_pause=watcher.checkpoint)
+            if single_next:
+                run_single_cycle(connection, GITHUB_TOKEN)  # at most one notification and one queue item
+                single_next = False
+            else:
+                run_ingest_and_queue_cycle(connection, GITHUB_TOKEN, should_pause=watcher.checkpoint)
 
             if watcher.stop_requested:
                 print("⏹️  Stop requested; exiting after the work in progress.")
@@ -314,6 +350,14 @@ def run_polling_loop(interval_seconds, jitter_min_seconds, jitter_max_seconds, t
             if destination_check_every_n_polls > 0 and cycle % destination_check_every_n_polls == 0:
                 run_folder_checks(f"every {destination_check_every_n_polls} polls")
 
+            if idle and not watcher.cycle_interrupted:
+                print("Poll finished. Idle until the next Poll now.\n")
+                requested = wait_for_poll_now()
+                if requested is None:
+                    return
+                single_next = requested == "single"
+                cycle += 1
+                continue
             if watcher.cycle_interrupted:
                 # Work was left over: no countdown, poll again as soon as polling resumes.
                 sleep_seconds = 0
@@ -329,10 +373,9 @@ def run_polling_loop(interval_seconds, jitter_min_seconds, jitter_max_seconds, t
             if wait_result == "stop":
                 print("⏹️  Stop requested; exiting.")
                 return
-            if wait_result == "forced":
-                print("⏩ Forced poll requested; polling now.")
-                if control_enabled:
-                    update_daemon_status(last_forced_poll_handled=watcher.last_handled_request)
+            if wait_result in ("forced", "single"):
+                announce_requested_poll(wait_result)
+                single_next = wait_result == "single"
             cycle += 1
 
 
@@ -412,8 +455,12 @@ def main():
             once_mode = parsed_args.once
             poll_enabled = not once_mode and (
                 parsed_args.poll
+                or parsed_args.daemon
                 or polling_settings["enabled"]
             )
+            # --daemon (what the GUI, the shortcut and the start-at-login entries run) honours a switched-off
+            # polling.enabled by staying idle; --poll still forces polling like it always did.
+            start_idle = bool(parsed_args.daemon and not parsed_args.poll and not polling_settings["enabled"])
             if once_mode or not poll_enabled:
                 with open_database() as connection:
                     run_ingest_and_queue_cycle(connection, GITHUB_TOKEN)
@@ -431,7 +478,7 @@ def main():
             try:
                 run_polling_loop(
                     interval_seconds, jitter_min_seconds, jitter_max_seconds, terminal_log,
-                    config_fingerprint=get_config_fingerprint(config),
+                    config_fingerprint=get_config_fingerprint(config), idle=start_idle,
                 )
             except KeyboardInterrupt:
                 print("\nPolling stopped by user.")

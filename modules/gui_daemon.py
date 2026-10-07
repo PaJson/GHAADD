@@ -37,6 +37,7 @@ class DaemonSnapshot:
     current_repo: Optional[str] = None
     log_on: bool = False  # effective terminal-log state: the override, else terminal_log.enabled
     restart_needed: bool = False  # config.json settings differ from the ones the daemon started with
+    polling_idle: bool = False  # polling.enabled was off when it started: it polls only on Poll now
 
 
 @dataclass(frozen=True)
@@ -146,6 +147,7 @@ class SnapshotReader:
             current_repo=current_job.get("repo") if isinstance(current_job, dict) else None,
             log_on=log_on,
             restart_needed=restart_needed,
+            polling_idle=bool(status.get("polling_idle")),
         )
 
 
@@ -216,6 +218,8 @@ def build_view(
         countdown = "Polling paused"
     elif snapshot.current_repo:
         countdown = f"Processing {snapshot.current_repo}"
+    elif snapshot.polling_idle:
+        countdown = "Polling is off: use Poll now"
     elif snapshot.next_poll_at is None:
         countdown = "Polling…"
     elif snapshot.next_poll_at - now <= 0:
@@ -231,7 +235,7 @@ def build_view(
         stop_enabled=not stopping,
         pause_text="Resume" if snapshot.paused else "Pause",
         pause_enabled=not stopping,
-        poll_enabled=not snapshot.paused and not stopping,
+        poll_enabled=not stopping,  # Poll now also works while paused: one poll, then it stays paused
         check_enabled=not stopping,  # a folder check is allowed while paused: it only reads folders
         log_enabled=not stopping,
         log_checked=snapshot.log_on,
@@ -257,6 +261,10 @@ def do_set_paused(paused: bool) -> Optional[str]:
 
 def do_poll_now() -> Optional[str]:
     return _guarded(daemon_control.request_poll_now)
+
+
+def do_single_poll() -> Optional[str]:
+    return _guarded(daemon_control.request_single_poll)
 
 
 def do_check_folders() -> Optional[str]:

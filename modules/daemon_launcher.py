@@ -40,8 +40,8 @@ def get_stderr_path() -> str:
 
 
 def build_start_command() -> list[str]:
-    """Command line that starts the polling daemon (--poll forces polling even if config disables it)."""
-    return [get_python_executable(), get_main_script_path(), "--poll"]
+    """Command line that starts the polling daemon (--daemon: polls, or idles when polling.enabled is false)."""
+    return [get_python_executable(), get_main_script_path(), "--daemon"]
 
 
 def start_daemon() -> int:

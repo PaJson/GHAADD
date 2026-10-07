@@ -5,7 +5,14 @@ import sqlite3
 import sys
 from typing import Callable
 
-from modules.daemon_control import request_check_folders, request_poll_now, request_stop, set_log_override, set_paused
+from modules.daemon_control import (
+    request_check_folders,
+    request_poll_now,
+    request_single_poll,
+    request_stop,
+    set_log_override,
+    set_paused,
+)
 from modules.daemon_lock import is_daemon_running
 from modules.db_manager import (
     get_jobs_by_ids,
@@ -50,6 +57,8 @@ MODIFIER_COMMANDS: dict[str, tuple[str, ...]] = {
     "autostart_mode": ("install_autostart",),
     "task_trigger": ("install_autostart",),
     "shortcut_dir": ("create_shortcuts", "remove_shortcuts"),
+    "shortcut_minimized": ("create_shortcuts",),
+    "shortcut_start_daemon": ("create_shortcuts",),
 }
 
 
@@ -80,6 +89,14 @@ def parse_cli_args(args: list[str], version: str) -> argparse.Namespace:
 
     parser.add_argument("--once", action="store_true", help="Run a single ingest-and-process cycle, then exit.")
     parser.add_argument("--poll", action="store_true", help="Force polling mode even if disabled in config.")
+    parser.add_argument(
+        "--daemon",
+        action="store_true",
+        help=(
+            "Run the polling daemon the way the GUI, the shortcut and the start-at-login entries do: like --poll, "
+            "except that when polling.enabled is false in config.json it stays idle and polls only on Poll now (--poll-now)."
+        ),
+    )
     parser.add_argument(
         "--single",
         action="store_true",
@@ -134,6 +151,7 @@ def parse_cli_args(args: list[str], version: str) -> argparse.Namespace:
     control_group.add_argument("--stop", action="store_true", help="Stop the running polling daemon gracefully (the job in progress finishes first).")
     control_group.add_argument("--check-folders", action="store_true", help="Make the running daemon check destinations and folder limits right away.")
     control_group.add_argument("--poll-now", action="store_true", help="Make the running daemon poll right away (resets its countdown).")
+    control_group.add_argument("--poll-one", action="store_true", help="Make the running daemon poll one notification and process one queue item (like --single, but in the running daemon; resets its countdown).")
 
     control_group.add_argument("--log-on", action="store_true", help="Start writing terminal output to a new .log file in the running daemon (until it stops or --log-off).")
     control_group.add_argument("--log-off", action="store_true", help="Stop writing the .log file in the running daemon.")
@@ -147,6 +165,8 @@ def parse_cli_args(args: list[str], version: str) -> argparse.Namespace:
     autostart_group.add_argument("--create-shortcuts", action="store_true", help="Create the GHAADD shortcuts (Windows: \"GHAADD\" for the window and \"GHAADD daemon\" in the Start menu, so notifications say GHAADD instead of Python; Linux: an application-menu launcher).")
     autostart_group.add_argument("--remove-shortcuts", action="store_true", help="Remove the shortcuts made by --create-shortcuts.")
     autostart_group.add_argument("--shortcut-dir", metavar="FOLDER", help="Put the shortcuts in this folder instead of the Start menu / application menu (for example your own launcher folder).")
+    autostart_group.add_argument("--shortcut-minimized", action="store_true", help="With --create-shortcuts: the GUI shortcut starts the window minimized (it runs main_gui.py --minimized).")
+    autostart_group.add_argument("--shortcut-start-daemon", action="store_true", help="With --create-shortcuts: the GUI shortcut also starts the daemon if none is running (main_gui.py --start-daemon).")
     autostart_group.add_argument("--daemon-detached", action="store_true", help="Start the polling daemon in the background (no console window) and return; does nothing if one is running.")
 
     queue_group = parser.add_argument_group("queue status/reporting options")
@@ -300,7 +320,10 @@ def handle_cli_command(parsed_args: argparse.Namespace, run_smoke_tests: Callabl
         from modules import shortcuts  # imported here: only these commands need it
 
         if parsed_args.create_shortcuts:
-            result = shortcuts.create_shortcuts(parsed_args.shortcut_dir)
+            result = shortcuts.create_shortcuts(
+                parsed_args.shortcut_dir,
+                options=shortcuts.gui_options(parsed_args.shortcut_minimized, parsed_args.shortcut_start_daemon),
+            )
         else:
             result = shortcuts.remove_shortcuts(parsed_args.shortcut_dir)
         print(result.message, file=sys.stdout if result.ok else sys.stderr)
@@ -379,7 +402,7 @@ def handle_cli_command(parsed_args: argparse.Namespace, run_smoke_tests: Callabl
         return True
 
     if (
-        parsed_args.pause or parsed_args.resume or parsed_args.poll_now or parsed_args.stop
+        parsed_args.pause or parsed_args.resume or parsed_args.poll_now or parsed_args.poll_one or parsed_args.stop
         or parsed_args.log_on or parsed_args.log_off or parsed_args.check_folders
     ):
         if parsed_args.pause and parsed_args.resume:
@@ -409,7 +432,10 @@ def handle_cli_command(parsed_args: argparse.Namespace, run_smoke_tests: Callabl
                 print("Log off requested. The daemon closes its .log file within about a second.")
             if parsed_args.poll_now:
                 request_poll_now()
-                print("Forced poll requested. It runs when the daemon is not paused.")
+                print("Forced poll requested. It runs within a second, also while the daemon is paused (it then stays paused).")
+            if parsed_args.poll_one:
+                request_single_poll()
+                print("Single poll requested. The daemon takes at most one notification and processes at most one queue item within a second.")
             if parsed_args.check_folders:
                 request_check_folders()
                 print("Folder check requested. The daemon checks destinations and folder limits within about a second.")

@@ -12,6 +12,7 @@ from modules import config_manager, gui_data
 
 EXPECTED_KEYS = {
     "refresh_seconds", "status_message_seconds", "tray", "notifications", "minimize_to_tray", "close_to_tray",
+    "start_minimized", "start_daemon",
 }
 
 
@@ -89,6 +90,62 @@ class MissingDefaultsTests(unittest.TestCase):
     def test_the_settings_form_does_not_need_them(self) -> None:
         self.write({})
         self.assertIn("recheck", gui_data.load_settings_form())  # the form works with or without the optional keys
+
+    def test_the_launch_options_default_to_off_and_follow_the_file(self) -> None:
+        self.write({})
+        config = config_manager.load_config()
+        self.assertFalse(config_manager.get_gui_start_minimized(config))
+        self.assertFalse(config_manager.get_gui_start_daemon(config))
+        self.write({"gui": {"start_minimized": True, "start_daemon": "yes"}})  # only a real boolean counts
+        config = config_manager.load_config()
+        self.assertTrue(config_manager.get_gui_start_minimized(config))
+        self.assertFalse(config_manager.get_gui_start_daemon(config))
+
+    def test_the_launch_options_go_through_the_settings_form(self) -> None:
+        from modules import gui_forms
+
+        self.write({"gui": {"start_daemon": True}})
+        form = gui_data.load_settings_form()
+        self.assertIs(form["start_daemon"], True)
+        self.assertIs(form["start_minimized"], False)
+        form["start_minimized"] = True
+        result = gui_forms.build_settings_changes(form)
+        self.assertEqual(result.errors, [])
+        self.assertIs(result.changes["gui.start_minimized"], True)
+        self.assertIs(result.changes["gui.start_daemon"], True)
+        config_manager.set_config_values(result.changes)
+        self.assertEqual(
+            (self.read()["gui"]["start_minimized"], self.read()["gui"]["start_daemon"]), (True, True)
+        )
+
+    def test_the_tray_choices_go_through_the_settings_form(self) -> None:
+        from modules import gui_forms
+
+        self.write({"gui": {"tray": False, "close_to_tray": True, "minimize_to_tray": False}})
+        form = gui_data.load_settings_form()
+        self.assertEqual(
+            (form["tray"], form["notifications"], form["minimize_to_tray"], form["close_to_tray"]),
+            (False, True, False, True),
+        )
+        form.update({"tray": True, "notifications": False, "minimize_to_tray": True, "close_to_tray": False})
+        result = gui_forms.build_settings_changes(form)
+        config_manager.set_config_values(result.changes)
+        gui = self.read()["gui"]
+        self.assertEqual(
+            (gui["tray"], gui["notifications"], gui["minimize_to_tray"], gui["close_to_tray"]), (True, False, True, False)
+        )
+
+    def test_the_polling_switch_goes_through_the_settings_form(self) -> None:
+        from modules import gui_forms
+
+        self.write({"polling": {"enabled": False, "interval_seconds": 300}})
+        form = gui_data.load_settings_form()
+        self.assertIs(form["polling_enabled"], False)
+        form["polling_enabled"] = True
+        result = gui_forms.build_settings_changes(form)
+        self.assertEqual(result.errors, [])
+        config_manager.set_config_values(result.changes)
+        self.assertIs(self.read()["polling"]["enabled"], True)
 
     def test_the_config_path_is_public(self) -> None:
         self.assertEqual(config_manager.get_config_path(), self.path)

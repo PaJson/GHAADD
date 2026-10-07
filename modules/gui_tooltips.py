@@ -86,12 +86,38 @@ STATUS_LEGEND_TITLE = "Status"
 
 # --- Buttons and small controls.
 CONTROL_HELP = {
+    "poll_now": "Poll the mailbox now and process everything that is due, then restart the countdown.\n"
+                "Also works while paused (one poll, then it stays paused) and while polling is switched off.",
+    "poll_one": "Poll one item: take at most one new notification and process at most one queue item "
+                "(the same as --single, but in the running daemon), then restart the countdown.\n"
+                "Handy to try something out without working through everything that is waiting.",
+    "polling_enabled": "Poll the mailbox on a schedule (config.json: polling.enabled).\n"
+                       "Off: the daemon (started from the GUI, the \"GHAADD daemon\" shortcut or at login) still runs, "
+                       "but stays idle and polls only when you press Poll now.\n"
+                       "On the command line, \"python main.py --poll\" always polls, and a plain \"python main.py\" "
+                       "does a single run and exits when this is off. Applies the next time the daemon starts.",
+    "tray": "Show a GHAADD icon in the system tray (the notification area). Its menu shows or hides the window and "
+            "controls the daemon, and its colour shows the daemon's state. Needs the optional packages "
+            "(pip install -r requirements-optional.txt). Applies the next time the GUI starts.",
+    "notifications": "Pop up a notification for new warnings, failed jobs, a stopped daemon, new folder-limit warnings and "
+                     "new unmapped repositories. Only while the window is hidden or minimized. Applies the next time the GUI starts.",
+    "minimize_to_tray": "Minimizing hides the window in the tray instead of leaving it on the taskbar. "
+                        "Off by default on Linux, where many desktops show no tray icon. Applies the next time the GUI starts.",
+    "close_to_tray": "The window's close button hides it in the tray instead of ending the GUI. "
+                     "Use the tray menu's Quit to close it for real. Applies the next time the GUI starts.",
+    "start_minimized": "Open GHAADD hidden in the system tray (or minimized to the taskbar when there is no tray icon) "
+                       "instead of showing the window. Use the tray icon to bring it up. Applies the next time the GUI starts.",
+    "start_daemon": "When the GUI starts and no daemon is running, start it (the same as the Start button).\n"
+                    "A daemon that is already running is left alone, and the GUI never stops it on close.\n"
+                    "Applies the next time the GUI starts.",
     "open_config": "Open config.json in your default editor, for the settings this window has no fields for\n"
                    "(the gui section: refresh time, tray, notifications ...). Missing optional settings are added first,\n"
                    "with their default values. Unsaved changes in this window are lost.",
     "create_shortcuts": "Make GHAADD shortcuts in a folder you choose.\n"
                         "Windows: \"GHAADD\" (opens the window) and \"GHAADD daemon\" (starts the daemon in the background);\n"
                         "the first one makes Windows name the notifications GHAADD. The Start menu folder is suggested.\n"
+                        "The two \"Start ...\" boxes below count as they are ticked now (saved or not): the GUI shortcut then "
+                        "starts with --minimized and/or --start-daemon, whatever the saved settings say later.\n"
                         "Linux: an application-menu launcher (\"ghaadd.desktop\"). It happens at once, not on Save.",
     "autostart": "Start the polling daemon by itself when you log in, with no window.\n"
                  "Windows: a scheduled task that also restarts it after a failure (or the Run key if the task cannot be made).\n"

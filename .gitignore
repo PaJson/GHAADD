@@ -8,16 +8,19 @@ modules/__pycache__/
 *.pyc
 
 # --- 2. Volatile Daemon Runtime & Status States ---
+config.json.lock
+config.json.*.tmp
 ghaadd.lock
 ghaadd.daemon.status.json
 ghaadd.daemon.status.json.*.tmp
 ghaadd.daemon.stderr.log
-perf_baseline*.json
+ghaadd.gui.lock
+ghaadd.gui.show
+ghaadd.gui.show.*.tmp
 mapping.json.lock
 mapping.json.*.tmp
 mapping.json.v1.bak*
-config.json.lock
-config.json.*.tmp
+perf_baseline*.json
 
 # --- 3. SQLite Local Write Records & Engine Caches ---
 *.db

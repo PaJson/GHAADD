@@ -134,6 +134,7 @@ def load_settings_form() -> dict[str, Any]:
         "dest_check": str(config_manager.get_destination_check_every_n_polls(config)),
         "default_limit": str(config_manager.get_default_repository_limit(config)),
         "default_subfolder": config_manager.get_default_subfolder(config),
+        "polling_enabled": bool(polling["enabled"]),
         "interval": str(polling["interval_seconds"]),
         "jitter_min": str(polling["jitter_min_seconds"]),
         "jitter_max": str(polling["jitter_max_seconds"]),
@@ -141,6 +142,12 @@ def load_settings_form() -> dict[str, Any]:
         "log_enabled": terminal_log["enabled"],
         "log_max_mb": str(terminal_log["max_file_mb"]),
         "log_keep": str(terminal_log["keep_files"]),
+        "start_minimized": config_manager.get_gui_start_minimized(config),
+        "start_daemon": config_manager.get_gui_start_daemon(config),
+        "tray": config_manager.get_gui_tray_enabled(config),
+        "notifications": config_manager.get_gui_notifications_enabled(config),
+        "minimize_to_tray": config_manager.get_gui_minimize_to_tray(config),
+        "close_to_tray": config_manager.get_gui_close_to_tray(config),
     }
 
 

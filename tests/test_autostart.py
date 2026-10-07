@@ -98,7 +98,7 @@ class FakeRegistry:
 class UnitTextTests(unittest.TestCase):
     def test_the_unit_runs_the_poll_command_and_restarts_on_failure(self) -> None:
         text = autostart.systemd_unit_text("/usr/bin/python3", "/opt/ghaadd/main.py", "/opt/ghaadd")
-        self.assertIn('ExecStart="/usr/bin/python3" "/opt/ghaadd/main.py" --poll', text)
+        self.assertIn('ExecStart="/usr/bin/python3" "/opt/ghaadd/main.py" --daemon', text)
         self.assertIn('WorkingDirectory="/opt/ghaadd"', text)
         self.assertIn("Restart=on-failure", text)  # a clean exit (the GUI's Stop) is not restarted
         self.assertIn("WantedBy=default.target", text)
@@ -216,7 +216,7 @@ class TaskSchedulerTests(unittest.TestCase):
         self.assertEqual(self.registry.values, {})  # no Run key in task mode
         root = ET.fromstring(self.schtasks.xml.split("?>", 1)[1])  # well-formed XML
         text = self.schtasks.xml
-        self.assertIn("--poll", text)
+        self.assertIn("--daemon", text)
         self.assertNotIn("--daemon-detached", text)  # a launcher that exits at once could not be restarted
         self.assertIn("<RestartOnFailure>", text)
         self.assertIn("<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>", text)  # never stopped for running long
@@ -288,7 +288,7 @@ class MacTests(unittest.TestCase):
 
     def test_the_plist_starts_at_login_and_restarts_only_after_a_failure(self) -> None:
         data = plistlib.loads(autostart.launchd_plist_bytes("/usr/bin/python3", "/opt/g/main.py", "/opt/g"))
-        self.assertEqual(data["ProgramArguments"], ["/usr/bin/python3", "/opt/g/main.py", "--poll"])
+        self.assertEqual(data["ProgramArguments"], ["/usr/bin/python3", "/opt/g/main.py", "--daemon"])
         self.assertTrue(data["RunAtLoad"])
         self.assertEqual(data["KeepAlive"], {"SuccessfulExit": False})  # a clean Stop stays stopped
         self.assertEqual(data["Label"], autostart.LAUNCHD_LABEL)

@@ -39,6 +39,8 @@
     "tray": true,
     "minimize_to_tray": true,
     "notifications": true,
-    "close_to_tray": false
+    "close_to_tray": false,
+    "start_minimized": false,
+    "start_daemon": false
   }
 }

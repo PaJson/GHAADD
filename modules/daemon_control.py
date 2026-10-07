@@ -23,6 +23,7 @@ at startup, so a request left over from an earlier run never stops a new one.
 or last handled.
 """
 
+import math
 import sqlite3
 import time
 from contextlib import closing
@@ -31,18 +32,21 @@ from typing import Callable, Literal, NotRequired, Optional, TypedDict
 from modules.db_manager import (
     get_daemon_check_folders_request,
     get_daemon_control,
+    get_daemon_single_request,
     get_daemon_stop_request,
     open_database,
     set_daemon_check_folders_request,
     set_daemon_log_override,
     set_daemon_paused,
     set_daemon_poll_now_request,
+    set_daemon_single_request,
     set_daemon_stop_request,
 )
 
 DEFAULT_TICK_SECONDS = 1.0
 
-WaitResult = Literal["elapsed", "forced", "stop"]
+# "forced" = Poll now (a full cycle), "single" = Poll one (one notification, one queue item).
+WaitResult = Literal["elapsed", "forced", "single", "stop"]
 
 
 class ControlState(TypedDict):
@@ -51,12 +55,13 @@ class ControlState(TypedDict):
     log_override: Optional[bool]
     stop_request: NotRequired[Optional[float]]  # absent in states built by older callers/tests
     check_folders_request: NotRequired[Optional[float]]
+    single_request: NotRequired[Optional[float]]
 
 
 def _default_state() -> ControlState:
     return {
         "paused": False, "poll_now_request": None, "log_override": None, "stop_request": None,
-        "check_folders_request": None,
+        "check_folders_request": None, "single_request": None,
     }
 
 
@@ -69,6 +74,7 @@ def read_control_state(connection: sqlite3.Connection) -> ControlState:
         "log_override": log_override,
         "stop_request": get_daemon_stop_request(connection),
         "check_folders_request": get_daemon_check_folders_request(connection),
+        "single_request": get_daemon_single_request(connection),
     }
 
 
@@ -100,6 +106,12 @@ def request_check_folders() -> float:
     """Ask the running daemon to check destinations and folder limits now; returns the request stamp."""
     with closing(open_database()) as connection:
         return set_daemon_check_folders_request(connection, time.time())
+
+
+def request_single_poll() -> float:
+    """Ask the running daemon to poll one notification and process one queue item; returns the request stamp."""
+    with closing(open_database()) as connection:
+        return set_daemon_single_request(connection, time.time())
 
 
 def request_poll_now() -> float:
@@ -150,17 +162,23 @@ class ControlWatcher:
         self._last_log_override: Optional[bool] = None
         # True once a checkpoint() during work saw a pause (cleared by begin_cycle()).
         self.cycle_interrupted = False
+        # A Poll now that arrived during a pause: that one cycle runs to the end although polling stays paused.
+        self.forced_while_paused = False
+        self._cycle_ignores_pause = False
         # Whatever is already in the file at startup counts as handled.
         initial_state = self._read_state()
         self.last_handled_request: Optional[float] = initial_state["poll_now_request"]
         self._initial_stop_request: Optional[float] = initial_state.get("stop_request")
         self._last_check_request: Optional[float] = initial_state.get("check_folders_request")
+        self._last_single_request: Optional[float] = initial_state.get("single_request")
         # True once a stop request newer than startup was seen; the daemon then winds down.
         self.stop_requested = False
 
     def begin_cycle(self) -> None:
         """Mark the start of a poll cycle, clearing any earlier interruption."""
         self.cycle_interrupted = False
+        self._cycle_ignores_pause = self.forced_while_paused
+        self.forced_while_paused = False
         self._sync_log_override(self._read_state())
 
     def _check_stop(self, state: ControlState) -> bool:
@@ -191,7 +209,7 @@ class ControlWatcher:
         """
         state = self._read_state()
         self._sync_log_override(state)
-        if self._check_stop(state) or state["paused"]:
+        if self._check_stop(state) or (state["paused"] and not self._cycle_ignores_pause):
             self.cycle_interrupted = True
             return True
         return False
@@ -214,16 +232,19 @@ class ControlWatcher:
         self,
         seconds: float,
         on_change: Optional[Callable[[bool, Optional[float]], None]] = None,
+        idle: bool = False,
     ) -> WaitResult:
         """Block until the interval has run down or a poll is forced.
 
-        The countdown freezes while paused. A forced poll requested during a
-        pause is not acted on; it stays pending and fires on resume.
+        The countdown freezes while paused. A forced poll (Poll now) is honoured even
+        during a pause: that one cycle runs (`forced_while_paused`), then the pause goes on.
         on_change(paused, next_poll_at) fires at the start and whenever the
         paused state flips; next_poll_at is epoch seconds, or None while paused.
         A stop request ends the wait at once ("stop"), paused or not.
+        With `idle` there is no countdown at all (`seconds` is ignored, next_poll_at stays None): the wait
+        ends only with a forced poll or a stop.
         """
-        remaining = float(seconds)
+        remaining = math.inf if idle else float(seconds)
         last_tick = self._clock()
         was_paused = False
         reported_paused: Optional[bool] = None
@@ -246,13 +267,19 @@ class ControlWatcher:
 
             if on_change is not None and paused != reported_paused:
                 reported_paused = paused
-                on_change(paused, None if paused else time.time() + max(remaining, 0.0))
+                on_change(paused, None if paused or idle else time.time() + max(remaining, 0.0))
 
+            request = state["poll_now_request"]
+            if request is not None and request != self.last_handled_request:
+                self.last_handled_request = request
+                self.forced_while_paused = bool(paused)  # it polls once, then the pause goes on
+                return "forced"
+            single = state.get("single_request")
+            if single is not None and single != self._last_single_request:
+                self._last_single_request = single
+                self.forced_while_paused = bool(paused)
+                return "single"
             if not paused:
-                request = state["poll_now_request"]
-                if request is not None and request != self.last_handled_request:
-                    self.last_handled_request = request
-                    return "forced"
                 if remaining <= 0:
                     return "elapsed"
                 self._sleep(min(self._tick_seconds, remaining))

@@ -34,6 +34,7 @@ ACTION_SHOW = "show"
 ACTION_TOGGLE = "toggle"  # show the window if it is hidden, hide it if it is open
 ACTION_START = "start"
 ACTION_POLL = "poll"
+ACTION_SINGLE = "single"
 ACTION_PAUSE = "pause"
 ACTION_QUIT = "quit"
 
@@ -275,7 +276,7 @@ class MenuState:
 
     @property
     def can_poll(self) -> bool:
-        return self.daemon_running and not self.daemon_paused
+        return self.daemon_running  # also while paused: it polls once and stays paused
 
     @property
     def can_pause(self) -> bool:
@@ -325,6 +326,9 @@ class TrayIcon:
                 ),
                 pystray.MenuItem(
                     "Poll now", lambda *_: self._actions.put(ACTION_POLL), enabled=lambda _item: self._menu_state.can_poll
+                ),
+                pystray.MenuItem(
+                    "Poll one item", lambda *_: self._actions.put(ACTION_SINGLE), enabled=lambda _item: self._menu_state.can_poll
                 ),
                 pystray.MenuItem(
                     lambda _item: self._paused_label(),

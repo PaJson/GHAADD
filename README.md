@@ -29,7 +29,8 @@ Automated Python utility that reads GitHub release notification emails from Gmai
 
 Start it with `python main_gui.py` (add `--theme clam` for coloured table headings). It needs Tkinter, which ships with Python on Windows and macOS (on Linux install your distribution's `python3-tk`). The GUI never owns the daemon: it reads `state.db`, `mapping.json` and `config.json` directly, can start a detached daemon, and only asks a running daemon to stop, pause, poll or check folders; closing the GUI leaves the daemon running.
 
-- **Control bar:** the daemon's status and countdown, Start, Stop (graceful), Pause/Resume, Poll now, Check folders, the Terminal log switch, a "Restart" button that appears when the daemon runs with older settings than config.json, and Settings (the global `config.json` values). Saving the Settings also adds the optional settings that have no field there (the `gui` section: refresh and message times, tray, notifications, minimize/close to tray) to `config.json` with their default values, without changing any value that is already there, so they are easy to find and edit. The "Open config.json…" button in the Settings window does the same and then opens the file in your default editor, for everything the window does not cover.
+- **One window:** only one GUI window runs at a time. Starting it again (the shortcut, `python main_gui.py`) brings the open window to the front, also from the tray or the taskbar, instead of opening a second one (a start that is meant to stay minimized, `--minimized` or `gui.start_minimized`, just exits quietly). It uses a lock file, `ghaadd.gui.lock`, that the system releases when the GUI ends however it ends. The daemon is separate and has its own single-instance guard.
+- **Control bar:** three groups at the top: Daemon (Start, Stop (graceful), Pause/Resume, and a "Restart" button that appears when the daemon runs with older settings than config.json), Polling (Poll now = a full cycle; Poll one = at most one notification and one queue item; Check folders) and Tools (the Terminal log switch, Doctor, Settings (the global `config.json` values)). The daemon's status and countdown are in the footer, at the right. Saving the Settings also adds the optional settings that have no field there (the `gui` section: refresh and message times, tray, notifications, minimize/close to tray) to `config.json` with their default values, without changing any value that is already there, so they are easy to find and edit. The "Open config.json…" button in the Settings window does the same and then opens the file in your default editor, for everything the window does not cover.
 - **Mappings:** one row per repository (most recently worked-on first) with a status icon, name (folder), repository, destination, latest tag ((R) Release / (P) Pre-release), last check, re-check step, next check, file count and folder limit ("12 / 15", with a warning sign and amber text when over). Hover a column heading for an explanation. Select a row to edit its settings below the table (name (folder), subfolder, destination, re-check intervals, limit, release types, sanity check, skiplist, active); double-click a row to open its folder. Add and remove repositories, filter the list, open the GitHub page with the globe button.
 - **Doctor button:** runs the `--doctor` checks and shows the result (problems, warnings, what was checked). The button is highlighted (⚠) on a first run: when config.json or mapping.json is missing or the Gmail login (`.env`) is not set, and after a report with problems. Dialogs open centred over the main window.
 - **Terminal log:** follows the newest terminal `.log` file (it is empty while the Terminal log switch is off). Filter, copy, open the log or its folder.
@@ -201,8 +202,9 @@ CLI options:
 
 - --drain-queue: Skip email ingestion entirely and repeatedly process only due queue jobs (sleeping until the next pending job's scheduled re-check time between cycles) until the pending queue is fully empty, then exit. Takes precedence over --once and --poll when provided.
 - --run-pending JOB [JOB ...]: Immediately run one or more specific pending jobs by ID, without changing their retry schedule (unlike automatic rechecks, this completes `release_not_found`/SKIP results right away). Example: python main.py --run-pending 23 27.
+- --poll-one: Make the running daemon poll **one item**: at most one new notification is ingested and at most one queue item is processed (the same as `--single`, which cannot run next to a running daemon because both need its lock), then the countdown restarts. It is the GUI's "Poll one" button and the tray menu's "Poll one item", and like Poll now it works while paused (that one item runs, then it stays paused) and while polling is switched off.
 - --check-folders: Make the running daemon check that every mapped destination exists, count the folders of each repository with a limit and raise missing limit warnings, right away (the GUI's "Check folders" button). The daemon also does this at start and every `destination_check_every_n_polls` polls (0 turns the automatic checks off; the button and flag still work). It runs even while polling is paused.
-- --pause / --resume / --poll-now: Control a running polling daemon from a second terminal (or the GUI). --pause freezes the countdown to the next poll and no poll runs until --resume (a poll cycle already in progress stops at the next safe boundary: the running job or email finishes, the rest wait, and polling restarts immediately on resume); --poll-now makes the daemon poll right away and then restart its countdown (a request made while paused fires on resume). They write a single-row `daemon_control` table in `state.db`; a daemon that is not running reports "nothing to control". Pause is always cleared when a daemon starts.
+- --pause / --resume / --poll-now: Control a running polling daemon from a second terminal (or the GUI). --pause freezes the countdown to the next poll and no poll runs until --resume (a poll cycle already in progress stops at the next safe boundary: the running job or email finishes, the rest wait, and polling restarts immediately on resume); --poll-now makes the daemon poll right away and then restart its countdown (it also works while paused: that one poll runs to the end and the daemon stays paused afterwards). They write a single-row `daemon_control` table in `state.db`; a daemon that is not running reports "nothing to control". Pause is always cleared when a daemon starts.
 - --stop: Stop the running polling daemon gracefully from a second terminal (or the GUI's Stop button). The job in progress finishes first, then the daemon exits and releases its lock; a stop request left behind by an earlier run never stops a new daemon. Same control channel and "nothing to control" behaviour as --pause. Only the polling mode (--poll / polling.enabled) listens for it; use Ctrl+C for the other run modes.
 - --log-on / --log-off: Switch terminal logging on or off in a running polling daemon without restarting it (same control channel and "nothing to control" behaviour as --pause). --log-on starts a new .log file from that moment (it does not contain earlier output), --log-off closes the file; console output is unaffected. Each --log-on gets its own file, and retention (terminal_log.keep_files) is applied when it starts. The switch overrides terminal_log.enabled for the running session only and is cleared when a daemon starts, so the config value decides again after a restart.
 - --purge-state: Delete local state.db and exit. Add --dry-run to preview whether it would delete anything without doing so.
@@ -264,12 +266,14 @@ CLI options:
 - --single: Ingest at most one new notification and process at most one queue item, then exit. Prefers the just-ingested item if a new notification exists; otherwise falls back to the single oldest due job already in the queue. Useful for controlled verification against real data instead of risking hundreds of items in one run.
 - --dry-run: Modifier for --single/--once/--poll/--drain-queue/--purge-state/--purge/--purge-jobs. For run modes, previews what would happen with no writes/deletes: no emails marked as read or moved to Trash, no files downloaded, no changes to state.db (job_queue/asset_state/lifecycle_events) or mapping.json. GitHub API and IMAP reads still happen (read-only) so the preview reflects real data. Fully repeatable - re-running leaves the same state every time. For purge commands, prints the matching count instead of deleting anything. Example: python main.py --single --dry-run.
 - --poll: Force polling mode for this run.
+- --daemon: Run the polling daemon the way the GUI's Start button, the "GHAADD daemon" shortcut and the start-at-login entries do. Like --poll, except that when polling.enabled is false the daemon starts but stays **idle**: it polls only when you press Poll now (the GUI button, the tray menu or `--poll-now`), one cycle per request, with no countdown. Stop, Check folders and the log switch work as usual.
 
 Polling behavior:
 
 - Polling runs when either:
-	- --poll is provided, or
+	- --poll or --daemon is provided, or
 	- polling.enabled is true in config.json.
+- A plain `python main.py` with polling.enabled false does one ingest-and-process run and exits (as before). `--poll` always polls. `--daemon` with polling.enabled false idles until Poll now (the Settings checkbox "Enable polling" is this setting).
 - --once always overrides polling and runs a single cycle.
 - Polling output includes a computed next poll timestamp.
 - After each ingest/process cycle, the app prints the next scheduled pending job (or `NONE` when the queue is empty).
@@ -319,7 +323,9 @@ Example:
 		"status_message_seconds": 6,
 		"tray": true,
 		"notifications": true,
-		"close_to_tray": false
+		"close_to_tray": false,
+		"start_minimized": false,
+		"start_daemon": false
 	}
 }
 ```
@@ -350,6 +356,8 @@ Key behavior:
 - state.disable_state_persistence
 	- false keeps and uses state.db for duplicate detection.
 	- true disables persistent duplicate state for the run.
+- polling.enabled
+	- true (the default) polls on a schedule. false: a daemon started with --daemon (the GUI, the shortcut, start at login) stays idle and polls only on Poll now; a plain `python main.py` does one run and exits; `--poll` still polls. Settings has a checkbox "Enable polling". Changing it makes the GUI offer a daemon restart.
 - polling.interval_seconds, polling.jitter_min_seconds, polling.jitter_max_seconds
 	- Next run delay is interval_seconds + random jitter.
 - folders.ghaadd_root, folders.processing, folders.complete, folders.partial, folders.logs
@@ -366,8 +374,10 @@ Key behavior:
 	- Size limit per log file in MB (default 10). When the current file reaches it, the daemon continues in a new, newer-named log file (the first line says which file it continues). Lines are never split across files. 0 disables rollover.
 - gui.refresh_seconds
 	- How often the GUI re-reads the data it shows, in seconds (default 3, allowed 1 to 60). A longer time uses less CPU on a slow machine. Edit config.json by hand; the GUI reads it when it starts. The daemon ignores the `gui` section.
+- gui.start_minimized, gui.start_daemon
+	- What the GUI does when it opens (true/false, both default false; both are checkboxes in Settings → Startup). `start_minimized` starts it hidden in the tray, or minimized to the taskbar when there is no tray icon. `start_daemon` starts the polling daemon if none is running (like the Start button; a running daemon is left alone). `python main_gui.py --minimized` and `--start-daemon` ask for the same for one launch, whatever the settings say.
 - gui.tray, gui.notifications, gui.minimize_to_tray, gui.close_to_tray
-	- Tray icon settings (true/false; they only matter when the optional tray packages are installed). `tray` (default true) switches the icon off; `notifications` (default true) the notifications; `minimize_to_tray` (default true on Windows/macOS, false on Linux) hides the window in the tray when it is minimized; `close_to_tray` (default false) makes the close button hide the window instead of closing the GUI (use the tray menu's Quit). Edit config.json by hand; the GUI reads them when it starts.
+	- Tray icon settings (true/false; they only matter when the optional tray packages are installed). `tray` (default true) switches the icon off; `notifications` (default true) the notifications; `minimize_to_tray` (default true on Windows/macOS, false on Linux) hides the window in the tray when it is minimized; `close_to_tray` (default false) makes the close button hide the window instead of closing the GUI (use the tray menu's Quit). They are checkboxes in Settings → System tray (or edit config.json by hand); the GUI reads them when it starts.
 - gui.status_message_seconds
 	- How long a message in the GUI's status bar stays before the default text returns, in seconds (default 6, allowed 2 to 60). Same rules as above.
 - terminal_log.keep_files
@@ -400,7 +410,8 @@ python main.py --remove-shortcuts
 
 - **Windows:** creates two shortcuts without a console window: **GHAADD** (opens the GUI, with the GHAADD icon) and **GHAADD daemon** (starts the polling daemon in the background and does nothing if one is running). The GHAADD shortcut also carries the app's Windows identity (`GHAADD.GUI`, the one the GUI sets for itself), which is what lets Windows show "GHAADD" with its own icon in the taskbar and the notification settings instead of "Python". Put them in the Start menu (the default) or in any folder, for example a launcher folder you start things from after a reboot.
 - **Linux:** creates `~/.local/share/applications/ghaadd.desktop`, so GHAADD appears in the application menu with its icon.
-- **In the GUI:** the Settings dialog's "Create shortcuts…" button opens a folder picker (starting in the Start menu folder) and makes the shortcuts there.
+- **In the GUI:** the Settings dialog's "Create shortcuts…" button opens a folder picker (starting in the Start menu folder) and makes the shortcuts there. The two Startup boxes "Start the GUI minimized" and "Start the daemon when the GUI starts" count as they are ticked at that moment, saved or not: the GUI shortcut is then made with `--minimized` and/or `--start-daemon`. Those options are fixed in the shortcut, so unticking a box later does not change an existing shortcut; press the button again to remake it.
+- **Command line:** add `--shortcut-minimized` and/or `--shortcut-start-daemon` to `--create-shortcuts` for the same.
 - Notifications need the optional tray packages (see System tray); the shortcut only sets the name and icon they appear under.
 
 ## Download Path Routing

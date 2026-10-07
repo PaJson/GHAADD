@@ -44,13 +44,13 @@ class BuildViewTests(unittest.TestCase):
         self.assertEqual(gui_daemon.format_countdown(3725), "1:02:05")
         self.assertEqual(gui_daemon.format_countdown(-5), "00:00")
 
-    def test_paused_daemon_offers_resume_and_no_poll_now(self) -> None:
+    def test_paused_daemon_offers_resume_and_still_poll_now(self) -> None:
         view = build_view(running(paused=True, next_poll_at=None), NOW)
 
         self.assertEqual((view.dot, view.status_text), ("paused", "Daemon paused (PID 42)"))
         self.assertEqual(view.countdown_text, "Polling paused")
         self.assertEqual(view.pause_text, "Resume")
-        self.assertFalse(view.poll_enabled)
+        self.assertTrue(view.poll_enabled)  # one poll on demand, then it stays paused
         self.assertTrue(view.check_enabled)  # checking folders does not poll, so a pause does not matter
 
     def test_cycle_in_progress_shows_the_job_or_polling(self) -> None:
@@ -237,7 +237,7 @@ class LauncherTests(unittest.TestCase):
     def test_command_runs_main_in_polling_mode(self) -> None:
         command = daemon_launcher.build_start_command()
         self.assertEqual(os.path.basename(command[1]), "main.py")
-        self.assertEqual(command[2:], ["--poll"])
+        self.assertEqual(command[2:], ["--daemon"])
 
     def test_pythonw_is_swapped_for_a_console_python(self) -> None:
         with mock.patch.object(daemon_launcher.os.path, "isfile", return_value=True):

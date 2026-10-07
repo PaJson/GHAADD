@@ -302,9 +302,9 @@ class MenuStateTests(unittest.TestCase):
         self.assertTrue(state.can_poll)
         self.assertTrue(state.can_pause)
 
-    def test_a_paused_daemon_can_be_resumed_but_not_polled(self) -> None:
+    def test_a_paused_daemon_can_be_resumed_and_still_polled_once(self) -> None:
         state = gui_tray.MenuState(True, True, True)
-        self.assertFalse(state.can_poll)
+        self.assertTrue(state.can_poll)
         self.assertTrue(state.can_pause)
 
     def test_the_first_entry_follows_the_window(self) -> None:

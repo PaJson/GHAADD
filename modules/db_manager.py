@@ -268,6 +268,9 @@ def open_database():
     # Epoch stamp of the latest "check folders now" request (GUI button / CLI --check-folders).
     if "check_folders_request" not in control_columns:
         connection.execute("ALTER TABLE daemon_control ADD COLUMN check_folders_request REAL")
+    # Epoch stamp of the latest "poll one item" request (GUI button / CLI --poll-one).
+    if "single_request" not in control_columns:
+        connection.execute("ALTER TABLE daemon_control ADD COLUMN single_request REAL")
 
     # Latest folder count per repository (written by the daemon's limit checks, read by the GUI).
     connection.execute(
@@ -1621,6 +1624,31 @@ def set_daemon_check_folders_request(connection, stamp: float) -> float:
         (stamp, stamp, stamp),
     )
     stored = connection.execute("SELECT check_folders_request FROM daemon_control WHERE id = 1").fetchone()[0]
+    connection.commit()
+    return stored
+
+
+def get_daemon_single_request(connection):
+    """Return the epoch stamp of the latest poll-one-item request, or None when never requested."""
+    row = connection.execute("SELECT single_request FROM daemon_control WHERE id = 1").fetchone()
+    return None if row is None else row["single_request"]
+
+
+def set_daemon_single_request(connection, stamp: float) -> float:
+    """Store a poll-one-item request stamp, guaranteed to differ from the previous one. Returns the stored stamp."""
+    connection.execute("INSERT OR IGNORE INTO daemon_control (id) VALUES (1)")
+    connection.execute(
+        """
+        UPDATE daemon_control
+        SET single_request = CASE
+            WHEN single_request = ? THEN ? + 0.000001
+            ELSE ?
+        END
+        WHERE id = 1
+        """,
+        (stamp, stamp, stamp),
+    )
+    stored = connection.execute("SELECT single_request FROM daemon_control WHERE id = 1").fetchone()[0]
     connection.commit()
     return stored
 
