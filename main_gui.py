@@ -998,6 +998,7 @@ class LiveLogTab(ttk.Frame):
     POLL_INTERVAL_MS = 300
     IDLE_INTERVAL_MS = 1000  # while the tab is hidden or the window minimized
     DIRECTORY_REFRESH_SECONDS = 5.0
+    USER_SCROLL_WINDOW_SECONDS = 0.5  # a view change this soon after the user's wheel/key/scrollbar input is theirs
 
     def __init__(
         self,
@@ -1012,6 +1013,7 @@ class LiveLogTab(ttk.Frame):
         self._set_status = set_status
         self._lines: collections.deque[str] = collections.deque(maxlen=self.MAX_LINES)
         self._updating = False  # True while we change the text ourselves (not a user scroll)
+        self._user_input_at = -1e9  # monotonic time of the last wheel/key/scrollbar input on the log
         self._daemon_running = False
         self._daemon_log_on = False
         self._has_log_file = False
@@ -1070,6 +1072,12 @@ class LiveLogTab(ttk.Frame):
         self.text.configure(yscrollcommand=lambda first, last: self._on_yview(yscroll, first, last), xscrollcommand=self._set_xscroll)
         yscroll.grid(row=2, column=1, sticky="ns")
         self._xscroll.grid(row=3, column=0, sticky="ew")
+        for widget, sequences in (
+            (self.text, ("<MouseWheel>", "<Button-4>", "<Button-5>", "<ButtonPress-1>", "<B1-Motion>", "<Key>")),
+            (yscroll, ("<MouseWheel>", "<ButtonPress-1>", "<B1-Motion>")),
+        ):
+            for sequence in sequences:
+                widget.bind(sequence, self._note_user_input, add="+")
 
     # ----- scrolling -----
 
@@ -1081,11 +1089,28 @@ class LiveLogTab(ttk.Frame):
             self._xscroll.grid_remove()
         self._xscroll.set(first, last)
 
+    def _note_user_input(self, _event: object = None) -> None:
+        self._user_input_at = time.monotonic()
+
     def _on_yview(self, scrollbar: ttk.Scrollbar, first: float | str, last: float | str) -> None:
-        """Scrolling up pauses following; scrolling back to the bottom resumes it."""
+        """The user scrolling up pauses following; scrolling back to the bottom resumes it.
+
+        Tk reports a view change a moment after it happens, and also when only the layout changed (a long line
+        made the horizontal scrollbar appear, the tab was hidden or shown, the window was resized). Only a change
+        right after the user's own input counts as a scroll; any other change keeps following, if that is on.
+        """
         scrollbar.set(first, last)
-        if not self._updating:
-            self.follow_var.set(float(last) >= 0.999)
+        if self._updating:
+            return
+        at_bottom = float(last) >= 0.999
+        if time.monotonic() - self._user_input_at <= self.USER_SCROLL_WINDOW_SECONDS:
+            self.follow_var.set(at_bottom)
+        elif self.follow_var.get() and not at_bottom:
+            self.after_idle(self._follow_end)
+
+    def _follow_end(self) -> None:
+        if self.follow_var.get():
+            self.text.see("end")
 
     def _on_follow_toggle(self) -> None:
         if self.follow_var.get():
