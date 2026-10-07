@@ -5,7 +5,8 @@ import time
 from datetime import datetime, timedelta
 from typing import Optional
 
-from modules.db_manager import open_database
+from modules.db_manager import get_previous_successful_completed_job, open_database
+from modules.mapping_manager import load_mapping, normalize_sanity_check_mode
 from modules.payload_types import (
     NextPendingJobPayload,
     PurgeableJobAgeSummary,
@@ -560,41 +561,29 @@ def _collect_queue_status_data(
             recent_params.append(int(limit))
         recent_jobs = connection.execute(recent_query, tuple(recent_params)).fetchall()
 
+        # Each repository's own sanity_check setting (any_tag / same_tag / off) decides what a job is compared with,
+        # exactly as the SANITY_CHECK warning does while downloading. Read once, not per job.
+        sanity_modes = {
+            str(entry.get("repository") or "").strip().lower(): normalize_sanity_check_mode(entry.get("sanity_check"))
+            for entry in load_mapping().get("repositories", [])
+        }
         previous_success_comparison_by_job_id: dict[int, tuple[str, int, int]] = {}
         for job in recent_jobs:
             if job["status"] != "COMPLETED" or job["last_result"] != "SUCCESS":
                 continue
 
-            previous_success_row = connection.execute(
-                """
-                SELECT
-                    tag,
-                    total_items
-                FROM job_queue
-                WHERE id <> ?
-                  AND status = 'COMPLETED'
-                  AND last_result = 'SUCCESS'
-                  AND repo = ?
-                  AND (
-                        tag = ?
-                        OR (tag IS NULL AND ? IS NULL)
-                      )
-                  AND (
-                        release_type = ?
-                        OR (release_type IS NULL AND ? IS NULL)
-                      )
-                ORDER BY completed_at DESC, id DESC
-                LIMIT 1
-                """,
-                (
-                    int(job["id"]),
-                    job["repo"],
-                    job["tag"],
-                    job["tag"],
-                    job["release_type"],
-                    job["release_type"],
-                ),
-            ).fetchone()
+            sanity_mode = sanity_modes.get(str(job["repo"] or "").strip().lower(), normalize_sanity_check_mode(None))
+            if sanity_mode == "off":
+                continue
+            previous_success_row = get_previous_successful_completed_job(
+                connection,
+                repo=job["repo"],
+                tag=job["tag"],
+                release_type=job["release_type"],
+                exclude_job_id=int(job["id"]),
+                match_tag=(sanity_mode == "same_tag"),
+                finished_before=job["completed_at"],
+            )
             if previous_success_row is None:
                 continue
 

@@ -31,6 +31,7 @@ Start it with `python main_gui.py` (add `--theme clam` for coloured table headin
 
 - **Control bar:** the daemon's status and countdown, Start, Stop (graceful), Pause/Resume, Poll now, Check folders, the Terminal log switch, a "Restart" button that appears when the daemon runs with older settings than config.json, and Settings (the global `config.json` values).
 - **Mappings:** one row per repository (most recently worked-on first) with a status icon, name (folder), repository, destination, latest tag ((R) Release / (P) Pre-release), last check, re-check step, next check, file count and folder limit ("12 / 15", with a warning sign and amber text when over). Hover a column heading for an explanation. Select a row to edit its settings below the table (name (folder), subfolder, destination, re-check intervals, limit, release types, sanity check, skiplist, active); double-click a row to open its folder. Add and remove repositories, filter the list, open the GitHub page with the globe button.
+- **Doctor button:** runs the `--doctor` checks and shows the result (problems, warnings, what was checked). The button is highlighted (⚠) on a first run: when config.json or mapping.json is missing or the Gmail login (`.env`) is not set, and after a report with problems. Dialogs open centred over the main window.
 - **Terminal log:** follows the newest terminal `.log` file (it is empty while the Terminal log switch is off). Filter, copy, open the log or its folder.
 - **Warnings, Completed, Folder limits, Unmapped:** structured events from `state.db` (never parsed from log text), with unread counters in the tab titles, a filter on Warnings and Completed, a detail pane with the full text, and Clear buttons that delete what a tab lists. Double-click a row to jump to its repository.
 - **Where things are kept:** window size and the "read" marks of the tabs live in `config.json` under `gui` (delete that section to reset; the daemon ignores it). All hover texts are in `modules/gui_tooltips.py`.
@@ -230,6 +231,7 @@ CLI options:
 		- previous_success_tag
 		- previous_success_total_items
 		- file_count_delta_vs_previous_success
+		- The baseline follows each repository's `sanity_check` setting in mapping.json, like the SANITY_CHECK warning: `any_tag` (default) compares with the previous successful release of the repository whatever its tag, `same_tag` only with an earlier run of the same tag, `off` shows no baseline. A job is only compared with releases that finished before it.
 	- Queue status also includes skipped-item detail previews (when available) for listed jobs.
 - --lifecycle-log: Print recent lifecycle events (completed moves, superseded partial moves, typed warnings) recorded in state.db.
 	- Add --json to output the events as JSON.
@@ -436,6 +438,24 @@ To clear out old lifecycle events (completed moves, superseded partial moves, wa
 ```bash
 python main.py --purge --purge-type WARNING --purge-age 0
 ```
+
+## Running the tests
+
+The `tests/` folder holds automated checks of the code itself (they are separate from `--doctor`, which checks your installation). They use temporary folders and a temporary database, never your real `mapping.json`, `config.json` or `state.db`, and need no mailbox or GitHub access.
+
+```text
+python -m unittest discover -s tests -t .
+```
+
+To see which lines of the code the tests do not exercise yet, install the development tools (`coverage`) and run:
+
+```text
+pip install -r requirements-dev.txt
+python -m coverage run --source=modules -m unittest discover -s tests -t .
+python -m coverage report --skip-empty
+```
+
+`python -m coverage html` writes a browsable report to `htmlcov/`. `requirements-dev.txt` is only needed for this; running GHAADD itself needs `requirements.txt` alone.
 
 ## Troubleshooting
 

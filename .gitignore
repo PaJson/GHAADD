@@ -72,3 +72,7 @@ ToDo.txt
 # eat up a massive portion of the newly refreshed 5-hour token budget right off
 # the bat.
 # ==============================================================================
+
+# Coverage output
+.coverage
+htmlcov/

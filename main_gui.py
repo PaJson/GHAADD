@@ -15,6 +15,7 @@ import collections
 import os
 import subprocess
 import sys
+import threading
 import time
 import webbrowser
 import tkinter as tk
@@ -27,6 +28,7 @@ from modules import (
     daemon_launcher,
     gui_daemon,
     gui_data,
+    gui_doctor,
     gui_forms,
     gui_state,
     gui_tooltips,
@@ -97,6 +99,22 @@ def attach_tooltip(widget: tk.Misc, text: str) -> None:
     widget.bind("<Enter>", lambda event: tip.schedule(text, event.x_root + 12, event.y_root + 18), add="+")
     widget.bind("<Leave>", lambda _event: tip.hide(), add="+")
     widget.bind("<ButtonPress>", lambda _event: tip.hide(), add="+")
+
+
+def center_dialog(dialog: tk.Toplevel, parent: tk.Misc) -> None:
+    """Put a dialog in the middle of its parent window (or of the screen when the parent is not visible)."""
+    dialog.update_idletasks()
+    border_x = border_y = 0  # window frame around the content (title bar, borders); geometry() positions the frame
+    if parent.winfo_viewable():
+        area = (parent.winfo_rootx(), parent.winfo_rooty(), parent.winfo_width(), parent.winfo_height())
+        border_x, border_y = parent.winfo_rootx() - parent.winfo_x(), parent.winfo_rooty() - parent.winfo_y()
+    else:
+        area = (dialog.winfo_vrootx(), dialog.winfo_vrooty(), dialog.winfo_vrootwidth(), dialog.winfo_vrootheight())
+    x, y = gui_state.center_over(
+        *area, dialog.winfo_reqwidth(), dialog.winfo_reqheight(),
+        dialog.winfo_vrootx(), dialog.winfo_vrooty(), dialog.winfo_vrootwidth(), dialog.winfo_vrootheight(),
+    )
+    dialog.geometry(f"+{x - border_x}+{y - border_y}")
 
 
 def format_status_title(title: str, count: int) -> str:
@@ -227,7 +245,17 @@ class ControlBar(ttk.Frame):
         self.detailed_log = tk.BooleanVar(value=False)
         self.log_check = ttk.Checkbutton(buttons, text="Terminal log", variable=self.detailed_log)
         self.restart_button = ttk.Button(buttons, text="\u21bb Restart")
+        self.doctor_button = ttk.Button(buttons, text="Doctor")
         self.settings_button = ttk.Button(buttons, text="Settings\u2026")
+        bold = tkfont.nametofont("TkDefaultFont").copy()
+        bold.configure(weight="bold")
+        self._attention_font = bold  # keep a reference or Tk drops it
+        ttk.Style(self).configure("Attention.TButton", foreground=COLOR_WARNING, font=bold)
+        self._doctor_tip = Tooltip(self.doctor_button)
+        self._doctor_tip_text = gui_tooltips.CONTROL_HELP["doctor"]
+        self.doctor_button.bind("<Enter>", lambda event: self._doctor_tip.schedule(self._doctor_tip_text, event.x_root + 12, event.y_root + 18))
+        self.doctor_button.bind("<Leave>", lambda _event: self._doctor_tip.hide())
+        self.doctor_button.bind("<ButtonPress>", lambda _event: self._doctor_tip.hide())
         self._restart_tip = Tooltip(self.restart_button)
         self.restart_button.bind("<Enter>", self._show_restart_tip)
         self.restart_button.bind("<Leave>", lambda _event: self._restart_tip.hide())
@@ -240,8 +268,19 @@ class ControlBar(ttk.Frame):
         attach_tooltip(self.check_button, gui_tooltips.CONTROL_HELP["check_folders"])
         self.log_check.grid(row=0, column=5, padx=(6, 12))
         self.restart_button.grid(row=0, column=6, padx=(0, 6))
-        self.settings_button.grid(row=0, column=7)
+        self.doctor_button.grid(row=0, column=7, padx=(0, 6))
+        self.settings_button.grid(row=0, column=8)
         self.apply_view(gui_daemon.build_view(gui_daemon.DaemonSnapshot(), 0.0))
+
+    def set_doctor_attention(self, reasons: list[str], highlight: bool) -> None:
+        """Highlight the Doctor button (and say why in its tooltip) when something needed is missing."""
+        if highlight:
+            self.doctor_button.configure(text="\u26a0 Doctor", style="Attention.TButton")
+            lines = [gui_tooltips.CONTROL_HELP["doctor_attention"], *[f"\u2022 {reason}" for reason in reasons]]
+            self._doctor_tip_text = "\n".join(lines)
+        else:
+            self.doctor_button.configure(text="Doctor", style="TButton")
+            self._doctor_tip_text = gui_tooltips.CONTROL_HELP["doctor"]
 
     def _show_restart_tip(self, event: tk.Event) -> None:  # type: ignore[type-arg]
         self._restart_tip.schedule(gui_tooltips.CONTROL_HELP["restart"], event.x_root, event.y_root)
@@ -311,6 +350,7 @@ class AddRepositoryDialog(tk.Toplevel):
         self.bind("<Return>", lambda _event: self._add())
         self.bind("<Escape>", lambda _event: self.destroy())
         name_entry.focus_set()
+        center_dialog(self, master)
         self.grab_set()
 
     def _add(self) -> None:
@@ -1559,6 +1599,7 @@ class SettingsDialog(tk.Toplevel):
         ttk.Button(buttons, text="Save", command=self._save).grid(row=0, column=1)
 
         self.bind("<Escape>", lambda _event: self.destroy())
+        center_dialog(self, master)
         self.grab_set()
 
     def _save(self) -> None:
@@ -1576,6 +1617,107 @@ class SettingsDialog(tk.Toplevel):
             text += " " + " ".join(result.warnings)
         self.destroy()
         self._on_saved(text)
+
+
+class DoctorDialog(tk.Toplevel):
+    """Runs the --doctor checks and shows the result; the first-run notes (if any) come first."""
+
+    def __init__(self, master: tk.Misc, on_report: Callable[[Optional[dict]], None]) -> None:
+        super().__init__(master)
+        self.title("Doctor")
+        self.transient(master)  # type: ignore[arg-type]
+        self.minsize(560, 320)
+        self._on_report = on_report
+        self._result: Optional[dict] = None
+        self._error: Optional[str] = None
+
+        body = ttk.Frame(self, padding=14)
+        body.pack(fill="both", expand=True)
+        body.columnconfigure(0, weight=1)
+        body.rowconfigure(1, weight=1)
+
+        self._bold = tkfont.nametofont("TkDefaultFont").copy()
+        self._bold.configure(weight="bold")
+        self.summary = ttk.Label(body, text="", font=self._bold)
+        self.summary.grid(row=0, column=0, sticky="w", pady=(0, 8))
+
+        text_frame = ttk.Frame(body)
+        text_frame.grid(row=1, column=0, sticky="nsew")
+        text_frame.columnconfigure(0, weight=1)
+        text_frame.rowconfigure(0, weight=1)
+        self.text = tk.Text(text_frame, width=92, height=20, wrap="word", state="disabled", relief="solid", borderwidth=1, padx=8, pady=6, font="TkDefaultFont")
+        scrollbar = ttk.Scrollbar(text_frame, orient="vertical", command=self.text.yview)
+        self.text.configure(yscrollcommand=scrollbar.set)
+        self.text.grid(row=0, column=0, sticky="nsew")
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        self.text.tag_configure("heading", font=self._bold, spacing1=8, spacing3=2)
+        self.text.tag_configure("error", foreground=COLOR_ERROR)
+        self.text.tag_configure("warning", foreground=COLOR_WARNING)
+        self.text.tag_configure("ok", foreground="#2e7d32")
+        self.text.tag_configure("muted", foreground=COLOR_MUTED)
+
+        buttons = ttk.Frame(body)
+        buttons.grid(row=2, column=0, sticky="e", pady=(10, 0))
+        self.run_button = ttk.Button(buttons, text="Run again", command=self._start)
+        self.run_button.grid(row=0, column=0, padx=(0, 6))
+        ttk.Button(buttons, text="Close", command=self.destroy).grid(row=0, column=1)
+
+        self.bind("<Escape>", lambda _event: self.destroy())
+        center_dialog(self, master)
+        self._start()
+
+    def _start(self) -> None:
+        self.summary.configure(text="Checking\u2026")
+        self.run_button.state(["disabled"])
+        self._result, self._error = None, None
+        threading.Thread(target=self._work, daemon=True).start()  # a slow network drive must not freeze the window
+        self.after(100, self._poll)
+
+    def _work(self) -> None:
+        try:
+            self._result = dict(gui_doctor.run_report())
+        except Exception as exc:  # shown in the dialog instead of vanishing
+            self._error = describe_error(exc)
+
+    def _poll(self) -> None:
+        if not self.winfo_exists():
+            return
+        if self._result is None and self._error is None:
+            self.after(100, self._poll)
+            return
+        self.run_button.state(["!disabled"])
+        self._show(self._result)
+
+    def _write(self, text: str, tag: str = "") -> None:
+        self.text.insert("end", text, tag)
+
+    def _show(self, report: Optional[dict]) -> None:
+        reasons = gui_doctor.first_run_reasons()
+        self.text.configure(state="normal")
+        self.text.delete("1.0", "end")
+        if self._error:
+            self.summary.configure(text="The checks could not run.")
+            self._write(self._error + "\n", "error")
+        elif report is not None:
+            self.summary.configure(text=gui_doctor.summary_line(report))  # type: ignore[arg-type]
+            if reasons:
+                self._write("Looks like a first run\n", "heading")
+                for reason in reasons:
+                    self._write(f"\u2022 {reason}\n")
+            if report["errors"]:
+                self._write("Problems\n", "heading")
+                for line in report["errors"]:
+                    self._write(f"\u2717 {line}\n", "error")
+            if report["warnings"]:
+                self._write("Warnings\n", "heading")
+                for line in report["warnings"]:
+                    self._write(f"\u26a0 {line}\n", "warning")
+            self._write("Checked\n", "heading")
+            for line in report["checks"]:
+                self._write(f"\u2713 {line}\n", "ok")
+            self._write(f"\nPlatform: {report['platform']}\n", "muted")
+        self.text.configure(state="disabled")
+        self._on_report(report)
 
 
 class MainWindow(tk.Tk):
@@ -1617,6 +1759,7 @@ class MainWindow(tk.Tk):
         self.control_bar.check_button.configure(command=self._on_check_folders)
         self.control_bar.log_check.configure(command=self._on_log_toggle)
         self.control_bar.restart_button.configure(command=self._on_restart)
+        self.control_bar.doctor_button.configure(command=self._open_doctor)
         ttk.Separator(self).pack(fill="x")
 
         self.status_bar = ttk.Label(self, text=DEFAULT_STATUS_TEXT, anchor="w", padding=(10, 3))
@@ -1647,6 +1790,7 @@ class MainWindow(tk.Tk):
         self._verify_log_job: Optional[str] = None
         self._update_daemon_view()
         self._refresh_status_tabs()  # titles and read marks from the start, not after the first tick
+        self._refresh_doctor_attention()
 
     def set_status(self, text: str) -> None:
         """Show a message in the status bar for a few seconds, then restore the default."""
@@ -2015,7 +2159,19 @@ class MainWindow(tk.Tk):
     def _open_settings(self) -> None:
         SettingsDialog(self, self._after_settings_saved)
 
+    def _open_doctor(self) -> None:
+        DoctorDialog(self, self._refresh_doctor_attention)
+
+    def _refresh_doctor_attention(self, report: Optional[dict] = None) -> None:
+        """Highlight the Doctor button on a first run (missing files / login) or after a report with problems."""
+        try:
+            reasons = gui_doctor.first_run_reasons()
+        except Exception:
+            return
+        self.control_bar.set_doctor_attention(reasons, gui_doctor.needs_attention(reasons, report))  # type: ignore[arg-type]
+
     def _after_settings_saved(self, message: str) -> None:
+        self._refresh_doctor_attention()  # saving the Settings creates config.json
         self.set_status(message)
         self.mappings_tab.refresh()  # the default recheck shown in the editor may have changed
         self._update_daemon_view()  # shows the Restart button right away when a running daemon is affected

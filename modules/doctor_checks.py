@@ -3,6 +3,7 @@ import re
 import sys
 from typing import TypedDict
 
+from modules.config_manager import _normalize_configured_path
 from modules.mapping_manager import find_missing_mapped_destinations, validate_mapping_schema
 
 
@@ -16,6 +17,15 @@ class DoctorReport(TypedDict):
 
 _WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:\\")
 _WINDOWS_DRIVE_RELATIVE_RE = re.compile(r"^[A-Za-z]:(?![\\/])")
+
+
+def _platform_family(platform_name: str) -> str:
+    """Map sys.platform ("win32", "linux", "darwin", ...) to the names the path-style checks use."""
+    if platform_name.startswith("win") or platform_name == "cygwin":
+        return "windows"
+    if platform_name.startswith("linux"):
+        return "linux"
+    return platform_name
 
 
 def _config_file_path() -> str:
@@ -136,19 +146,22 @@ def run_doctor() -> DoctorReport:
             errors.append(f"mapping.json could not be parsed: {exc}")
             mapping_payload = {"repositories": []}
 
-    mapping_validation = validate_mapping_schema()
-    for error in mapping_validation["errors"]:
-        errors.append(f"mapping schema: {error}")
-    for warning in mapping_validation["warnings"]:
-        warnings.append(f"mapping schema: {warning}")
+    if os.path.exists(mapping_path):  # a missing file was reported above (it is created on first use)
+        mapping_validation = validate_mapping_schema()
+        for error in mapping_validation["errors"]:
+            errors.append(f"mapping schema: {error}")
+        for warning in mapping_validation["warnings"]:
+            warnings.append(f"mapping schema: {warning}")
 
+    path_platform = _platform_family(platform_name)
     for location, path_value in _iter_config_paths(config_payload):
-        mismatch_warning = _warn_path_style_mismatch(path_value, platform_name)
+        # The app reads a bare drive ("D:") as the drive root, so judge the path the way it will be used.
+        mismatch_warning = _warn_path_style_mismatch(_normalize_configured_path(path_value), path_platform)
         if mismatch_warning:
             warnings.append(f"{location}: {mismatch_warning}")
 
     for location, path_value in _iter_mapping_paths(mapping_payload):
-        mismatch_warning = _warn_path_style_mismatch(path_value, platform_name)
+        mismatch_warning = _warn_path_style_mismatch(path_value, path_platform)
         if mismatch_warning:
             warnings.append(f"{location}: {mismatch_warning}")
 

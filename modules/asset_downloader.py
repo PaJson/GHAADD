@@ -97,6 +97,8 @@ def _sanitize_folder_path(folder: str) -> str:
     sanitized_parts = []
 
     for part in parts:
+        if not part.strip():  # "@GitHub/" or "/@GitHub": an empty part is no folder (not "unknown")
+            continue
         sanitized_part = sanitize_folder_name(part)
         if not sanitized_part or sanitized_part in {".", ".."}:
             continue
@@ -162,7 +164,7 @@ def _resolve_repository_limit(repo: Optional[str]) -> int:
         return 0
 
     limit_value = mapping_entry.get("limit")
-    if isinstance(limit_value, int) and limit_value > 0:
+    if isinstance(limit_value, int) and not isinstance(limit_value, bool) and limit_value > 0:
         return limit_value
 
     return 0

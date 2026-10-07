@@ -1177,6 +1177,7 @@ def process_queue_once(
                     f"(job_id={int(existing_new_commit_job['id'])}, commit={current_commit})."
                 )
 
+            superseded_count += 1
             artifact_outcome = _handle_superseded_pending_job_artifacts(
                 job,
                 repo,

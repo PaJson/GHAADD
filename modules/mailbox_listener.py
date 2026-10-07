@@ -45,22 +45,24 @@ def parse_github_subject(subject):
     # Non-greedy capture so the tag stops at the first " - " separator, even when
     # the release title itself contains further " - " segments (e.g. a title that
     # repeats the tag, like "Release v0.6.7 - v0.6.7 - v0.6.7").
-    pattern = r"^\[([^\]]+)\]\s+(?:Pre-)?Release\s+(.+?)(?:\s+-\s+.*)$"
+    # The release type is decided by the keyword right after "[owner/repo]" only: a release title that merely
+    # mentions "Pre-release" must not turn a normal Release into a Pre-release.
+    pattern = r"^\[([^\]]+)\]\s+(Pre-)?Release\s+(.+?)(?:\s+-\s+.*)$"
     match = re.search(pattern, subject, re.IGNORECASE)
     
     if match:
         repo = match.group(1)
-        tag = match.group(2)
-        release_type = "Pre-release" if "Pre-release" in subject else "Release"
+        tag = match.group(3)
+        release_type = "Pre-release" if match.group(2) else "Release"
         return repo, tag, release_type, False
     
     # Fallback for subjects that do not include the trailing separator.
-    pattern_simple = r"^\[([^\]]+)\]\s+(?:Pre-)?Release\s+(.+)$"
+    pattern_simple = r"^\[([^\]]+)\]\s+(Pre-)?Release\s+(.+)$"
     match_simple = re.search(pattern_simple, subject, re.IGNORECASE)
     if match_simple:
         repo = match_simple.group(1)
-        tag = match_simple.group(2)
-        release_type = "Pre-release" if "Pre-release" in subject else "Release"
+        tag = match_simple.group(3)
+        release_type = "Pre-release" if match_simple.group(2) else "Release"
         return repo, tag, release_type, True
         
     return None, None, None, False

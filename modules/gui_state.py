@@ -134,3 +134,29 @@ def place_popup(
     if y + height > bottom:
         y = pointer_y - height - 6
     return max(screen_x + margin, x), max(screen_y + margin, y)
+
+
+def center_over(
+    parent_x: int,
+    parent_y: int,
+    parent_width: int,
+    parent_height: int,
+    width: int,
+    height: int,
+    screen_x: int,
+    screen_y: int,
+    screen_width: int,
+    screen_height: int,
+    margin: int = 8,
+) -> tuple[int, int]:
+    """Top-left corner that centres a width x height dialog over its parent window, kept on screen.
+
+    (screen_*) is the whole virtual desktop, so a parent on a second monitor works too. A dialog larger
+    than the screen is placed at the top-left corner.
+    """
+    x = parent_x + (parent_width - width) // 2
+    y = parent_y + (parent_height - height) // 2
+    right, bottom = screen_x + screen_width - margin, screen_y + screen_height - margin
+    x = min(x, right - width)
+    y = min(y, bottom - height)
+    return max(screen_x + margin, x), max(screen_y + margin, y)

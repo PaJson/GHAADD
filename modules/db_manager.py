@@ -1213,17 +1213,26 @@ def save_job_skip_details(connection, job_id, attempt_count, skipped_items):
     connection.commit()
 
 
-def get_previous_successful_completed_job(connection, repo, tag, release_type, exclude_job_id, match_tag=True):
+def get_previous_successful_completed_job(
+    connection, repo, tag, release_type, exclude_job_id, match_tag=True, finished_before=None
+):
     """Return the previous successful completed job for the same repo and release_type.
 
     With match_tag=True (the original behaviour) it must also have the same tag; with False the
-    newest earlier successful job of the repository counts, whatever its tag.
+    newest earlier successful job of the repository counts, whatever its tag. finished_before (a
+    completed_at timestamp of the excluded job) limits the search to jobs that finished before it, which a
+    report about an old job needs so it is not compared with a newer one.
     """
     tag_condition = "AND (tag = ? OR (tag IS NULL AND ? IS NULL))" if match_tag else ""
     params = [int(exclude_job_id), repo]
     if match_tag:
         params += [tag, tag]
     params += [release_type, release_type]
+    time_condition = ""
+    if finished_before is not None:
+        # Jobs finishing in the same second are told apart by id (a later job has a higher id).
+        time_condition = "AND (completed_at < ? OR (completed_at = ? AND id < ?))"
+        params += [float(finished_before), float(finished_before), int(exclude_job_id)]
     return connection.execute(
         f"""
         SELECT
@@ -1245,6 +1254,7 @@ def get_previous_successful_completed_job(connection, repo, tag, release_type, e
                 release_type = ?
                 OR (release_type IS NULL AND ? IS NULL)
               )
+          {time_condition}
         ORDER BY completed_at DESC, id DESC
         LIMIT 1
         """,

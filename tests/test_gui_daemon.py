@@ -140,6 +140,17 @@ class ReadSnapshotTests(unittest.TestCase):
         "last_forced_poll_handled": None, "current_job": {"repo": "o/r", "tag": "v1", "since": 2.0},
     }
 
+    def setUp(self) -> None:
+        # The settings cache reads config.json; use an empty temporary one so these tests never depend on the real file.
+        folder = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(folder.cleanup)
+        config_path = os.path.join(folder.name, "config.json")
+        with open(config_path, "w", encoding="utf-8") as handle:
+            handle.write("{}")
+        patcher = mock.patch.object(gui_daemon.config_manager, "_config_file_path", lambda: config_path)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def patches(self, status, control=None, config_log=True):
         control_patch = (
             mock.patch.object(gui_daemon.daemon_control, "get_control_state", return_value=control)

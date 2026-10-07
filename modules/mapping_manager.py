@@ -625,12 +625,16 @@ def get_repository_skiplist(repo: str) -> list[str]:
     return _normalize_skiplist(mapping_entry.get("skiplist"))
 
 
+def normalize_sanity_check_mode(value: Any) -> str:
+    """A stored sanity_check value as one of SANITY_CHECK_MODES (missing or unknown = the default)."""
+    normalized = str(value or "").strip().lower()
+    return normalized if normalized in SANITY_CHECK_MODES else DEFAULT_SANITY_CHECK
+
+
 def get_repository_sanity_check_mode(repo: str) -> str:
     """Return how the file-count sanity check works for a repository (see SANITY_CHECK_MODES)."""
     mapping_entry = get_repository_mapping(repo)
-    value = mapping_entry.get("sanity_check") if isinstance(mapping_entry, dict) else None
-    normalized = str(value or "").strip().lower()
-    return normalized if normalized in SANITY_CHECK_MODES else DEFAULT_SANITY_CHECK
+    return normalize_sanity_check_mode(mapping_entry.get("sanity_check") if isinstance(mapping_entry, dict) else None)
 
 
 def is_release_type_skipped(repo: str, release_type: Optional[str]) -> bool:
@@ -1055,7 +1059,7 @@ def validate_mapping_payload(raw_payload: Any) -> MappingValidationResult:
             if field_name == "limit":
                 if field_value is None:
                     continue
-                if isinstance(field_value, int):
+                if isinstance(field_value, int) and not isinstance(field_value, bool):
                     if field_value < 0:
                         errors.append(
                             f"{display_location}.limit must be an integer greater than or equal to 0.{display_suffix}"
