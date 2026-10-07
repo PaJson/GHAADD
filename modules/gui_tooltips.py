@@ -53,7 +53,7 @@ COLUMN_HELP = {
     "folder": "The repository's folder name (from mapping.json). Empty = the default, \"repo (owner)\".",
     "repo": "The GitHub repository (owner/repo).",
     "destination": "The folder that holds this repository's folder (the destination in mapping.json).",
-    "tag": "Tag of the newest release for this repository.\n(R) = a Release, (P) = a Pre-release.",
+    "tag": "Tag of the newest release for this repository.\n(R) = Release, (P) = Pre-release.",
     "last_check": "When this repository's newest release was last worked on (a check or a download).",
     "step": "Re-check step of a new release, e.g. 2 / 5: the release is checked again at the intervals from "
             "Settings (or this repository's own) in case files are added later.\n- = nothing is waiting.",
