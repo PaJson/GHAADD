@@ -86,6 +86,10 @@ STATUS_LEGEND_TITLE = "Status"
 
 # --- Buttons and small controls.
 CONTROL_HELP = {
+    "autostart": "Start the polling daemon by itself when you log in, with no window.\n"
+                 "Windows: a scheduled task that also restarts it after a failure (or the Run key if the task cannot be made).\n"
+                 "Linux: a systemd user unit. macOS: a launchd agent.\n"
+                 "A normal Stop is respected; nothing is started until the next login.",
     "restart": "Settings changed since the daemon started.\n"
                "Click to restart it: the job in progress finishes, the daemon stops,\n"
                "then starts again with the new settings.",

@@ -2,7 +2,8 @@
 
 Linux: a systemd *user* unit (`~/.config/systemd/user/ghaadd.service`, no root needed). systemd also
 restarts the daemon if it crashes; a normal stop (the GUI's Stop button) is respected.
-Windows, two ways (`mode`): "task" (Task Scheduler: the task runs the daemon itself without a window and
+macOS: a launchd LaunchAgent (`~/Library/LaunchAgents/com.ghaadd.daemon.plist`, restarts after a failure only).
+Windows, two ways (`mode`; "auto" tries the task and falls back to the Run key): "task" (Task Scheduler: the task runs the daemon itself without a window and
 restarts it after a failure; trigger "logon" or "manual" = no trigger, you start it with `schtasks /Run`) or
 "runkey" (a per-user entry in the registry's Run key that starts the daemon through `main.py --daemon-detached`
 at login). Neither needs admin rights.
@@ -14,6 +15,7 @@ runner, the registry module and the platform are parameters so the tests never c
 from __future__ import annotations
 
 import os
+import plistlib
 import subprocess
 import sys
 import tempfile
@@ -22,8 +24,10 @@ from typing import Any, Callable, Optional
 from xml.sax.saxutils import escape
 
 SERVICE_NAME = "ghaadd.service"
+LAUNCHD_LABEL = "com.ghaadd.daemon"
 RUN_VALUE_NAME = "GHAADD"
 TASK_NAME = "GHAADD"
+MODE_AUTO = "auto"
 MODE_RUNKEY = "runkey"
 MODE_TASK = "task"
 TRIGGER_LOGON = "logon"
@@ -48,12 +52,32 @@ class AutostartStatus:
     detail: str
 
 
+CREATE_NO_WINDOW = 0x08000000  # Windows: do not open a console window for the program (the GUI has no console)
+
+
+def run_hidden(command: list[str], timeout: float = 30) -> "subprocess.CompletedProcess[str]":
+    """Run a helper program and capture its output, without a console window flashing up on Windows."""
+    flags = CREATE_NO_WINDOW if sys.platform == "win32" else 0
+    return subprocess.run(command, capture_output=True, text=True, timeout=timeout, creationflags=flags, check=False)
+
+
 def _run(command: list[str]) -> "subprocess.CompletedProcess[str]":
-    return subprocess.run(command, capture_output=True, text=True, timeout=30, check=False)
+    return run_hidden(command)
 
 
 def _platform(platform: Optional[str]) -> str:
     return platform if platform is not None else sys.platform
+
+
+def is_supported(platform: Optional[str] = None) -> bool:
+    """True on systems that have an autostart mechanism here (no probing, no subprocess)."""
+    system = _platform(platform)
+    return system == "win32" or system == "darwin" or system.startswith("linux")
+
+
+def set_autostart(enabled: bool) -> AutostartResult:
+    """What the GUI's Settings checkbox does: install (best method for this system) or remove autostart."""
+    return install_autostart() if enabled else uninstall_autostart()
 
 
 # ----- paths and texts (pure) -----
@@ -116,25 +140,36 @@ def install_autostart(
     platform: Optional[str] = None,
     home: Optional[str] = None,
     python: Optional[str] = None,
-    mode: str = MODE_RUNKEY,
+    mode: str = MODE_AUTO,
     trigger: str = TRIGGER_LOGON,
+    uid: Optional[int] = None,
 ) -> AutostartResult:
     system = _platform(platform)
-    if mode not in (MODE_RUNKEY, MODE_TASK) or trigger not in (TRIGGER_LOGON, TRIGGER_MANUAL):
+    if mode not in (MODE_AUTO, MODE_RUNKEY, MODE_TASK) or trigger not in (TRIGGER_LOGON, TRIGGER_MANUAL):
         return AutostartResult(False, f"Unknown autostart mode or trigger ({mode}, {trigger}).")
     if system == "win32":
-        if mode == MODE_TASK:
-            return _install_task(runner, trigger, python)
-        return _install_windows(registry, python)
+        if mode == MODE_RUNKEY:
+            return _install_windows(registry, python)
+        task = _install_task(runner, trigger, python)
+        if task.ok or mode == MODE_TASK:
+            return task
+        fallback = _install_windows(registry, python)  # auto: the task could not be created (policy, no schtasks)
+        return AutostartResult(fallback.ok, f"{task.message} Falling back to the Run key: {fallback.message}")
+    if mode != MODE_AUTO and system != "win32":
+        return AutostartResult(False, "--autostart-mode task/runkey is for Windows; here the system's own mechanism is used.")
     if system.startswith("linux"):
-        if mode == MODE_TASK:
-            return AutostartResult(False, "Task Scheduler is a Windows feature; on Linux the systemd user unit is used.")
         return _install_linux(runner, home, python)
+    if system == "darwin":
+        return _install_macos(runner, home, python, uid)
     return AutostartResult(False, f"Autostart is not supported on this system ({system}).")
 
 
 def uninstall_autostart(
-    runner: Runner = _run, registry: Any = None, platform: Optional[str] = None, home: Optional[str] = None
+    runner: Runner = _run,
+    registry: Any = None,
+    platform: Optional[str] = None,
+    home: Optional[str] = None,
+    uid: Optional[int] = None,
 ) -> AutostartResult:
     system = _platform(platform)
     if system == "win32":
@@ -146,11 +181,17 @@ def uninstall_autostart(
         return AutostartResult(True, " ".join(removed) if removed else "Autostart was not installed.")
     if system.startswith("linux"):
         return _uninstall_linux(runner, home)
+    if system == "darwin":
+        return _uninstall_macos(runner, home, uid)
     return AutostartResult(False, f"Autostart is not supported on this system ({system}).")
 
 
 def autostart_status(
-    runner: Runner = _run, registry: Any = None, platform: Optional[str] = None, home: Optional[str] = None
+    runner: Runner = _run,
+    registry: Any = None,
+    platform: Optional[str] = None,
+    home: Optional[str] = None,
+    uid: Optional[int] = None,
 ) -> AutostartStatus:
     system = _platform(platform)
     if system == "win32":
@@ -159,6 +200,8 @@ def autostart_status(
         return AutostartStatus(task.supported or run_key.supported, task.installed or run_key.installed, "; ".join(details))
     if system.startswith("linux"):
         return _status_linux(runner, home)
+    if system == "darwin":
+        return _status_macos(runner, home, uid)
     return AutostartStatus(False, False, f"not supported on {system}")
 
 
@@ -369,3 +412,75 @@ def _status_task(runner: Runner) -> AutostartStatus:
     if result.returncode != 0:
         return AutostartStatus(True, False, "not installed")
     return AutostartStatus(True, True, f'task "{TASK_NAME}" installed')
+
+
+# ----- macOS (launchd LaunchAgent) -----
+
+
+def plist_path(home: Optional[str] = None) -> str:
+    return os.path.join(home or os.path.expanduser("~"), "Library", "LaunchAgents", f"{LAUNCHD_LABEL}.plist")
+
+
+def launchd_plist_bytes(python: str, script: str, workdir: str) -> bytes:
+    """The LaunchAgent: starts at login, restarts only after a failure (a clean exit, such as Stop, stays stopped)."""
+    return plistlib.dumps(
+        {
+            "Label": LAUNCHD_LABEL,
+            "ProgramArguments": [python, script, "--poll"],
+            "WorkingDirectory": workdir,
+            "RunAtLoad": True,
+            "KeepAlive": {"SuccessfulExit": False},
+            "ThrottleInterval": 60,
+            "EnvironmentVariables": {"PYTHONIOENCODING": "utf-8"},
+            "ProcessType": "Background",
+        }
+    )
+
+
+def _launchd_domain(uid: Optional[int]) -> str:
+    return f"gui/{uid if uid is not None else os.getuid()}"
+
+
+def _install_macos(runner: Runner, home: Optional[str], python: Optional[str], uid: Optional[int]) -> AutostartResult:
+    path = plist_path(home)
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as handle:
+            handle.write(launchd_plist_bytes(python or sys.executable, main_script_path(), _APP_DIR))
+    except OSError as exc:
+        return AutostartResult(False, f"Could not write {path}: {exc}")
+    domain = _launchd_domain(uid)
+    try:
+        runner(["launchctl", "bootout", f"{domain}/{LAUNCHD_LABEL}"])  # a stale copy may be loaded; failing is fine
+        result = runner(["launchctl", "bootstrap", domain, path])
+    except (OSError, subprocess.SubprocessError) as exc:
+        return AutostartResult(False, f"Wrote {path}, but launchctl could not run: {exc}")
+    if result.returncode != 0:
+        return AutostartResult(False, f"Wrote {path}, but loading it failed: {_error_text(result)}")
+    return AutostartResult(True, f"Installed {path} and started the daemon. It now starts when you log in.")
+
+
+def _uninstall_macos(runner: Runner, home: Optional[str], uid: Optional[int]) -> AutostartResult:
+    path = plist_path(home)
+    if not os.path.isfile(path):
+        return AutostartResult(True, "Autostart was not installed.")
+    try:
+        runner(["launchctl", "bootout", f"{_launchd_domain(uid)}/{LAUNCHD_LABEL}"])
+    except (OSError, subprocess.SubprocessError):
+        pass  # the file is removed anyway
+    try:
+        os.remove(path)
+    except OSError as exc:
+        return AutostartResult(False, f"Could not remove {path}: {exc}")
+    return AutostartResult(True, f"Removed {path}; the daemon no longer starts at login (a running daemon is left running).")
+
+
+def _status_macos(runner: Runner, home: Optional[str], uid: Optional[int]) -> AutostartStatus:
+    path = plist_path(home)
+    if not os.path.isfile(path):
+        return AutostartStatus(True, False, "not installed")
+    try:
+        loaded = runner(["launchctl", "print", f"{_launchd_domain(uid)}/{LAUNCHD_LABEL}"]).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return AutostartStatus(True, True, f"plist present ({path}); launchctl is not available")
+    return AutostartStatus(True, True, f"{'loaded' if loaded else 'not loaded'} ({path})")

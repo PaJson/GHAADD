@@ -34,7 +34,7 @@ Start it with `python main_gui.py` (add `--theme clam` for coloured table headin
 - **Doctor button:** runs the `--doctor` checks and shows the result (problems, warnings, what was checked). The button is highlighted (⚠) on a first run: when config.json or mapping.json is missing or the Gmail login (`.env`) is not set, and after a report with problems. Dialogs open centred over the main window.
 - **Terminal log:** follows the newest terminal `.log` file (it is empty while the Terminal log switch is off). Filter, copy, open the log or its folder.
 - **Warnings, Completed, Folder limits, Unmapped:** structured events from `state.db` (never parsed from log text), with unread counters in the tab titles, a filter on Warnings and Completed, a detail pane with the full text, and Clear buttons that delete what a tab lists. Double-click a row to jump to its repository.
-- **System tray (optional):** with the extras installed (`pip install -r requirements-optional.txt`) the GUI shows a tray icon: green = daemon running, amber = paused, grey = not running, with a red dot while there is something unread (warnings, unmapped repositories, failed downloads). Minimizing hides the window in the tray (on Windows and macOS; on Linux many desktops show no tray icon, so the window stays on the taskbar unless `gui.minimize_to_tray` is true). Double-click the icon, or use its menu, to show the window; the menu also has Poll now, Pause/Resume and Quit. While the window is hidden or minimized the tray shows a notification for new warnings, a folder over its limit, a new unmapped repository, a failed download and a daemon that stopped without being asked to. Nothing is announced that was already there when the GUI started, and nothing while you are looking at the window. The tray is only the GUI's: the daemon runs the same with or without it.
+- **System tray (optional):** with the extras installed (`pip install -r requirements-optional.txt`) the GUI shows a tray icon: green = daemon running, amber = paused, grey = not running, with a red dot while there is something unread (warnings, unmapped repositories, failed downloads). Minimizing hides the window in the tray (on Windows and macOS; on Linux many desktops show no tray icon, so the window stays on the taskbar unless `gui.minimize_to_tray` is true). Double-click the icon, or use its menu, to show the window; the menu also has Poll now, Pause/Resume and Quit. While the window is hidden or minimized the tray shows a notification for new warnings, a folder over its limit, a new unmapped repository, a failed download and a daemon that stopped without being asked to. Nothing is announced that was already there when the GUI started, and nothing while you are looking at the window. On Windows the notifications are real toasts shown under the "GHAADD" identity (started from the GHAADD shortcut, see Shortcuts; if PowerShell cannot show one, the tray balloon is used). Windows' own list of tray icons still names the program that runs the GUI ("Python"), because that list uses the program file's name and not the app's identity. The tray is only the GUI's: the daemon runs the same with or without it.
 - **Where things are kept:** window size and the "read" marks of the tabs live in `config.json` under `gui` (delete that section to reset; the daemon ignores it). All hover texts are in `modules/gui_tooltips.py`.
 
 ## Requirements
@@ -378,16 +378,29 @@ Key behavior:
 The polling daemon can start by itself when you log in, so you do not have to press Start after every restart:
 
 ```bash
-python main.py --install-autostart      # set it up (and, on Linux, start it now)
+python main.py --install-autostart      # set it up (on Linux and macOS it also starts the daemon now)
 python main.py --autostart-status       # is it set up?
 python main.py --uninstall-autostart    # remove it (a running daemon is left running)
 ```
 
 - **Linux:** installs a systemd *user* unit, `~/.config/systemd/user/ghaadd.service` (no root needed), and enables it. systemd restarts the daemon if it crashes, after 60 seconds; a normal stop (the GUI's Stop button or `--stop`) is respected and it stays stopped until you start it again. To have it run at boot without anyone logging in, run `loginctl enable-linger $USER` once. Logs go to the journal (`journalctl --user -u ghaadd`) and, if switched on, to the terminal log files. Inside WSL this needs systemd enabled for the distribution.
-- **Windows, Run key (the default):** adds a per-user entry (no admin rights) to the registry's Run key that runs `main.py --daemon-detached` at login. That starts the daemon without any window, the same way the GUI's Start button does. Windows does not restart it after a crash.
-- **Windows, Task Scheduler:** `python main.py --install-autostart --autostart-mode task` creates a scheduled task "GHAADD" that runs the daemon itself without a window (`pythonw.exe main.py --poll`) and restarts it after a failure (every minute, up to 999 times; a normal Stop is not restarted). It runs as you, only while you are logged in, so it needs neither admin rights nor a stored password. By default it starts at login; add `--task-trigger manual` for a task with no trigger that you start yourself with `schtasks /Run /TN GHAADD` (or from the Task Scheduler window) and that is then kept running. `--uninstall-autostart` removes the task and the Run key, whichever exist, and `--autostart-status` shows both. Errors of a window-less daemon go to `ghaadd.daemon.stderr.log`.
+- **Windows (the default, `--autostart-mode auto`):** creates a scheduled task "GHAADD" that starts at login, runs the daemon itself without a window (`pythonw.exe main.py --poll`) and restarts it after a failure (every minute, up to 999 times; a normal Stop is not restarted). It runs as you, only while you are logged in, so it needs neither admin rights nor a stored password. If the task cannot be created, the registry Run key is used instead (starts the daemon at login, no restart after a crash).
+- **Windows, other choices:** `--autostart-mode task` allows only the task (an error if it cannot be made), `--autostart-mode runkey` only the Run key. `--task-trigger manual` makes a task with no trigger: nothing starts by itself, you start it with `schtasks /Run /TN GHAADD` (or from the Task Scheduler window) and it is then kept running. `--uninstall-autostart` removes the task and the Run key, whichever exist, and `--autostart-status` shows both. Errors of a window-less daemon go to `ghaadd.daemon.stderr.log`.
+- **macOS:** installs a launchd LaunchAgent, `~/Library/LaunchAgents/com.ghaadd.daemon.plist`, which starts at login and restarts the daemon after a failure only. (Written from the documentation; not yet tried on a real Mac.)
+- **In the GUI:** Settings has a "Start the daemon when I log in" checkbox that does the same as `--install-autostart` / `--uninstall-autostart` when you press Save.
 - `python main.py --daemon-detached` starts the daemon in the background and returns; it does nothing when one is already running (the daemon allows only one instance).
-- macOS is not supported yet.
+
+## Shortcuts (the GHAADD name and icon)
+
+```bash
+python main.py --create-shortcuts                       # Start menu (Windows) / application menu (Linux)
+python main.py --create-shortcuts --shortcut-dir "D:\Launcher"   # or into a folder of your choice
+python main.py --remove-shortcuts
+```
+
+- **Windows:** creates two shortcuts without a console window: **GHAADD** (opens the GUI, with the GHAADD icon) and **GHAADD daemon** (starts the polling daemon in the background and does nothing if one is running). The GHAADD shortcut also carries the app's Windows identity (`GHAADD.GUI`, the one the GUI sets for itself), which is what lets Windows show "GHAADD" with its own icon in the taskbar and the notification settings instead of "Python". Put them in the Start menu (the default) or in any folder, for example a launcher folder you start things from after a reboot.
+- **Linux:** creates `~/.local/share/applications/ghaadd.desktop`, so GHAADD appears in the application menu with its icon.
+- Notifications need the optional tray packages (see System tray); the shortcut only sets the name and icon they appear under.
 
 ## Download Path Routing
 

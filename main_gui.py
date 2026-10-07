@@ -24,6 +24,7 @@ from tkinter import filedialog, messagebox, ttk
 from typing import Any, Callable, Iterable, Literal, Optional
 
 from modules import (
+    autostart,
     config_manager,
     daemon_launcher,
     gui_daemon,
@@ -37,14 +38,14 @@ from modules import (
     mapping_manager,
     status_tabs,
 )
-from modules.app_info import APP_NAME, __version__
+from modules.app_info import APP_NAME, APP_USER_MODEL_ID, __version__
 
 Anchor = Literal["nw", "n", "ne", "w", "center", "e", "sw", "s", "se"]
 
 APP_TITLE = f"{APP_NAME} {__version__}"
 # The app icon is looked up here: ghaadd.ico (preferred on Windows) or ghaadd.png.
 ICON_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
-WINDOWS_APP_ID = "GHAADD.GUI"  # own taskbar identity, so the taskbar shows our icon instead of Python's
+WINDOWS_APP_ID = APP_USER_MODEL_ID  # own taskbar identity, so the taskbar shows our icon instead of Python's
 DAEMON_REFRESH_INTERVAL_MS = 1000
 UNEXPECTED_EXIT_WINDOW_SECONDS = 120.0  # a daemon this GUI started that dies within this long is reported
 DEFAULT_STATUS_TEXT = "config.json · mapping.json · state.db"
@@ -1603,23 +1604,62 @@ class SettingsDialog(tk.Toplevel):
         row(paths, 3, "Max log file (MB, 0 = no rollover)", spin(paths, "log_max_mb", 0, 1000))
         row(paths, 4, "Keep log files (0 = all)", spin(paths, "log_keep", 0, 9999))
 
+        # Autostart lives in the operating system (not in config.json) and is applied on Save. Asking the
+        # system (schtasks, systemctl, ...) can take a moment, so it happens in a thread and the box stays
+        # disabled until the answer is in; the dialog itself never waits for it.
+        self._autostart_before: Optional[bool] = None  # None = not known (yet): Save leaves autostart alone
+        self.autostart_var = tk.BooleanVar(value=False)
+        self._autostart_answer: list[autostart.AutostartStatus] = []
+        self._autostart_check: Optional[ttk.Checkbutton] = None
+        if autostart.is_supported():
+            startup = ttk.LabelFrame(body, text="Startup", padding=10)
+            startup.grid(row=3, column=0, sticky="ew", pady=(10, 0))
+            self._autostart_check = ttk.Checkbutton(
+                startup, text="Start the daemon when I log in", variable=self.autostart_var, state="disabled"
+            )
+            self._autostart_check.grid(row=0, column=0, sticky="w")
+            attach_tooltip(self._autostart_check, gui_tooltips.CONTROL_HELP["autostart"])
+            threading.Thread(target=self._probe_autostart, daemon=True).start()
+            self.after(100, self._apply_autostart_answer)
+
         ttk.Label(
             body,
             text="Changes apply the next time the daemon starts (new-repository defaults apply at once).",
             foreground=COLOR_MUTED,
         ).grid(
-            row=3, column=0, sticky="w", pady=(10, 0)
+            row=4, column=0, sticky="w", pady=(10, 0)
         )
         self.message = ttk.Label(body, text="", foreground=COLOR_ERROR, wraplength=440)
-        self.message.grid(row=4, column=0, sticky="w", pady=(6, 0))
+        self.message.grid(row=5, column=0, sticky="w", pady=(6, 0))
         buttons = ttk.Frame(body)
-        buttons.grid(row=5, column=0, sticky="e", pady=(10, 0))
+        buttons.grid(row=6, column=0, sticky="e", pady=(10, 0))
         ttk.Button(buttons, text="Cancel", command=self.destroy).grid(row=0, column=0, padx=(0, 6))
         ttk.Button(buttons, text="Save", command=self._save).grid(row=0, column=1)
 
         self.bind("<Escape>", lambda _event: self.destroy())
         center_dialog(self, master)
         self.grab_set()
+
+    def _probe_autostart(self) -> None:
+        try:
+            status = autostart.autostart_status()
+        except Exception:  # a probe that fails leaves the box disabled
+            status = autostart.AutostartStatus(False, False, "")
+        self._autostart_answer.append(status)
+
+    def _apply_autostart_answer(self) -> None:
+        """Poll (from the Tk loop) for the background probe's answer, then enable the box."""
+        try:
+            if not self._autostart_answer:
+                self.after(100, self._apply_autostart_answer)
+                return
+            status = self._autostart_answer[0]
+            if status.supported and self._autostart_check is not None:
+                self._autostart_before = status.installed
+                self.autostart_var.set(status.installed)
+                self._autostart_check.configure(state="normal")
+        except tk.TclError:  # the dialog was closed meanwhile
+            pass
 
     def _save(self) -> None:
         result = gui_forms.build_settings_changes({key: var.get() for key, var in self.vars.items()})
@@ -1634,6 +1674,9 @@ class SettingsDialog(tk.Toplevel):
         text = "Settings saved; they apply when the daemon next starts." if changed else "No settings changed."
         if result.warnings:
             text += " " + " ".join(result.warnings)
+        if self._autostart_before is not None and bool(self.autostart_var.get()) != self._autostart_before:
+            change = autostart.set_autostart(bool(self.autostart_var.get()))
+            text += " " + ("Start at login is now " + ("on." if self.autostart_var.get() else "off.") if change.ok else f"Start at login could not be changed: {change.message}")
         self.destroy()
         self._on_saved(text)
 
@@ -2255,7 +2298,10 @@ class MainWindow(tk.Tk):
         if sys.platform == "win32":  # notifications would otherwise be listed under "Python"
             gui_tray.register_windows_identity(WINDOWS_APP_ID, APP_NAME, os.path.join(ICON_DIR, "ghaadd.ico"))
         tray = gui_tray.TrayIcon(
-            APP_NAME, lambda: "Resume polling" if self._snapshot.paused else "Pause polling", png_path
+            APP_NAME,
+            lambda: "Resume polling" if self._snapshot.paused else "Pause polling",
+            png_path,
+            toast_app_id=APP_USER_MODEL_ID if sys.platform == "win32" else None,
         )
         if not tray.start():
             return

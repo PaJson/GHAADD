@@ -4,6 +4,7 @@ Everything runs against a temp home folder, a fake systemctl and a fake registry
 Run from the project root: python -m unittest discover -s tests -t .
 """
 import os
+import plistlib
 import subprocess
 import tempfile
 import unittest
@@ -183,10 +184,10 @@ class WindowsTests(unittest.TestCase):
     def test_install_status_uninstall(self) -> None:
         registry, schtasks = FakeRegistry(), FakeSchtasks()
         self.assertFalse(autostart.autostart_status(schtasks, registry, "win32").installed)
-        result = autostart.install_autostart(schtasks, registry, "win32", python="C:\\py\\python.exe")
+        result = autostart.install_autostart(schtasks, registry, "win32", python="C:\\py\\python.exe", mode="runkey")
         self.assertTrue(result.ok, result.message)
         self.assertIn("--daemon-detached", registry.values[autostart.RUN_VALUE_NAME])
-        self.assertFalse(schtasks.installed)  # the default mode is the Run key only
+        self.assertFalse(schtasks.installed)  # runkey mode touches no task
         status = autostart.autostart_status(schtasks, registry, "win32")
         self.assertTrue(status.installed)
         self.assertTrue(autostart.uninstall_autostart(schtasks, registry, "win32").ok)
@@ -195,8 +196,8 @@ class WindowsTests(unittest.TestCase):
 
     def test_install_twice_keeps_one_entry(self) -> None:
         registry, schtasks = FakeRegistry(), FakeSchtasks()
-        autostart.install_autostart(schtasks, registry, "win32")
-        autostart.install_autostart(schtasks, registry, "win32")
+        autostart.install_autostart(schtasks, registry, "win32", mode="runkey")
+        autostart.install_autostart(schtasks, registry, "win32", mode="runkey")
         self.assertEqual(list(registry.values), [autostart.RUN_VALUE_NAME])
 
 
@@ -239,7 +240,7 @@ class TaskSchedulerTests(unittest.TestCase):
 
     def test_status_and_uninstall_cover_both_kinds(self) -> None:
         self.install()
-        autostart.install_autostart(self.schtasks, self.registry, "win32")  # and the Run key as well
+        autostart.install_autostart(self.schtasks, self.registry, "win32", mode="runkey")  # and the Run key as well
         status = autostart.autostart_status(self.schtasks, self.registry, "win32")
         self.assertTrue(status.installed)
         self.assertIn("Task Scheduler: task", status.detail)
@@ -255,17 +256,91 @@ class TaskSchedulerTests(unittest.TestCase):
         ET.fromstring(text.split("?>", 1)[1])
         self.assertIn("a&amp;b", text)
 
+    def test_auto_mode_uses_the_task_and_falls_back_to_the_run_key(self) -> None:
+        result = autostart.install_autostart(self.schtasks, self.registry, "win32")
+        self.assertTrue(result.ok, result.message)
+        self.assertTrue(self.schtasks.installed)
+        self.assertEqual(self.registry.values, {})
+        registry, refusing = FakeRegistry(), FakeSchtasks(fail_create=True)
+        result = autostart.install_autostart(refusing, registry, "win32")
+        self.assertTrue(result.ok, result.message)
+        self.assertIn("Falling back to the Run key", result.message)
+        self.assertIn(autostart.RUN_VALUE_NAME, registry.values)
+        strict = autostart.install_autostart(FakeSchtasks(fail_create=True), FakeRegistry(), "win32", mode="task")
+        self.assertFalse(strict.ok)  # an explicit task request does not quietly become something else
+
     def test_task_mode_is_not_for_linux_and_bad_choices_are_refused(self) -> None:
         self.assertFalse(autostart.install_autostart(platform="linux", mode="task").ok)
         self.assertFalse(autostart.install_autostart(platform="win32", mode="service").ok)
         self.assertFalse(autostart.install_autostart(platform="win32", mode="task", trigger="boot").ok)
 
 
+class MacTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._temp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(self._temp.cleanup)
+        self.home = self._temp.name
+        self.calls: list[list[str]] = []
+
+    def runner(self, command: list[str]) -> "subprocess.CompletedProcess[str]":
+        self.calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    def test_the_plist_starts_at_login_and_restarts_only_after_a_failure(self) -> None:
+        data = plistlib.loads(autostart.launchd_plist_bytes("/usr/bin/python3", "/opt/g/main.py", "/opt/g"))
+        self.assertEqual(data["ProgramArguments"], ["/usr/bin/python3", "/opt/g/main.py", "--poll"])
+        self.assertTrue(data["RunAtLoad"])
+        self.assertEqual(data["KeepAlive"], {"SuccessfulExit": False})  # a clean Stop stays stopped
+        self.assertEqual(data["Label"], autostart.LAUNCHD_LABEL)
+
+    def test_install_status_uninstall(self) -> None:
+        result = autostart.install_autostart(self.runner, platform="darwin", home=self.home, uid=501)
+        self.assertTrue(result.ok, result.message)
+        self.assertTrue(os.path.isfile(autostart.plist_path(self.home)))
+        self.assertEqual(self.calls[-1], ["launchctl", "bootstrap", "gui/501", autostart.plist_path(self.home)])
+        status = autostart.autostart_status(self.runner, platform="darwin", home=self.home, uid=501)
+        self.assertTrue(status.installed)
+        self.assertIn("loaded", status.detail)
+        self.assertTrue(autostart.uninstall_autostart(self.runner, platform="darwin", home=self.home, uid=501).ok)
+        self.assertFalse(os.path.exists(autostart.plist_path(self.home)))
+        self.assertFalse(autostart.autostart_status(self.runner, platform="darwin", home=self.home, uid=501).installed)
+
+    def test_a_failed_load_is_reported(self) -> None:
+        def failing(command):
+            return subprocess.CompletedProcess(command, 5 if command[1] == "bootstrap" else 0, "", "Bootstrap failed: 5")
+
+        result = autostart.install_autostart(failing, platform="darwin", home=self.home, uid=501)
+        self.assertFalse(result.ok)
+        self.assertIn("loading it failed", result.message)
+
+    def test_windows_choices_are_refused_on_a_mac(self) -> None:
+        self.assertFalse(autostart.install_autostart(self.runner, platform="darwin", home=self.home, mode="task").ok)
+
+
+class HiddenRunTests(unittest.TestCase):
+    def test_helper_programs_get_no_console_window_on_windows(self) -> None:
+        with mock.patch.object(autostart.sys, "platform", "win32"), mock.patch.object(autostart.subprocess, "run") as run:
+            autostart.run_hidden(["schtasks", "/Query"])
+        self.assertEqual(run.call_args.kwargs["creationflags"], autostart.CREATE_NO_WINDOW)
+
+    def test_other_systems_use_no_special_flags(self) -> None:
+        with mock.patch.object(autostart.sys, "platform", "linux"), mock.patch.object(autostart.subprocess, "run") as run:
+            autostart.run_hidden(["systemctl", "--user", "is-active", "x"])
+        self.assertEqual(run.call_args.kwargs["creationflags"], 0)
+
+
+class SupportTests(unittest.TestCase):
+    def test_support_is_known_without_probing_the_system(self) -> None:
+        for system in ("win32", "linux", "linux2", "darwin"):
+            self.assertTrue(autostart.is_supported(system), system)
+        self.assertFalse(autostart.is_supported("freebsd13"))
+
+
 class OtherSystemTests(unittest.TestCase):
     def test_an_unsupported_system_says_so(self) -> None:
-        self.assertFalse(autostart.install_autostart(platform="darwin").ok)
-        self.assertFalse(autostart.uninstall_autostart(platform="darwin").ok)
-        status = autostart.autostart_status(platform="darwin")
+        self.assertFalse(autostart.install_autostart(platform="freebsd13").ok)
+        self.assertFalse(autostart.uninstall_autostart(platform="freebsd13").ok)
+        status = autostart.autostart_status(platform="freebsd13")
         self.assertFalse(status.supported)
 
 

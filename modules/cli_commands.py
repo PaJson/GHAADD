@@ -96,10 +96,13 @@ def parse_cli_args(args: list[str], version: str) -> argparse.Namespace:
 
     autostart_group = parser.add_argument_group("autostart options")
     autostart_group.add_argument("--install-autostart", action="store_true", help="Start the polling daemon automatically at login (Linux: systemd user unit; Windows: per-user Run entry).")
-    autostart_group.add_argument("--autostart-mode", choices=("runkey", "task"), default="runkey", help="Windows only, with --install-autostart: runkey = start at login through the registry Run key (default); task = a Task Scheduler task that runs the daemon and restarts it after a failure.")
+    autostart_group.add_argument("--autostart-mode", choices=("auto", "task", "runkey"), default="auto", help="Windows only, with --install-autostart: auto = a Task Scheduler task that runs the daemon and restarts it after a failure, or the registry Run key if the task cannot be created (default); task = only the task; runkey = only the Run key (starts the daemon at login, no restart).")
     autostart_group.add_argument("--task-trigger", choices=("logon", "manual"), default="logon", help="With --autostart-mode task: start at login (default) or only when you start the task yourself (schtasks /Run /TN GHAADD).")
     autostart_group.add_argument("--uninstall-autostart", action="store_true", help="Remove the automatic start at login (a running daemon is left running).")
     autostart_group.add_argument("--autostart-status", action="store_true", help="Show whether the daemon starts automatically at login.")
+    autostart_group.add_argument("--create-shortcuts", action="store_true", help="Create the GHAADD shortcuts (Windows: \"GHAADD\" for the window and \"GHAADD daemon\" in the Start menu, so notifications say GHAADD instead of Python; Linux: an application-menu launcher).")
+    autostart_group.add_argument("--remove-shortcuts", action="store_true", help="Remove the shortcuts made by --create-shortcuts.")
+    autostart_group.add_argument("--shortcut-dir", metavar="FOLDER", help="Put the shortcuts in this folder instead of the Start menu / application menu (for example your own launcher folder).")
     autostart_group.add_argument("--daemon-detached", action="store_true", help="Start the polling daemon in the background (no console window) and return; does nothing if one is running.")
 
     queue_group = parser.add_argument_group("queue status/reporting options")
@@ -240,6 +243,16 @@ def handle_cli_command(parsed_args: argparse.Namespace, run_smoke_tests: Callabl
         else:
             status = autostart.autostart_status()
             print(f"Autostart: {status.detail}")
+        return True
+
+    if parsed_args.create_shortcuts or parsed_args.remove_shortcuts:
+        from modules import shortcuts  # imported here: only these commands need it
+
+        if parsed_args.create_shortcuts:
+            result = shortcuts.create_shortcuts(parsed_args.shortcut_dir)
+        else:
+            result = shortcuts.remove_shortcuts(parsed_args.shortcut_dir)
+        print(result.message, file=sys.stdout if result.ok else sys.stderr)
         return True
 
     if parsed_args.daemon_detached:

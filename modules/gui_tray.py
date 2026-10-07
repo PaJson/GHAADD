@@ -10,8 +10,12 @@ GUI polls `TrayIcon.pending_actions()` from its Tk loop, so Tk is never touched 
 
 from __future__ import annotations
 
+import base64
 import os
 import queue
+import subprocess
+import sys
+import threading
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Optional, Sequence
 
@@ -212,13 +216,60 @@ def register_windows_identity(app_id: str, display_name: str, icon_path: str, re
     return True
 
 
+# ----- Windows toast notifications (named after the app, not after python) -----
+
+_CREATE_NO_WINDOW = 0x08000000
+
+
+def _ps_quote(text: str) -> str:
+    return "'" + text.replace("'", "''") + "'"
+
+
+def windows_toast_script(app_id: str, title: str, message: str) -> str:
+    """PowerShell (5.1) that shows a toast under `app_id`; Windows lists it by the name registered for that id."""
+    return "\n".join(
+        [
+            "$ErrorActionPreference = 'Stop'",
+            "[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null",
+            "[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null",
+            "$xml = New-Object Windows.Data.Xml.Dom.XmlDocument",
+            "$xml.LoadXml('<toast><visual><binding template=\"ToastGeneric\"><text/><text/></binding></visual></toast>')",
+            "$texts = $xml.GetElementsByTagName('text')",
+            f"$texts.Item(0).AppendChild($xml.CreateTextNode({_ps_quote(title)})) | Out-Null",
+            f"$texts.Item(1).AppendChild($xml.CreateTextNode({_ps_quote(message)})) | Out-Null",
+            "$toast = New-Object Windows.UI.Notifications.ToastNotification $xml",
+            f"[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier({_ps_quote(app_id)}).Show($toast)",
+        ]
+    )
+
+
+def send_windows_toast(app_id: str, notice: "Notice", runner: Any = None) -> bool:
+    """Show a toast; True when PowerShell reported success. Never raises."""
+    encoded = base64.b64encode(windows_toast_script(app_id, notice.title, notice.message).encode("utf-16-le")).decode("ascii")
+    command = ["powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded]
+    try:
+        if runner is not None:
+            return runner(command).returncode == 0
+        flags = _CREATE_NO_WINDOW if sys.platform == "win32" else 0
+        return subprocess.run(command, capture_output=True, timeout=30, creationflags=flags, check=False).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 # ----- the pystray adapter -----
 
 
 class TrayIcon:
     """The tray icon itself. Create it, call `start()`, then poll `pending_actions()` from the GUI loop."""
 
-    def __init__(self, app_name: str, paused_label: Callable[[], str], base_image_path: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        app_name: str,
+        paused_label: Callable[[], str],
+        base_image_path: Optional[str] = None,
+        toast_app_id: Optional[str] = None,
+    ) -> None:
+        self._toast_app_id = toast_app_id  # Windows: show notifications as toasts under this app id
         self._app_name = app_name
         self._paused_label = paused_label
         self._base_image_path = base_image_path
@@ -275,8 +326,22 @@ class TrayIcon:
     def notify(self, notice: Notice) -> None:
         if self._icon is None:
             return
+        if self._toast_app_id and sys.platform == "win32":
+            # PowerShell takes a second or so: do it in a thread, and fall back to the tray balloon if it fails
+            threading.Thread(target=self._toast_or_balloon, args=(notice,), daemon=True).start()
+            return
+        self._balloon(notice)
+
+    def _toast_or_balloon(self, notice: Notice) -> None:
+        if not send_windows_toast(self._toast_app_id or "", notice):
+            self._balloon(notice)
+
+    def _balloon(self, notice: Notice) -> None:
+        icon = self._icon
+        if icon is None:
+            return
         try:
-            self._icon.notify(notice.message, notice.title)
+            icon.notify(notice.message, notice.title)
         except Exception:  # not every Linux tray can show balloons
             pass
 

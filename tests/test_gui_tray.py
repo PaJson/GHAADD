@@ -252,5 +252,42 @@ class FailedJobFeedTests(unittest.TestCase):
         self.assertEqual([job["id"] for job in feed.take_failed_jobs()], [second])
 
 
+class ToastTests(unittest.TestCase):
+    def test_the_script_uses_the_app_id_and_quotes_the_texts(self) -> None:
+        script = gui_tray.windows_toast_script("GHAADD.GUI", "It's a title", "o/app: 3 <new> & files")
+        self.assertIn("CreateToastNotifier('GHAADD.GUI')", script)
+        self.assertIn("It''s a title", script)  # a single quote is doubled inside PowerShell quotes
+        self.assertIn("CreateTextNode('o/app: 3 <new> & files')", script)  # text nodes, so no XML escaping is needed
+
+    def test_success_and_failure_are_reported_without_raising(self) -> None:
+        notice = gui_tray.Notice("t", "m")
+        seen = []
+
+        def runner(command):
+            seen.append(command)
+            return SimpleNamespace(returncode=0)
+
+        self.assertTrue(gui_tray.send_windows_toast("GHAADD.GUI", notice, runner))
+        self.assertIn("-EncodedCommand", seen[0])
+        self.assertFalse(gui_tray.send_windows_toast("GHAADD.GUI", notice, lambda command: SimpleNamespace(returncode=1)))
+
+        def broken(command):
+            raise OSError("no powershell")
+
+        self.assertFalse(gui_tray.send_windows_toast("GHAADD.GUI", notice, broken))
+
+    def test_a_failed_toast_falls_back_to_the_tray_balloon(self) -> None:
+        icon = gui_tray.TrayIcon("GHAADD", lambda: "Pause", toast_app_id="GHAADD.GUI")
+        shown = []
+        icon._icon = SimpleNamespace(notify=lambda message, title: shown.append((title, message)))
+        with mock.patch.object(gui_tray, "send_windows_toast", return_value=False):
+            icon._toast_or_balloon(gui_tray.Notice("t", "m"))
+        self.assertEqual(shown, [("t", "m")])
+        shown.clear()
+        with mock.patch.object(gui_tray, "send_windows_toast", return_value=True):
+            icon._toast_or_balloon(gui_tray.Notice("t", "m"))
+        self.assertEqual(shown, [])
+
+
 if __name__ == "__main__":
     unittest.main()
