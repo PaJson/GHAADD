@@ -200,6 +200,35 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(self.store.saves, saves_after_start)
 
 
+class ReleaseTypeTests(unittest.TestCase):
+    def test_the_release_type_is_read_from_the_destination_path(self) -> None:
+        path = r"L:\Gaming\Emu\@GitHub\Pre-release\2026-10-06_13-24, NESd nightly, nightly, 2a91d3e"
+        self.assertEqual(status_tabs.release_type_from_path(path), "Pre-release")
+        self.assertEqual(status_tabs.release_type_from_path(path.replace("Pre-release", "Release")), "Release")
+        self.assertEqual(status_tabs.release_type_from_path("K:/Apps/@GitHub/release/2026-10-06_13-24, x"), "Release")
+        for odd in ("", None, r"K:\Apps\Release\notes", r"K:\Release Candidates\x"):
+            self.assertEqual(status_tabs.release_type_from_path(odd), "", odd)
+
+    def test_markers(self) -> None:
+        from modules.repo_overview import format_tag, release_marker
+        self.assertEqual((release_marker("Pre-release"), release_marker("Release"), release_marker(None)), ("(P)", "(R)", ""))
+        self.assertEqual(format_tag("v1", "Pre-release"), "(P) v1")
+        self.assertEqual(format_tag("v1", "Release"), "(R) v1")
+        self.assertEqual(format_tag("v1", None), "v1")
+        self.assertEqual(format_tag(None, "Release"), "")
+
+    def test_completed_rows_carry_the_marker_and_the_tag(self) -> None:
+        events = FakeEvents()
+        events.add("COMPLETED_MOVE", tag="nightly", message="m")
+        events.events[0]["destination_path"] = r"L:\@GitHub\Pre-release\2026-10-06_13-24, x"
+        model = StatusTabsModel(status_tabs.TAB_DEFS, events.fetch, events.max_id, MemoryStore())
+        model.refresh()
+        events.add("COMPLETED_MOVE", tag="v2", message="m")
+        events.events[1]["destination_path"] = r"L:\@GitHub\Release\2026-10-07_13-24, x"
+        model.refresh()
+        self.assertEqual([r.kind for r in model.rows("completed")], ["(R) v2", "(P) nightly"])  # newest first
+
+
 class HelperTests(unittest.TestCase):
     def test_find_repo_only_returns_known_repositories(self) -> None:
         known = {"ip7z/7zip": "ip7z/7zip"}

@@ -22,6 +22,8 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any, Callable, Iterable, Mapping, Optional, Protocol
 
+from modules.repo_overview import format_tag
+
 DEFAULT_ROW_LIMIT = 500
 
 KIND_EVENTS = "events"
@@ -111,6 +113,16 @@ def format_event_time(epoch: Any) -> str:
         return datetime.fromtimestamp(float(epoch)).strftime("%Y-%m-%d %H:%M:%S")
     except (TypeError, ValueError, OSError, OverflowError):
         return ""
+
+
+# ".../@GitHub/Pre-release/2026-10-06_13-24, ..." : the release type is the folder above the dated one.
+_RELEASE_FOLDER = re.compile(r"[\\/](Pre-release|Release)[\\/]\d{4}-\d{2}-\d{2}_", re.IGNORECASE)
+
+
+def release_type_from_path(path: Any) -> str:
+    """"Release" / "Pre-release" read from a completed move's destination path ("" if it is not in there)."""
+    match = _RELEASE_FOLDER.search(str(path or ""))
+    return match.group(1).capitalize() if match else ""
 
 
 def find_repo(message: str, known: Mapping[str, str]) -> str:
@@ -277,7 +289,7 @@ class StatusTabsModel:
     def _to_row(tab: TabDef, event: Mapping[str, Any], known: Mapping[str, str]) -> StatusRow:
         message = str(event.get("message") or "")
         if tab.type_source == TYPE_TAG:
-            kind = str(event.get("tag") or "")
+            kind = format_tag(event.get("tag"), release_type_from_path(event.get("destination_path")))
         elif tab.type_source == TYPE_FIXED:
             kind = tab.type_text
         else:

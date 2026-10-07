@@ -306,6 +306,16 @@ class RepoJobSummaryTests(unittest.TestCase):
         failed = summaries["other/failed"]
         self.assertEqual((failed["latest_status"], failed["pending_next_check"]), ("FAILED", None))
 
+    def test_the_latest_release_type_is_summarised(self) -> None:
+        db_manager.enqueue_job(self.connection, "o/pre", "nightly", release_type="Pre-release")
+        db_manager.enqueue_job(self.connection, "o/rel", "v1", release_type="Release")
+        summaries = db_manager.get_repo_job_summaries(self.connection)
+        self.assertEqual(summaries["o/pre"]["latest_release_type"], "Pre-release")
+        rows = repo_overview.build_rows(
+            [{"name": "o/pre"}, {"name": "o/rel"}], summaries, 0.0, lambda entry: 5
+        )
+        self.assertEqual({r.repo: r.tag for r in rows}, {"o/pre": "(P) nightly", "o/rel": "(R) v1"})
+
     def test_repos_with_a_folder_limit_warning_are_found(self) -> None:
         db_manager.insert_lifecycle_event(
             self.connection, "WARNING", "Folder limit warning: Owner/Repo currently has 30 folder(s) in 'K:/x' (limit=25).",

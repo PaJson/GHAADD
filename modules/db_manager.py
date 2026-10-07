@@ -717,6 +717,7 @@ def get_repo_job_summaries(connection):
         summaries[row["repo"].lower()] = {
             "last_activity": row["last_activity"],
             "latest_tag": None,
+            "latest_release_type": None,
             "latest_status": None,
             "latest_updated_at": None,
             "latest_downloaded": 0,
@@ -728,7 +729,7 @@ def get_repo_job_summaries(connection):
 
     latest_rows = connection.execute(
         """
-        SELECT repo, tag, status, updated_at, downloaded_count, skipped_count, total_items
+        SELECT repo, tag, release_type, status, updated_at, downloaded_count, skipped_count, total_items
         FROM job_queue
         WHERE id IN (
             SELECT MAX(id) FROM job_queue WHERE status != 'SUPERSEDED' GROUP BY repo
@@ -738,6 +739,7 @@ def get_repo_job_summaries(connection):
     for row in latest_rows:
         summary = summaries[row["repo"].lower()]
         summary["latest_tag"] = row["tag"]
+        summary["latest_release_type"] = row["release_type"]
         summary["latest_status"] = row["status"]
         summary["latest_updated_at"] = row["updated_at"]
         summary["latest_downloaded"] = row["downloaded_count"]

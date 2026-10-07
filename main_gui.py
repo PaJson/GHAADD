@@ -2,7 +2,7 @@
 
 Phase 4, step 2: the Mappings tab and the Settings dialog work on real data
 (mapping.json via mapping_manager, config.json via config_manager, queue state
-via gui_data/db_manager). The control bar, Live log and status tabs are still
+via gui_data/db_manager). The control bar, Terminal log and status tabs are still
 static placeholders (steps 3-5). The widgets here are a thin view: parsing,
 validation, ordering and data loading live in the toolkit-independent modules
 (gui_forms, gui_data, repo_overview).
@@ -29,6 +29,7 @@ from modules import (
     gui_data,
     gui_forms,
     gui_state,
+    gui_tooltips,
     log_tail,
     mapping_manager,
     status_tabs,
@@ -45,11 +46,6 @@ REFRESH_INTERVAL_MS = 3000
 STATUS_MESSAGE_MS = 6000
 DAEMON_REFRESH_INTERVAL_MS = 1000
 UNEXPECTED_EXIT_WINDOW_SECONDS = 120.0  # a daemon this GUI started that dies within this long is reported
-RESTART_HINT = (
-    "Settings changed since the daemon started.\n"
-    "Click to restart it: the job in progress finishes, the daemon stops,\n"
-    "then starts again with the new settings."
-)
 DEFAULT_STATUS_TEXT = "config.json · mapping.json · state.db"
 
 COLOR_ERROR = "#b3261e"
@@ -70,59 +66,8 @@ STATUS_ICONS = {
     "Failed": "✖",
 }
 
-# Hover text for the status icon in the first column.
-STATUS_HINTS = {
-    "Running": "A job is being processed now.",
-    "Queued": "A check is due and waiting its turn.",
-    "Waiting": "The next recheck is scheduled for later.",
-    "Idle": "Nothing pending.",
-    "Paused": "This repository is paused in mapping.json.",
-    "Failed": "The last job failed.",
-}
-
-STATUS_LEGEND = "Status\n" + "\n".join(
-    f"{icon}  {name}: {STATUS_HINTS[name]}" for name, icon in STATUS_ICONS.items()
-)
-
-DAEMON_REFRESH_INTERVAL_MS = 1000
-UNEXPECTED_EXIT_WINDOW_SECONDS = 120.0  # a daemon this GUI started that dies within this long is reported
-RESTART_HINT = (
-    "Settings changed since the daemon started.\n"
-    "Click to restart it: the job in progress finishes, the daemon stops,\n"
-    "then starts again with the new settings."
-)
-DEFAULT_STATUS_TEXT = "config.json · mapping.json · state.db"
-
-COLOR_ERROR = "#b3261e"
-COLOR_WARNING = "#9a6700"
-COLOR_MUTED = "#666666"
-COLOR_STRIPE = "#f2f5f9"  # every second table row
-COLOR_HEADER_BG = "#dde5ef"  # table column headers
-COLOR_HEADER_FG = "#1f2d3d"
-COLOR_SELECTED = "#0078d4"
-
-# Row icon per status (first column). Paused is a mapping.json flag and wins over runtime state.
-STATUS_ICONS = {
-    "Running": "▶",
-    "Queued": "⏳",
-    "Waiting": "◷",
-    "Idle": "○",
-    "Paused": "⏸",
-    "Failed": "✖",
-}
-
-# Hover text for the status icon in the first column.
-STATUS_HINTS = {
-    "Running": "A job is being processed now.",
-    "Queued": "A check is due and waiting its turn.",
-    "Waiting": "The next recheck is scheduled for later.",
-    "Idle": "Nothing pending.",
-    "Paused": "This repository is paused in mapping.json.",
-    "Failed": "The last job failed.",
-}
-
-STATUS_LEGEND = "Status\n" + "\n".join(
-    f"{icon}  {name}: {STATUS_HINTS[name]}" for name, icon in STATUS_ICONS.items()
+STATUS_LEGEND = gui_tooltips.STATUS_LEGEND_TITLE + "\n" + "\n".join(
+    f"{icon}  {name}: {gui_tooltips.STATUS_HINTS[name]}" for name, icon in STATUS_ICONS.items()
 )
 
 
@@ -144,37 +89,6 @@ def open_in_file_manager(path: str) -> None:
         subprocess.Popen(["open", path])
     else:
         subprocess.Popen(["xdg-open", path])
-
-
-# Hover help for the editor's field titles (keys match MappingsTab.FORM_COLUMNS plus "paused"/"open_folder").
-FIELD_HELP = {
-    "name": "The repository on GitHub (owner/repo). It identifies this entry and cannot be changed here. "
-            "For a renamed repository, add the new name and remove the old entry.",
-    "github": "Open this repository's page on GitHub in your web browser.",
-    "foldername": "Name of this repository's folder inside the destination. "
-                  "Empty = the default, \"repo (owner)\".",
-    "destination": "The folder that holds this repository's folder. Finished downloads go to "
-                   "<destination>/<folder name>[/<subfolder>]. Empty = the default download folder from Settings.",
-    "subfolder": "Optional folders below the folder name, separated by / or \\ (for example Nightly/x64). "
-                 "Downloads go there instead of straight into the folder name.",
-    "release_folders": "The release type folders that count towards the Limit, comma separated "
-                       "(for example Release, Pre-release). Empty = detect Release and Pre-release automatically. "
-                       "It does not change what is downloaded; use Skiplist for that.",
-    "limit": "Warn (Folder limits tab) when more than this many release folders exist for this repository. "
-             "0 = no warning. The warning never deletes anything.",
-    "recheck": "Minutes to wait between re-checks of a new release, comma separated (for example 3, 10, 30, 120). "
-               "Empty = use the default shown below.",
-    "default_recheck": "The re-check schedule used when Recheck is empty (set in Settings).",
-    "skiplist": "Release types to ignore for this repository, comma separated: Release, Pre-release. "
-                "A matching notification is logged as a warning and nothing is downloaded. Empty = download both.",
-    "last_seen": "When the last GitHub notification for this repository arrived (set by the daemon).",
-    "last_finalized": "When a release was last moved to its destination (set by the daemon).",
-    "paused": "Temporarily stop new downloads for this repository. Notification emails stay unread in the "
-              "mailbox; jobs already queued still finish.",
-    "open_folder": "Open this repository's folder in the file manager: destination + folder name + subfolder. "
-                   "If that folder does not exist yet, the closest existing parent opens. "
-                   "Double-clicking a row in the table does the same.",
-}
 
 
 def attach_tooltip(widget: tk.Misc, text: str) -> None:
@@ -255,7 +169,7 @@ class FilterEntry(ttk.Frame):
         self.entry.grid(row=0, column=0, sticky="ew")
         self.clear_button = ttk.Button(self, text="✕", width=3, command=self.clear)
         self.clear_button.grid(row=0, column=1, padx=(4, 0))
-        attach_tooltip(self.clear_button, "Clear the filter (Esc)")
+        attach_tooltip(self.clear_button, gui_tooltips.CONTROL_HELP["clear_filter"])
         self.entry.bind("<Escape>", lambda _event: self.clear())
         textvariable.trace_add("write", lambda *_: self._sync())
         self._sync()
@@ -311,7 +225,7 @@ class ControlBar(ttk.Frame):
         self.poll_button = ttk.Button(buttons, text="Poll now")
         self.check_button = ttk.Button(buttons, text="Check folders")
         self.detailed_log = tk.BooleanVar(value=False)
-        self.log_check = ttk.Checkbutton(buttons, text="Detailed log", variable=self.detailed_log)
+        self.log_check = ttk.Checkbutton(buttons, text="Terminal log", variable=self.detailed_log)
         self.restart_button = ttk.Button(buttons, text="\u21bb Restart")
         self.settings_button = ttk.Button(buttons, text="Settings\u2026")
         self._restart_tip = Tooltip(self.restart_button)
@@ -323,19 +237,14 @@ class ControlBar(ttk.Frame):
             (self.start_button, self.stop_button, self.pause_button, self.poll_button, self.check_button)
         ):
             widget.grid(row=0, column=column, padx=(0, 6))
-        attach_tooltip(
-            self.check_button,
-            "Check now that every mapped destination exists, count the folders of each repository with a limit "
-            "(the \"12 / 15\" in the table) and warn about repositories over their limit. "
-            "It does not poll the mailbox.",
-        )
+        attach_tooltip(self.check_button, gui_tooltips.CONTROL_HELP["check_folders"])
         self.log_check.grid(row=0, column=5, padx=(6, 12))
         self.restart_button.grid(row=0, column=6, padx=(0, 6))
         self.settings_button.grid(row=0, column=7)
         self.apply_view(gui_daemon.build_view(gui_daemon.DaemonSnapshot(), 0.0))
 
     def _show_restart_tip(self, event: tk.Event) -> None:  # type: ignore[type-arg]
-        self._restart_tip.schedule(RESTART_HINT, event.x_root, event.y_root)
+        self._restart_tip.schedule(gui_tooltips.CONTROL_HELP["restart"], event.x_root, event.y_root)
 
     def apply_view(self, view: gui_daemon.ControlBarView) -> None:
         """Show the given status text/colors and enable only the buttons that make sense."""
@@ -428,7 +337,7 @@ class MappingsTab(ttk.Frame):
         ("foldername", "Name", 150, "w"),
         ("repo", "Repository", 150, "w"),
         ("destination", "Destination", 150, "w"),
-        ("tag", "Latest tag", 100, "w"),
+        ("tag", "Tag", 100, "w"),
         ("last_check", "Last check", 145, "w"),
         ("step", "Recheck", 65, "center"),
         ("next_check", "Next check", 145, "w"),
@@ -562,8 +471,8 @@ class MappingsTab(ttk.Frame):
                 # widgets to lay out and repaint while the window is resized).
                 title = ttk.Label(self.form_frame, text=label)
                 title.grid(row=row * 2, column=column, sticky="w", padx=pad)
-                if key in FIELD_HELP:
-                    attach_tooltip(title, FIELD_HELP[key])
+                if key in gui_tooltips.FIELD_HELP:
+                    attach_tooltip(title, gui_tooltips.FIELD_HELP[key])
                 if kind == "dest":
                     self._add_dest_widgets(row * 2 + 1, column, pad)
                     continue
@@ -597,8 +506,8 @@ class MappingsTab(ttk.Frame):
         self.revert_button.grid(row=0, column=2, padx=(0, 6))
         self.save_button.grid(row=0, column=3)
         self.form_widgets.extend([self.paused_check, self.open_button])
-        attach_tooltip(self.paused_check, FIELD_HELP["paused"])
-        attach_tooltip(self.open_button, FIELD_HELP["open_folder"])
+        attach_tooltip(self.paused_check, gui_tooltips.FIELD_HELP["paused"])
+        attach_tooltip(self.open_button, gui_tooltips.FIELD_HELP["open_folder"])
 
     def _add_name_widgets(self, row: int, column: int, pad: tuple[int, int]) -> None:
         """The read-only repository name with a globe button that opens its GitHub page."""
@@ -608,7 +517,7 @@ class MappingsTab(ttk.Frame):
         ttk.Entry(holder, textvariable=self.vars["name"], state="readonly").grid(row=0, column=0, sticky="ew")
         self.github_button = ttk.Button(holder, text="🌐", width=3, command=self._open_github)
         self.github_button.grid(row=0, column=1, padx=(6, 0))
-        attach_tooltip(self.github_button, FIELD_HELP["github"])
+        attach_tooltip(self.github_button, gui_tooltips.FIELD_HELP["github"])
         self.form_widgets.append(self.github_button)
 
     def _open_github(self) -> None:
@@ -748,6 +657,16 @@ class MappingsTab(ttk.Frame):
                 self._tip_cell = ("", "legend")
                 self._tooltip.schedule(STATUS_LEGEND, event.x_root, event.y_root)
             return
+        if region == "heading":
+            heading_index = int(column[1:]) - 1 if column.startswith("#") else -1
+            help_text = gui_tooltips.COLUMN_HELP.get(self.TABLE_COLUMNS[heading_index][0], "") if 0 <= heading_index < len(self.TABLE_COLUMNS) else ""
+            if help_text and self._tip_cell != ("", column):
+                self._hide_tip()
+                self._tip_cell = ("", column)
+                self._tooltip.schedule(help_text, event.x_root, event.y_root)
+            elif not help_text:
+                self._hide_tip()
+            return
         if region != "cell":
             self._hide_tip()
             return
@@ -761,7 +680,7 @@ class MappingsTab(ttk.Frame):
         self._hide_tip()
         if key == "icon":  # status icon: explain this row's status
             self._tip_cell = (iid, key)
-            self._tooltip.schedule(f"{row.status}: {STATUS_HINTS.get(row.status, '')}", event.x_root, event.y_root)
+            self._tooltip.schedule(f"{row.status}: {gui_tooltips.STATUS_HINTS.get(row.status, '')}", event.x_root, event.y_root)
             return
         full = self._cell_text(row, key)
         if key == "limit" and row.limit_note:  # what the "12 / 15" means and when it was counted
@@ -1023,7 +942,7 @@ class LiveLogTab(ttk.Frame):
         self.notice.columnconfigure(0, weight=1)
         self.notice_label = ttk.Label(self.notice, text="", foreground=COLOR_WARNING, wraplength=900)
         self.notice_label.grid(row=0, column=0, sticky="w")
-        self.enable_button = ttk.Button(self.notice, text="Turn on detailed log", command=self._on_enable_log)
+        self.enable_button = ttk.Button(self.notice, text="Turn on terminal log", command=self._on_enable_log)
         self.enable_button.grid(row=0, column=1, padx=(10, 0))
 
     def _build_toolbar(self) -> None:
@@ -1170,12 +1089,12 @@ class LiveLogTab(ttk.Frame):
             if self._has_log_file:
                 text, can_enable = "The daemon is not running; showing the last log.", False
             else:
-                text, can_enable = "No log file yet. Start the daemon and turn on the detailed log to see its output here.", False
+                text, can_enable = "No log file yet. Start the daemon and turn on the terminal log to see its output here.", False
         elif not self._daemon_log_on:
             text = (
-                "Detailed log is off, so nothing new appears here."
+                "The terminal log is off, so nothing new appears here."
                 if self._has_log_file
-                else "No log file yet. The detailed log writes the daemon's output to a file that this tab follows."
+                else "No log file yet. The terminal log writes the daemon's output to a file that this tab follows."
             )
             can_enable = True
         else:
@@ -1243,9 +1162,15 @@ class StatusTab(ttk.Frame):
         on_clear: Optional[Callable[[], None]] = None,
         on_clear_repo: Optional[Callable[[str], None]] = None,
         detail: bool = False,
+        filterable: bool = False,
     ) -> None:
         super().__init__(master, padding=10)
         self._has_detail = detail
+        self._empty_text = empty_text
+        self._base = 1 if filterable else 0  # grid row of the table (the filter bar is above it)
+        self._all_rows: list[tuple[str, ...]] = []  # everything the tab was given; _rows is what the filter lets through
+        self._all_repos: list[str] = []
+        self._all_ids: list[int] = []
         self._columns = columns
         self._open_repo = open_repo
         self._rows: list[tuple[str, ...]] = []  # full (untruncated) cell texts, in display order
@@ -1257,7 +1182,15 @@ class StatusTab(ttk.Frame):
         self._measure_cache: dict[str, int] = {}
         self._column_widths: tuple[int, ...] = ()
         self.columnconfigure(0, weight=1)
-        self.rowconfigure(0, weight=1)
+        self.rowconfigure(self._base, weight=1)
+        self.filter_var = tk.StringVar()
+        if filterable:
+            bar = ttk.Frame(self)
+            bar.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 6))
+            bar.columnconfigure(1, weight=1)
+            ttk.Label(bar, text="Filter:").grid(row=0, column=0, padx=(0, 4))
+            FilterEntry(bar, self.filter_var).grid(row=0, column=1, sticky="ew")
+            self.filter_var.trace_add("write", lambda *_: self._apply_filter())
 
         keys = [column[0] for column in columns]
         self.tree = ttk.Treeview(self, columns=keys, show="headings", selectmode="browse")
@@ -1269,16 +1202,16 @@ class StatusTab(ttk.Frame):
         bold.configure(weight="bold")
         self._bold_font = bold  # keep a reference or Tk drops it
         self.tree.tag_configure("unread", font=bold)
-        self.tree.grid(row=0, column=0, sticky="nsew")
+        self.tree.grid(row=self._base, column=0, sticky="nsew")
         scroll = ttk.Scrollbar(self, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=scroll.set)
-        scroll.grid(row=0, column=1, sticky="ns")
+        scroll.grid(row=self._base, column=1, sticky="ns")
 
         self.empty_label = ttk.Label(self, text=empty_text, foreground=COLOR_MUTED)
-        bottom_row = 1
+        bottom_row = self._base + 1
         if detail:
             self._build_detail()
-            bottom_row = 2
+            bottom_row = self._base + 2
         bottom = ttk.Frame(self)
         bottom.grid(row=bottom_row, column=0, columnspan=2, sticky="ew", pady=(8, 0))
         bottom.columnconfigure(0, weight=1)
@@ -1294,17 +1227,13 @@ class StatusTab(ttk.Frame):
         if on_clear is not None:
             self.clear_button = ttk.Button(bottom, text="Clear…", command=on_clear)
             self.clear_button.grid(row=0, column=3, padx=(6, 0))
-            attach_tooltip(self.clear_button, "Permanently delete the events this tab lists from the database.")
+            attach_tooltip(self.clear_button, gui_tooltips.CONTROL_HELP["clear_tab"])
         self.clear_repo_button: Optional[ttk.Button] = None  # deletes one repository's events
         if on_clear_repo is not None:
             self._clear_repo = on_clear_repo
             self.clear_repo_button = ttk.Button(bottom, text="Clear selected", command=self._on_clear_repo, state="disabled")
             self.clear_repo_button.grid(row=0, column=2, padx=(0, 6))
-            attach_tooltip(
-                self.clear_repo_button,
-                "Delete every warning of the selected row's repository. They also clear themselves once the "
-                "folder is back under its limit (checked every poll).",
-            )
+            attach_tooltip(self.clear_repo_button, gui_tooltips.CONTROL_HELP["clear_repo"])
 
         font_spec = ttk.Style(self).lookup("Treeview", "font") or "TkDefaultFont"
         try:
@@ -1329,7 +1258,7 @@ class StatusTab(ttk.Frame):
 
     def _build_detail(self) -> None:
         frame = ttk.Frame(self)
-        frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        frame.grid(row=self._base + 1, column=0, columnspan=2, sticky="ew", pady=(8, 0))
         frame.columnconfigure(0, weight=1)
         self.detail = tk.Text(frame, height=5, wrap="word", state="disabled", relief="solid", borderwidth=1,
                               background="#fbfbfb", font=("Segoe UI", 10))
@@ -1383,9 +1312,23 @@ class StatusTab(ttk.Frame):
         highlight_after: Optional[int] = None,
     ) -> None:
         """Show these rows (full texts, newest first); `ids` + `highlight_after` mark unseen rows bold."""
-        self._rows, self._repos = rows, repos
-        self._ids = ids if ids is not None else [0] * len(rows)
+        self._all_rows, self._all_repos = rows, repos
+        self._all_ids = ids if ids is not None else [0] * len(rows)
         self._highlight_after = highlight_after
+        self._apply_filter()
+
+    def _apply_filter(self) -> None:
+        """Keep the rows that contain the filter text in any cell (the row lists stay index-aligned)."""
+        needle = self.filter_var.get().strip().casefold()
+        if needle:
+            keep = [i for i, row in enumerate(self._all_rows) if needle in " ".join(row).casefold()]
+        else:
+            keep = list(range(len(self._all_rows)))
+        self._rows = [self._all_rows[i] for i in keep]
+        self._repos = [self._all_repos[i] for i in keep]
+        self._ids = [self._all_ids[i] for i in keep]
+        filtered_out = bool(self._all_rows) and not self._rows
+        self.empty_label.configure(text="No rows match the filter." if filtered_out else self._empty_text)
         self._render()
 
     def set_highlight_after(self, highlight_after: Optional[int]) -> None:
@@ -1633,7 +1576,7 @@ class MainWindow(tk.Tk):
         self.mappings_tab = MappingsTab(self.notebook, self.set_status)
         self.log_tab = LiveLogTab(self.notebook, self._live_log_active, self._on_enable_log, self.set_status)
         self.notebook.add(self.mappings_tab, text="Mappings")
-        self.notebook.add(self.log_tab, text="Live log")
+        self.notebook.add(self.log_tab, text="Terminal log")
         self.status_feed = gui_data.StatusFeed()
         self._status_tabs: dict[str, StatusTab] = {}
         self._status_titles: dict[str, str] = {}
@@ -1672,6 +1615,14 @@ class MainWindow(tk.Tk):
         ("kind", "Type", 175, "w", False),
         ("message", "Message", 420, "w", True),
     )
+    # The Completed tab's third column holds the release tag, not a type: heading and key differ per tab.
+    COMPLETED_COLUMNS: tuple[StatusTab.Column, ...] = (
+        ("time", "Time", 150, "w", False),
+        ("repo", "Repository", 220, "w", False),
+        ("kind", "Tag", 175, "w", False),
+        ("message", "Message", 420, "w", True),
+    )
+    FILTERABLE_TABS = ("warnings", "completed")
     UNMAPPED_COLUMNS: tuple[StatusTab.Column, ...] = (
         ("repo", "Repository", 280, "w", True),
         ("foldername", "Folder name", 280, "w", True),
@@ -1692,12 +1643,15 @@ class MainWindow(tk.Tk):
                      "Double-click one to set it up in the Mappings tab.",
             )
         return StatusTab(
-            self.notebook, self.EVENT_COLUMNS, self.EMPTY_TEXTS.get(definition.key, "Nothing to show."), self._show_repo,
+            self.notebook,
+            self.COMPLETED_COLUMNS if definition.key == "completed" else self.EVENT_COLUMNS,
+            self.EMPTY_TEXTS.get(definition.key, "Nothing to show."), self._show_repo,
             hint="Double-click a row to open its repository in the Mappings tab.",
             on_mark_read=(lambda key=definition.key: self._mark_status_read(key)) if definition.counter else None,
             on_clear=lambda key=definition.key: self._clear_status_tab(key),
             on_clear_repo=(lambda repo: self._clear_repo_limit_warnings(repo)) if definition.key == "limits" else None,
             detail=True,
+            filterable=definition.key in self.FILTERABLE_TABS,
         )
 
     def _show_repo(self, repo: str) -> None:
@@ -1821,11 +1775,11 @@ class MainWindow(tk.Tk):
         self.set_status(f"Cleared {removed:,} folder-limit warning(s) for {repo}.")
 
     def _live_log_active(self) -> bool:
-        """True when somebody can see the Live log tab (window not minimized, its tab selected)."""
+        """True when somebody can see the Terminal log tab (window not minimized, its tab selected)."""
         return self.state() != "iconic" and self.notebook.select() == str(self.log_tab)
 
     def _on_enable_log(self) -> None:
-        self._report(gui_daemon.do_set_log(True), "Detailed log switched on (a new .log file).")
+        self._report(gui_daemon.do_set_log(True), "Terminal log switched on (a new .log file).")
 
     def _mappings_visible(self) -> bool:
         """True when somebody can see the Mappings table (window not minimized, its tab selected)."""
@@ -1919,7 +1873,7 @@ class MainWindow(tk.Tk):
         ):
             self.set_status(
                 "The daemon stopped by itself shortly after starting. See "
-                f"{daemon_launcher.STDERR_FILE_NAME} (or turn on the detailed log and start it again)."
+                f"{daemon_launcher.STDERR_FILE_NAME} (or turn on the terminal log and start it again)."
             )
 
     def _is_stopping(self, now: float) -> bool:
@@ -1982,7 +1936,7 @@ class MainWindow(tk.Tk):
         wanted = bool(self.control_bar.detailed_log.get())  # the click has already flipped the box
         if not self._report(
             gui_daemon.do_set_log(wanted),
-            "Detailed log switched on (a new .log file)." if wanted else "Detailed log switched off.",
+            "Terminal log switched on (a new .log file)." if wanted else "Terminal log switched off.",
         ):
             self.control_bar.detailed_log.set(self._snapshot.log_on)  # show the real state again
             return

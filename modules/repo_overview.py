@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable, Collection, Mapping, Optional
 
+from modules import gui_tooltips
+
 STATUS_QUEUED = "Queued"
 STATUS_WAITING = "Waiting"
 STATUS_IDLE = "Idle"
@@ -41,6 +43,22 @@ class RepoRow:
     limit_note: str = ""  # hover text for the Limit cell ("12 of 15 allowed folders, counted ...")
 
 
+def release_marker(release_type: Any) -> str:
+    """"(P)" for a Pre-release, "(R)" for a Release, "" when the type is unknown."""
+    text = str(release_type or "").strip().lower().replace("_", "-")
+    if text in ("pre-release", "prerelease"):
+        return "(P)"
+    if text == "release":
+        return "(R)"
+    return ""
+
+
+def format_tag(tag: Any, release_type: Any) -> str:
+    """The tag with its release marker in front, e.g. "(P) nightly"."""
+    marker = release_marker(release_type)
+    return f"{marker} {tag}" if marker and tag else str(tag or "")
+
+
 def format_timestamp(epoch: Optional[float]) -> str:
     """Local "YYYY-MM-DD HH:MM:SS", or "-" when unset."""
     if not epoch:
@@ -59,7 +77,7 @@ def format_limit(limit: Any, counted: Optional[Mapping[str, Any]]) -> tuple[str,
         return text, False, ""
     count = int(counted.get("folder_count") or 0)
     when = format_timestamp(counted.get("counted_at"))
-    return f"{count} / {allowed}", count > allowed, f"{count} of {allowed} allowed folders (counted {when})"
+    return f"{count} / {allowed}", count > allowed, gui_tooltips.LIMIT_NOTE.format(count=count, allowed=allowed, when=when)
 
 
 def format_files(summary: Optional[Mapping[str, Any]]) -> str:
@@ -138,7 +156,8 @@ def build_rows(
                 foldername=foldername,
                 destination=str(entry.get("destination") or ""),
                 status=status,
-                tag=str(summary.get("latest_tag") or NO_VALUE) if summary else NO_VALUE,
+                tag=format_tag(summary.get("latest_tag"), summary.get("latest_release_type")) or NO_VALUE
+                if summary else NO_VALUE,
                 last_check=format_timestamp(summary.get("latest_updated_at") if summary else None),
                 step=step,
                 next_check=format_timestamp(pending_check),
