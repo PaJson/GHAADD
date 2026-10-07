@@ -32,6 +32,7 @@ from modules import (
     gui_forms,
     gui_state,
     gui_tooltips,
+    gui_tray,
     log_tail,
     mapping_manager,
     status_tabs,
@@ -1755,7 +1756,7 @@ class MainWindow(tk.Tk):
         self._restore_window_state()
         self._normal_state: Optional[gui_state.WindowState] = None  # last size/position while not maximized
         self.bind("<Configure>", self._remember_normal_state)
-        self.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.protocol("WM_DELETE_WINDOW", self._on_close_request)
         self._apply_theme(theme)
         self._status_reset_job: Optional[str] = None
         try:  # a mapping.json with pre-2.0 key names is upgraded now (after a backup), unless an older daemon runs
@@ -1770,6 +1771,16 @@ class MainWindow(tk.Tk):
         self._restart_pending = False  # a restart was requested: start again once the daemon has exited
         self._gui_started_at: Optional[float] = None  # when this GUI last launched a daemon
         self._was_running = False
+
+        self._tray: Optional[gui_tray.TrayIcon] = None
+        self._tray_job: Optional[str] = None
+        self._notifications = config_manager.get_gui_notifications_enabled(config)
+        self._minimize_to_tray = config_manager.get_gui_minimize_to_tray(config)
+        self._close_to_tray = config_manager.get_gui_close_to_tray(config)
+        self._notified_warning_id: Optional[int] = None  # newest warning already announced (None = not looked yet)
+        self._limit_tracker = gui_tray.NewItemTracker()
+        self._unmapped_tracker = gui_tray.NewItemTracker()
+        self._failed_unseen = 0  # jobs that failed while the window was hidden (cleared when it is shown again)
 
         self.control_bar = ControlBar(self)
         self.control_bar.pack(fill="x")
@@ -1813,6 +1824,7 @@ class MainWindow(tk.Tk):
         self._update_daemon_view()
         self._refresh_status_tabs()  # titles and read marks from the start, not after the first tick
         self._refresh_doctor_attention()
+        self._start_tray(config)
 
     def set_status(self, text: str) -> None:
         """Show a message in the status bar for a few seconds, then restore the default."""
@@ -1910,7 +1922,7 @@ class MainWindow(tk.Tk):
             return
         visible = self._current_status_key
         for key in model.event_tab_keys:
-            if key == visible:
+            if key == visible and not self._window_hidden():
                 if key in changed:  # new rows while the tab is open: shown now, and read at once
                     self._show_event_rows(key, self._status_tabs[key]._highlight_after)
                     model.mark_read(key)
@@ -1921,6 +1933,8 @@ class MainWindow(tk.Tk):
                 [(r.repo, r.folder, r.first_seen) for r in unmapped], [r.repo for r in unmapped]
             )
         self._set_status_title("unmapped", format_status_title("Unmapped", len(unmapped)))
+        self._announce_news(unmapped)
+        self._update_tray_icon()
 
     def _enter_status_tab(self, key: str) -> None:
         """Opening an event tab shows its rows, bold where new since the last visit, and marks them read."""
@@ -1996,14 +2010,14 @@ class MainWindow(tk.Tk):
 
     def _live_log_active(self) -> bool:
         """True when somebody can see the Terminal log tab (window not minimized, its tab selected)."""
-        return self.state() != "iconic" and self.notebook.select() == str(self.log_tab)
+        return not self._window_hidden() and self.notebook.select() == str(self.log_tab)
 
     def _on_enable_log(self) -> None:
         self._report(gui_daemon.do_set_log(True), "Terminal log switched on (a new .log file).")
 
     def _mappings_visible(self) -> bool:
         """True when somebody can see the Mappings table (window not minimized, its tab selected)."""
-        return self.state() != "iconic" and self.notebook.select() == str(self.mappings_tab)
+        return not self._window_hidden() and self.notebook.select() == str(self.mappings_tab)
 
     def _refresh_mappings_if_visible(self) -> None:
         if self._mappings_visible():
@@ -2022,6 +2036,7 @@ class MainWindow(tk.Tk):
     def _on_map(self, event: tk.Event) -> None:  # type: ignore[type-arg]
         """The window was restored: catch up immediately instead of waiting for the next tick."""
         if event.widget is self:
+            self._failed_unseen = 0  # the user is looking now
             self._refresh_mappings_if_visible()
             if self._live_log_active():
                 self.log_tab.poll_now()
@@ -2032,7 +2047,7 @@ class MainWindow(tk.Tk):
     def _tick(self) -> None:
         try:
             self._refresh_mappings_if_visible()
-            if self.state() != "iconic":
+            if self.state() != "iconic" or self._tray_active():  # a tray icon still has news to deliver
                 self._refresh_status_tabs()
         finally:
             self._tick_job = self.after(self._refresh_ms, self._tick)
@@ -2049,7 +2064,7 @@ class MainWindow(tk.Tk):
         in flight, which must keep running); the first look after restoring happens at once.
         """
         try:
-            if self.state() == "iconic" and not self._daemon_action_pending() and not force_control:
+            if self.state() == "iconic" and not self._tray_active() and not self._daemon_action_pending() and not force_control:
                 return
             self._snapshot = self._reader.read(force_control=force_control)
             now = time.time()
@@ -2072,6 +2087,7 @@ class MainWindow(tk.Tk):
                 gui_daemon.build_view(self._snapshot, now, self._starting_since, self._stopping_since)
             )
             self.log_tab.set_daemon_state(self._snapshot.running, self._snapshot.log_on)
+            self._update_tray_icon()
         except Exception as exc:  # a status hiccup must never kill the GUI loop
             self.control_bar.status_label.configure(text=f"Daemon status unavailable: {exc}")
         finally:
@@ -2084,6 +2100,8 @@ class MainWindow(tk.Tk):
         running = self._snapshot.running
         died = self._was_running and not running
         self._was_running = running
+        if died and self._stopping_since is None and not self._restart_pending:
+            self._send_notice(gui_tray.daemon_stopped_notice())
         if (
             died
             and self._gui_started_at is not None
@@ -2221,6 +2239,113 @@ class MainWindow(tk.Tk):
         if event.widget is self and self.state() == "normal":
             self._normal_state = gui_state.parse_geometry(self.geometry())
 
+    # ----- system tray -----
+
+    def _tray_active(self) -> bool:
+        return self._tray is not None and self._tray.active
+
+    def _window_hidden(self) -> bool:
+        """True while nobody can see the window: minimized or hidden in the tray."""
+        return self.state() in ("iconic", "withdrawn")
+
+    def _start_tray(self, config: dict) -> None:
+        if not (config_manager.get_gui_tray_enabled(config) and gui_tray.tray_available()):
+            return
+        png_path = os.path.join(ICON_DIR, "ghaadd.png")
+        if sys.platform == "win32":  # notifications would otherwise be listed under "Python"
+            gui_tray.register_windows_identity(WINDOWS_APP_ID, APP_NAME, os.path.join(ICON_DIR, "ghaadd.ico"))
+        tray = gui_tray.TrayIcon(
+            APP_NAME, lambda: "Resume polling" if self._snapshot.paused else "Pause polling", png_path
+        )
+        if not tray.start():
+            return
+        self._tray = tray
+        if self._minimize_to_tray:
+            self.bind("<Unmap>", self._on_unmap, add="+")
+        self._tray_job = self.after(250, self._poll_tray)
+        self._update_tray_icon()
+
+    def _on_unmap(self, event: tk.Event) -> None:  # type: ignore[type-arg]
+        if event.widget is self:
+            self.after_idle(self._hide_if_minimized)
+
+    def _hide_if_minimized(self) -> None:
+        try:
+            if self._tray_active() and self.state() == "iconic":
+                self.withdraw()  # gone from the taskbar; the tray icon brings it back
+        except tk.TclError:
+            pass
+
+    def _show_from_tray(self) -> None:
+        self.deiconify()
+        self.lift()
+        self.focus_force()
+
+    def _poll_tray(self) -> None:
+        """Carry out what the tray menu asked for (the tray thread only queues it)."""
+        try:
+            if self._tray is not None:
+                for action in self._tray.pending_actions():
+                    if action == gui_tray.ACTION_SHOW:
+                        self._show_from_tray()
+                    elif action == gui_tray.ACTION_POLL:
+                        self._on_poll_now()
+                    elif action == gui_tray.ACTION_PAUSE:
+                        self._on_pause()
+                    elif action == gui_tray.ACTION_QUIT:
+                        self._on_close()
+                        return
+        finally:
+            if self._tray is not None:
+                self._tray_job = self.after(250, self._poll_tray)
+
+    def _update_tray_icon(self) -> None:
+        if not self._tray_active():
+            return
+        model = self.status_feed.model
+        unread = model.unread("warnings")
+        unmapped = len(self._unmapped_rows or [])
+        state = gui_tray.icon_state(self._snapshot.running, self._snapshot.paused)
+        attention = gui_tray.needs_attention(unread, unmapped, self._failed_unseen)
+        self._tray.update(state, attention, gui_tray.tooltip_text(APP_NAME, state, unread, unmapped))  # type: ignore[union-attr]
+
+    def _send_notice(self, notice: Optional[gui_tray.Notice]) -> None:
+        """A tray notification, only while nobody is looking at the window."""
+        if notice is not None and self._notifications and self._tray_active() and self._window_hidden():
+            self._tray.notify(notice)  # type: ignore[union-attr]
+
+    def _announce_news(self, unmapped: list[status_tabs.UnmappedRow]) -> None:
+        """Work out what is new since the last look (always, so the baselines move) and tell the tray."""
+        model = self.status_feed.model
+        warnings = model.rows("warnings")
+        if self._notified_warning_id is None:
+            fresh = []  # what was already there at start is not news
+        else:
+            fresh = [row for row in warnings if row.id > self._notified_warning_id]
+        if warnings:
+            self._notified_warning_id = max(row.id for row in warnings)
+        elif self._notified_warning_id is None:
+            self._notified_warning_id = 0
+        limit_repos = self._limit_tracker.new(row.repo for row in model.rows("limits") if row.repo)
+        unmapped_repos = self._unmapped_tracker.new(row.repo for row in unmapped)
+        failed = self.status_feed.take_failed_jobs()
+        if self._window_hidden():
+            self._failed_unseen += len(failed)
+        for notice in (
+            gui_tray.warnings_notice(fresh),
+            gui_tray.limit_notice(limit_repos),
+            gui_tray.unmapped_notice(unmapped_repos),
+            gui_tray.failed_jobs_notice(failed),
+        ):
+            self._send_notice(notice)
+
+    def _on_close_request(self) -> None:
+        """The window's close button: hide to the tray when asked to, else close."""
+        if self._close_to_tray and self._tray_active():
+            self.withdraw()
+            return
+        self._on_close()
+
     def _on_close(self) -> None:
         """Save the window state, then close. A failed save must never keep the window open."""
         try:
@@ -2236,10 +2361,13 @@ class MainWindow(tk.Tk):
 
     def destroy(self) -> None:
         """Cancel pending timers first, so nothing fires into a window that is already gone."""
-        for job in (self._tick_job, self._status_reset_job, self._daemon_job, self._verify_log_job):
+        for job in (self._tick_job, self._status_reset_job, self._daemon_job, self._verify_log_job, self._tray_job):
             if job is not None:
                 self.after_cancel(job)
-        self._tick_job = self._status_reset_job = self._daemon_job = self._verify_log_job = None
+        self._tick_job = self._status_reset_job = self._daemon_job = self._verify_log_job = self._tray_job = None
+        if self._tray is not None:
+            tray, self._tray = self._tray, None
+            tray.stop()
         self.mappings_tab.shutdown()
         self.log_tab.shutdown()
         for tab in self._status_tabs.values():

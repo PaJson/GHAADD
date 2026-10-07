@@ -185,6 +185,9 @@ class StatusFeed:
             lambda: [mapping_manager._mapping_file_path()], mapping_manager.load_mapping, clock=clock
         )
         self._connection: Any = None
+        self._failed_cursor = time.time()  # only jobs that fail from now on are news
+        self._new_failed: list[dict[str, Any]] = []
+        self._failed_reported: set[int] = set()  # ids already reported at exactly the cursor time
         self._signature: Optional[tuple[Any, ...]] = None
         self._refreshed_at = 0.0
         self.model = status_tabs.StatusTabsModel(
@@ -207,11 +210,28 @@ class StatusFeed:
         self._connection = db_manager.open_database()
         try:
             changed = self.model.refresh()
+            self._collect_failed_jobs()
         finally:
             self._connection.close()
             self._connection = None
         self._signature, self._refreshed_at = signature, now
         return changed
+
+    def _collect_failed_jobs(self) -> None:
+        try:
+            failed = db_manager.get_failed_jobs_since(self._connection, self._failed_cursor)
+        except Exception:  # an old database layout or a hiccup: notifications are optional
+            return
+        failed = [job for job in failed if int(job["id"]) not in self._failed_reported]
+        if failed:
+            self._failed_cursor = max(float(job["completed_at"]) for job in failed)
+            self._failed_reported = {int(job["id"]) for job in failed if float(job["completed_at"]) == self._failed_cursor}
+            self._new_failed.extend(failed)
+
+    def take_failed_jobs(self) -> list[dict[str, Any]]:
+        """Jobs that failed since the last call (empty most of the time)."""
+        failed, self._new_failed = self._new_failed, []
+        return failed
 
     def count_repo_limit_warnings(self, repo: str) -> int:
         return self._purge_repo(repo, dry_run=True)

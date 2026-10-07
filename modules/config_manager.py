@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import re
+import sys
 import tempfile
 import time
 from typing import Any, Callable, Dict, Optional, TypedDict, TypeVar
@@ -366,6 +367,37 @@ def get_gui_status_message_seconds(config=None):
     return _gui_seconds(
         config, "status_message_seconds", DEFAULT_GUI_STATUS_MESSAGE_SECONDS, GUI_STATUS_MESSAGE_SECONDS_RANGE
     )
+
+
+def _gui_flag(config, key, default):
+    """A true/false setting from the "gui" section; anything that is not a real boolean gives the default."""
+    value = _get_nested(config, "gui", key)
+    return value if isinstance(value, bool) else default
+
+
+def get_gui_tray_enabled(config=None):
+    """Use a system tray icon (gui.tray, default true; it also needs the optional pystray + Pillow packages)."""
+    config = config if config is not None else load_config()
+    return _gui_flag(config, "tray", True)
+
+
+def get_gui_minimize_to_tray(config=None):
+    """Minimizing hides the window in the tray (gui.minimize_to_tray; default true on Windows/macOS, false on Linux
+    where many desktops show no tray icon and the window would be lost)."""
+    config = config if config is not None else load_config()
+    return _gui_flag(config, "minimize_to_tray", sys.platform != "linux")
+
+
+def get_gui_close_to_tray(config=None):
+    """Closing the window hides it in the tray instead of ending the GUI (gui.close_to_tray, default false)."""
+    config = config if config is not None else load_config()
+    return _gui_flag(config, "close_to_tray", False)
+
+
+def get_gui_notifications_enabled(config=None):
+    """Show tray notifications for new warnings, failed jobs, unmapped repositories and a stopped daemon (gui.notifications, default true)."""
+    config = config if config is not None else load_config()
+    return _gui_flag(config, "notifications", True)
 
 
 def get_default_download_dir(config: Optional[Dict[str, Any]] = None) -> str:

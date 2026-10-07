@@ -35,6 +35,9 @@
   },
   "gui": {
     "refresh_seconds": 3,
-    "status_message_seconds": 6
+    "status_message_seconds": 6,
+    "tray": true,
+    "notifications": true,
+    "close_to_tray": false
   }
 }

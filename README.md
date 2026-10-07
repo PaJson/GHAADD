@@ -34,6 +34,7 @@ Start it with `python main_gui.py` (add `--theme clam` for coloured table headin
 - **Doctor button:** runs the `--doctor` checks and shows the result (problems, warnings, what was checked). The button is highlighted (⚠) on a first run: when config.json or mapping.json is missing or the Gmail login (`.env`) is not set, and after a report with problems. Dialogs open centred over the main window.
 - **Terminal log:** follows the newest terminal `.log` file (it is empty while the Terminal log switch is off). Filter, copy, open the log or its folder.
 - **Warnings, Completed, Folder limits, Unmapped:** structured events from `state.db` (never parsed from log text), with unread counters in the tab titles, a filter on Warnings and Completed, a detail pane with the full text, and Clear buttons that delete what a tab lists. Double-click a row to jump to its repository.
+- **System tray (optional):** with the extras installed (`pip install -r requirements-optional.txt`) the GUI shows a tray icon: green = daemon running, amber = paused, grey = not running, with a red dot while there is something unread (warnings, unmapped repositories, failed downloads). Minimizing hides the window in the tray (on Windows and macOS; on Linux many desktops show no tray icon, so the window stays on the taskbar unless `gui.minimize_to_tray` is true). Double-click the icon, or use its menu, to show the window; the menu also has Poll now, Pause/Resume and Quit. While the window is hidden or minimized the tray shows a notification for new warnings, a folder over its limit, a new unmapped repository, a failed download and a daemon that stopped without being asked to. Nothing is announced that was already there when the GUI started, and nothing while you are looking at the window. The tray is only the GUI's: the daemon runs the same with or without it.
 - **Where things are kept:** window size and the "read" marks of the tabs live in `config.json` under `gui` (delete that section to reset; the daemon ignores it). All hover texts are in `modules/gui_tooltips.py`.
 
 ## Requirements
@@ -73,6 +74,8 @@ Default value:
 ```bash
 pip install -r requirements.txt
 ```
+
+Optional, for the GUI's system tray icon and notifications: `pip install -r requirements-optional.txt` (pystray and Pillow).
 
 ## Local Configuration Files
 
@@ -313,7 +316,10 @@ Example:
 	},
 	"gui": {
 		"refresh_seconds": 3,
-		"status_message_seconds": 6
+		"status_message_seconds": 6,
+		"tray": true,
+		"notifications": true,
+		"close_to_tray": false
 	}
 }
 ```
@@ -360,6 +366,8 @@ Key behavior:
 	- Size limit per log file in MB (default 10). When the current file reaches it, the daemon continues in a new, newer-named log file (the first line says which file it continues). Lines are never split across files. 0 disables rollover.
 - gui.refresh_seconds
 	- How often the GUI re-reads the data it shows, in seconds (default 3, allowed 1 to 60). A longer time uses less CPU on a slow machine. Edit config.json by hand; the GUI reads it when it starts. The daemon ignores the `gui` section.
+- gui.tray, gui.notifications, gui.minimize_to_tray, gui.close_to_tray
+	- Tray icon settings (true/false; they only matter when the optional tray packages are installed). `tray` (default true) switches the icon off; `notifications` (default true) the notifications; `minimize_to_tray` (default true on Windows/macOS, false on Linux) hides the window in the tray when it is minimized; `close_to_tray` (default false) makes the close button hide the window instead of closing the GUI (use the tray menu's Quit). Edit config.json by hand; the GUI reads them when it starts.
 - gui.status_message_seconds
 	- How long a message in the GUI's status bar stays before the default text returns, in seconds (default 6, allowed 2 to 60). Same rules as above.
 - terminal_log.keep_files

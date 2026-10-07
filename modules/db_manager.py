@@ -697,6 +697,23 @@ def get_repos_with_limit_warnings(connection):
     return found
 
 
+def get_failed_jobs_since(connection, since_epoch):
+    """Return jobs that ended FAILED at or after `since_epoch` (read-only), oldest first, for the GUI's notifications.
+
+    Times have whole-second resolution, so the caller drops the ids it has already reported at the boundary.
+    """
+    rows = connection.execute(
+        """
+        SELECT id, repo, tag, completed_at
+        FROM job_queue
+        WHERE status = 'FAILED' AND completed_at >= ?
+        ORDER BY completed_at, id
+        """,
+        (float(since_epoch),),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
 def get_repo_job_summaries(connection):
     """Return one read-only job_queue summary per repo, keyed by lower-cased owner/repo.
 
