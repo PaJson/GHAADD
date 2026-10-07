@@ -1520,6 +1520,7 @@ class SettingsDialog(tk.Toplevel):
         row(processing, 0, "Default recheck (minutes)", ttk.Entry(processing, textvariable=self.vars["recheck"], width=28))
         row(processing, 1, "Max emails per poll (0 = all)", spin(processing, "max_emails", 0, 9999))
         row(processing, 2, "Destination check every N polls (0 = off)", spin(processing, "dest_check", 0, 999))
+        row(processing, 3, "Limit for new repositories (0 = none)", spin(processing, "default_limit", 0, 9999))
 
         polling = ttk.LabelFrame(body, text="Polling", padding=10)
         polling.grid(row=1, column=0, sticky="ew", pady=(10, 0))
@@ -1538,11 +1539,16 @@ class SettingsDialog(tk.Toplevel):
             row=0, column=1, padx=(6, 0)
         )
         row(paths, 0, "Default download dir", dir_frame)
-        row(paths, 1, "Terminal log on at startup", ttk.Checkbutton(paths, variable=self.vars["log_enabled"]))
-        row(paths, 2, "Max log file (MB, 0 = no rollover)", spin(paths, "log_max_mb", 0, 1000))
-        row(paths, 3, "Keep log files (0 = all)", spin(paths, "log_keep", 0, 9999))
+        row(paths, 1, "Subfolder for new repositories", ttk.Entry(paths, textvariable=self.vars["default_subfolder"], width=28))
+        row(paths, 2, "Terminal log on at startup", ttk.Checkbutton(paths, variable=self.vars["log_enabled"]))
+        row(paths, 3, "Max log file (MB, 0 = no rollover)", spin(paths, "log_max_mb", 0, 1000))
+        row(paths, 4, "Keep log files (0 = all)", spin(paths, "log_keep", 0, 9999))
 
-        ttk.Label(body, text="Changes apply the next time the daemon starts.", foreground=COLOR_MUTED).grid(
+        ttk.Label(
+            body,
+            text="Changes apply the next time the daemon starts (new-repository defaults apply at once).",
+            foreground=COLOR_MUTED,
+        ).grid(
             row=3, column=0, sticky="w", pady=(10, 0)
         )
         self.message = ttk.Label(body, text="", foreground=COLOR_ERROR, wraplength=440)
@@ -1781,8 +1787,10 @@ class MainWindow(tk.Tk):
             return
         if not messagebox.askyesno(
             f"Clear {title}",
-            f"Permanently delete {count:,} {title.lower()} event(s) from the database?\n\n"
-            "This only removes the history shown in this tab; downloads and files are not touched.",
+            f"Permanently delete all {count:,} {title.lower()} event(s) from the database?\n\n"
+            f"That is every such event, including older ones this tab does not show "
+            f"(it lists at most the newest {status_tabs.DEFAULT_ROW_LIMIT}, and Folder limits only the latest per repository).\n\n"
+            "Only this event history is removed; downloads, files and the job queue are not touched.",
             icon="warning", default="no", parent=self,
         ):
             return

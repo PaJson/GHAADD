@@ -91,7 +91,8 @@ CONTROL_HELP = {
     "clear_filter": "Clear the filter (Esc)",
     "open_log": "Open the log file this tab is following in your default program for .log files "
                 "(usually a text editor).",
-    "clear_tab": "Permanently delete the events this tab lists from the database.",
+    "clear_tab": "Permanently delete ALL events of this kind from the database, including older ones the tab "
+                 "does not show (it lists the newest 500). Downloads and the job queue are not touched.",
     "clear_repo": "Delete every warning of the selected row's repository. They also clear themselves once the "
                   "folder is back under its limit (checked every poll).",
 }

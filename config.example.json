@@ -15,7 +15,8 @@
     "folder": "GitHubNotifications"
   },
   "paths": {
-    "default_download_dir": "<set-local-download-path>"
+    "default_download_dir": "<set-local-download-path>",
+    "default_subfolder": "@GitHub"
   },
   "polling": {
     "enabled": true,
@@ -26,7 +27,8 @@
   "processing": {
     "max_emails_to_process": 0,
     "recheck_intervals_minutes": [5, 15, 60, 360, 720, 1440],
-    "destination_check_every_n_polls": 10
+    "destination_check_every_n_polls": 10,
+    "default_limit": 10
   },
   "state": {
     "disable_state_persistence": false

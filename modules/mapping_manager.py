@@ -11,14 +11,12 @@ from typing import Any, Callable, Optional, TypedDict, TypeVar
 from filelock import FileLock, Timeout
 
 from modules.app_info import MAPPING_FORMAT
-from modules.config_manager import get_recheck_intervals_minutes
+from modules.config_manager import get_default_repository_limit, get_default_subfolder, get_recheck_intervals_minutes
 from modules.dry_run_mode import is_dry_run
 from modules.lifecycle_logger import log_warning
 
 
 DEFAULT_LIMIT_RELEASE_TYPE_FOLDERS = ["Release", "Pre-release"]
-DEFAULT_SUBFOLDER = "@GitHub"
-DEFAULT_LIMIT = 10
 # How the "file count changed" sanity check picks the release to compare with (per repository):
 # any_tag = the previous successful release of the repository whatever its tag (default),
 # same_tag = only a previous release with the same tag (suits rolling tags such as "nightly"), off = no check.
@@ -648,15 +646,15 @@ def _current_mapping_stamp() -> str:
 
 
 def _build_skeleton_entry(repo: str, notification_seen_stamp: str) -> dict[str, Any]:
-    """Return a new repository entry with default values."""
+    """Return a new repository entry with default values (subfolder and limit come from config.json)."""
     return {
         "repository": repo,
         "folder": build_default_folder(repo),
-        "subfolder": DEFAULT_SUBFOLDER,
+        "subfolder": get_default_subfolder(),
         "destination": "",
         "skiplist": [],
         "recheck_intervals": [],
-        "limit": DEFAULT_LIMIT,
+        "limit": get_default_repository_limit(),
         "limit_folders": _default_limit_release_type_folders(),
         "sanity_check": DEFAULT_SANITY_CHECK,
         "last_notification": notification_seen_stamp,

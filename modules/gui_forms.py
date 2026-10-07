@@ -13,13 +13,15 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Optional
 
-from modules import mapping_manager
+from modules import config_manager, mapping_manager
 
 # config.json keys (dotted path) behind the Settings dialog.
 SETTINGS_KEYS = {
     "recheck": "processing.recheck_intervals_minutes",
     "max_emails": "processing.max_emails_to_process",
     "dest_check": "processing.destination_check_every_n_polls",
+    "default_limit": "processing.default_limit",
+    "default_subfolder": "paths.default_subfolder",
     "interval": "polling.interval_seconds",
     "jitter_min": "polling.jitter_min_seconds",
     "jitter_max": "polling.jitter_max_seconds",
@@ -224,6 +226,10 @@ def build_settings_changes(form: Mapping[str, Any]) -> FormResult:
 
     max_emails = parse_int(form.get("max_emails"), "Max emails per poll", errors)
     dest_check = parse_int(form.get("dest_check"), "Destination check every N polls", errors)
+    default_limit = parse_int(form.get("default_limit"), "Default limit", errors, minimum=0)
+    default_subfolder = str(form.get("default_subfolder", "")).strip()
+    if not config_manager.is_valid_subfolder(default_subfolder):
+        errors.append("Default subfolder must be a relative path below the repository folder (no drive, no '..').")
     interval = parse_int(form.get("interval"), "Polling interval", errors, minimum=MIN_POLL_INTERVAL_SECONDS)
     jitter_min = parse_int(form.get("jitter_min"), "Jitter min", errors)
     jitter_max = parse_int(form.get("jitter_max"), "Jitter max", errors)
@@ -244,6 +250,8 @@ def build_settings_changes(form: Mapping[str, Any]) -> FormResult:
         "recheck": recheck,
         "max_emails": max_emails,
         "dest_check": dest_check,
+        "default_limit": default_limit,
+        "default_subfolder": default_subfolder,
         "interval": interval,
         "jitter_min": jitter_min,
         "jitter_max": jitter_max,

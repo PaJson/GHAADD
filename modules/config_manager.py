@@ -18,6 +18,8 @@ DEFAULT_POLL_JITTER_MAX_SECONDS = 30
 DEFAULT_MAX_EMAILS_TO_PROCESS = 0
 DEFAULT_RECHECK_INTERVALS_MINUTES = [5, 15, 30, 60, 120, 360, 720, 1440]
 DEFAULT_DESTINATION_CHECK_EVERY_N_POLLS = 10
+DEFAULT_SUBFOLDER = "@GitHub"
+DEFAULT_REPOSITORY_LIMIT = 10
 DEFAULT_DISABLE_STATE_PERSISTENCE = False
 DEFAULT_GMAIL_FOLDER = "GitHubNotifications"
 DEFAULT_ENABLE_TERMINAL_LOG = False
@@ -298,6 +300,40 @@ def get_destination_check_every_n_polls(config=None):
     config = config if config is not None else load_config()
     value = _get_nested(config, "processing", "destination_check_every_n_polls")
     return max(0, _as_int(value, DEFAULT_DESTINATION_CHECK_EVERY_N_POLLS))
+
+
+def is_valid_subfolder(value: Any) -> bool:
+    """True for a relative sub-path (empty = none) that stays below the repository folder."""
+    if not isinstance(value, str):
+        return False
+    text = value.strip()
+    if not text:
+        return True
+    if re.match(r"^([A-Za-z]:|[\\/])", text):
+        return False
+    return ".." not in re.split(r"[\\/]+", text)
+
+
+def get_default_subfolder(config=None):
+    """Return the subfolder given to newly created mapping entries (paths.default_subfolder).
+
+    An empty string means no subfolder; a missing or unusable value gives "@GitHub".
+    """
+    config = config if config is not None else load_config()
+    value = _get_nested(config, "paths", "default_subfolder")
+    if is_valid_subfolder(value):
+        return value.strip()
+    return DEFAULT_SUBFOLDER
+
+
+def get_default_repository_limit(config=None):
+    """Return the folder limit given to newly created mapping entries (processing.default_limit).
+
+    0 switches the limit check off for new entries; a missing or negative value gives 10.
+    """
+    config = config if config is not None else load_config()
+    value = _as_int(_get_nested(config, "processing", "default_limit"), DEFAULT_REPOSITORY_LIMIT)
+    return value if value >= 0 else DEFAULT_REPOSITORY_LIMIT
 
 
 def get_default_download_dir(config: Optional[Dict[str, Any]] = None) -> str:

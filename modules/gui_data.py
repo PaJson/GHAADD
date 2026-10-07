@@ -132,6 +132,8 @@ def load_settings_form() -> dict[str, Any]:
         "recheck": ", ".join(str(m) for m in config_manager.get_recheck_intervals_minutes(config)),
         "max_emails": str(config_manager.get_max_emails_to_process(config)),
         "dest_check": str(config_manager.get_destination_check_every_n_polls(config)),
+        "default_limit": str(config_manager.get_default_repository_limit(config)),
+        "default_subfolder": config_manager.get_default_subfolder(config),
         "interval": str(polling["interval_seconds"]),
         "jitter_min": str(polling["jitter_min_seconds"]),
         "jitter_max": str(polling["jitter_max_seconds"]),

@@ -161,6 +161,8 @@ class SettingsFormTests(unittest.TestCase):
             "recheck": "5, 15, 30",
             "max_emails": "0",
             "dest_check": "10",
+            "default_limit": "10",
+            "default_subfolder": "@GitHub",
             "interval": "300",
             "jitter_min": "5",
             "jitter_max": "30",

@@ -276,7 +276,8 @@ Example:
 	"processing": {
 		"max_emails_to_process": 0,
 		"recheck_intervals_minutes": [5, 15, 60, 360, 720, 1440],
-		"destination_check_every_n_polls": 10
+		"destination_check_every_n_polls": 10,
+		"default_limit": 10
 	},
 	"mailbox": {
 		"folder": "GitHubNotifications"
@@ -303,7 +304,8 @@ Example:
 		"keep_files": 30
 	},
 	"paths": {
-		"default_download_dir": "D:"
+		"default_download_dir": "D:",
+		"default_subfolder": "@GitHub"
 	}
 }
 ```
@@ -316,6 +318,10 @@ Key behavior:
 - processing.destination_check_every_n_polls
 	- While polling, every Nth poll cycle checks whether each mapped repository destination folder still exists on disk and records a WARNING lifecycle event for any that are missing (for example, after a local folder was moved/renamed without updating mapping.json).
 	- 0 disables the periodic check. Defaults to 10. This check also runs once as part of `--doctor`.
+- processing.default_limit
+	- The `limit` given to a repository entry when it is created (a new notification or the GUI's Add repository). 0 means new entries have no folder limit. Defaults to 10. Existing entries keep their own value. Applies at once, no daemon restart needed.
+- paths.default_subfolder
+	- The `subfolder` given to a new repository entry, appended to the repository folder (for example `@GitHub`). An empty string means no subfolder. It must be a relative path (no drive letter, no `..`); anything else falls back to `@GitHub`, which is also the default. Existing entries keep their own value. Applies at once.
 - processing.recheck_intervals_minutes
 	- Re-check cadence list used by the queue system.
 	- Values are interpreted as minutes.
