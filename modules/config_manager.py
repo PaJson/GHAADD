@@ -107,6 +107,11 @@ def _config_file_path() -> str:
     return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config.json")
 
 
+def get_config_path() -> str:
+    """Absolute path of config.json (for "open the file" buttons)."""
+    return _config_file_path()
+
+
 def load_config() -> Dict[str, Any]:
     """Load and return config.json as a dictionary, or an empty dict on failure."""
     config_path = _config_file_path()
@@ -256,6 +261,46 @@ def set_config_values(changes: Dict[str, Any]) -> bool:
                 node = child
             node[leaf] = value
         return config != before
+
+    return update_config(_apply)
+
+
+def _hand_edited_defaults():
+    """Optional settings that have no field in the Settings window, with the value used when they are missing.
+
+    The getters fall back to these anyway; writing them into config.json only makes them visible and easy to edit.
+    """
+    return [
+        ("gui.refresh_seconds", 3),
+        ("gui.status_message_seconds", 6),
+        ("gui.tray", True),
+        ("gui.notifications", True),
+        ("gui.minimize_to_tray", sys.platform != "linux"),
+        ("gui.close_to_tray", False),
+    ]
+
+
+def add_missing_defaults() -> bool:
+    """Add the optional hand-edited settings that config.json lacks; True when the file changed.
+
+    Existing values (even unusual ones) are never touched, and a missing section is created.
+    """
+
+    def _apply(config: Dict[str, Any]) -> bool:
+        changed = False
+        for dotted_key, value in _hand_edited_defaults():
+            *parents, leaf = dotted_key.split(".")
+            node = config
+            for part in parents:
+                child = node.get(part)
+                if not isinstance(child, dict):
+                    child = {}
+                    node[part] = child
+                node = child
+            if leaf not in node:
+                node[leaf] = value
+                changed = True
+        return changed
 
     return update_config(_apply)
 

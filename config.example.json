@@ -37,6 +37,7 @@
     "refresh_seconds": 3,
     "status_message_seconds": 6,
     "tray": true,
+    "minimize_to_tray": true,
     "notifications": true,
     "close_to_tray": false
   }

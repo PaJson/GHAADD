@@ -86,6 +86,9 @@ STATUS_LEGEND_TITLE = "Status"
 
 # --- Buttons and small controls.
 CONTROL_HELP = {
+    "open_config": "Open config.json in your default editor, for the settings this window has no fields for\n"
+                   "(the gui section: refresh time, tray, notifications ...). Missing optional settings are added first,\n"
+                   "with their default values. Unsaved changes in this window are lost.",
     "create_shortcuts": "Make GHAADD shortcuts in a folder you choose.\n"
                         "Windows: \"GHAADD\" (opens the window) and \"GHAADD daemon\" (starts the daemon in the background);\n"
                         "the first one makes Windows name the notifications GHAADD. The Start menu folder is suggested.\n"

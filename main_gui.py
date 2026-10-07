@@ -1567,6 +1567,7 @@ class SettingsDialog(tk.Toplevel):
         body.columnconfigure(0, weight=1)
 
         current = gui_data.load_settings_form()
+        self._initial_form = dict(current)  # to tell whether the form has unsaved changes
         self.vars: dict[str, tk.Variable] = {
             key: tk.BooleanVar(value=value) if isinstance(value, bool) else tk.StringVar(value=value)
             for key, value in current.items()
@@ -1646,13 +1647,47 @@ class SettingsDialog(tk.Toplevel):
         self.message = ttk.Label(body, text="", foreground=COLOR_ERROR, wraplength=440)
         self.message.grid(row=5, column=0, sticky="w", pady=(6, 0))
         buttons = ttk.Frame(body)
-        buttons.grid(row=6, column=0, sticky="e", pady=(10, 0))
-        ttk.Button(buttons, text="Cancel", command=self.destroy).grid(row=0, column=0, padx=(0, 6))
-        ttk.Button(buttons, text="Save", command=self._save).grid(row=0, column=1)
+        buttons.grid(row=6, column=0, sticky="ew", pady=(10, 0))
+        buttons.columnconfigure(1, weight=1)
+        open_config_button = ttk.Button(buttons, text="Open config.json…", command=self._open_config)
+        open_config_button.grid(row=0, column=0, sticky="w")
+        attach_tooltip(open_config_button, gui_tooltips.CONTROL_HELP["open_config"])
+        ttk.Button(buttons, text="Cancel", command=self.destroy).grid(row=0, column=2, padx=(0, 6))
+        ttk.Button(buttons, text="Save", command=self._save).grid(row=0, column=3)
 
         self.bind("<Escape>", lambda _event: self.destroy())
         center_dialog(self, master, focus=first_entry)
         self.grab_set()
+
+    def _form_changed(self) -> bool:
+        """True when something in the form differs from what config.json had when the dialog opened."""
+        if any(str(var.get()) != str(self._initial_form.get(key)) for key, var in self.vars.items()):
+            return True
+        return self._autostart_before is not None and bool(self.autostart_var.get()) != self._autostart_before
+
+    def _open_config(self) -> None:
+        """Open config.json in the default editor (after adding the optional settings it lacks) and close this window."""
+        if self._form_changed() and not messagebox.askyesno(
+            "Open config.json",
+            "Changes you made in this window are not saved and will be lost when the file opens.\n\nOpen config.json anyway?",
+            icon="warning", default="no", parent=self,
+        ):
+            return
+        try:
+            config_manager.add_missing_defaults()
+        except (config_manager.ConfigLockTimeout, config_manager.ConfigUnreadableError, OSError) as exc:
+            self.message.configure(text=describe_error(exc), foreground=COLOR_ERROR)
+            return
+        try:
+            open_in_file_manager(config_manager.get_config_path())
+        except OSError as exc:
+            self.message.configure(text=f"Could not open config.json: {describe_error(exc)}", foreground=COLOR_ERROR)
+            return
+        self.destroy()
+        self._on_saved(
+            "config.json opened in your editor. Save the file there; most changes apply the next time the daemon starts "
+            "(the gui section, the next time the GUI starts)."
+        )
 
     def _create_shortcuts(self) -> None:
         """Ask for a folder, then make the shortcuts there (in a thread: PowerShell takes a moment)."""
@@ -1722,6 +1757,7 @@ class SettingsDialog(tk.Toplevel):
             return
         try:
             changed = config_manager.set_config_values(result.changes)
+            changed = config_manager.add_missing_defaults() or changed  # also lists the settings without a field here
         except (config_manager.ConfigLockTimeout, config_manager.ConfigUnreadableError, OSError) as exc:
             self.message.configure(text=describe_error(exc))
             return
