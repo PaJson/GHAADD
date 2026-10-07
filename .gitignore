@@ -16,6 +16,8 @@ perf_baseline*.json
 mapping.json.lock
 mapping.json.*.tmp
 mapping.json.v1.bak*
+config.json.lock
+config.json.*.tmp
 
 # --- 3. SQLite Local Write Records & Engine Caches ---
 *.db

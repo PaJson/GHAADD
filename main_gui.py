@@ -59,7 +59,7 @@ COLOR_SELECTED = "#0078d4"
 # Row icon per status (first column). Inactive (active: false in mapping.json) wins over runtime state.
 STATUS_ICONS = {
     "Running": "▶",
-    "Queued": "⏳",
+    "Queued": "◐",  # not an emoji (hourglass U+23F3 is missing from the fonts of many Linux systems)
     "Waiting": "◷",
     "Idle": "○",
     "Inactive": "⊘",
