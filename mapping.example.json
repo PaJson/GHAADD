@@ -1,17 +1,33 @@
 {
   "repositories": [
     {
-      "repository": "example-org/example-repo",
-      "folder": "My name for this repository",
-      "subfolder": "@GitHub",
+      "repository": "example-org/plain-example",
+      "folder": "plain-example (example-org)",
+      "subfolder": "",
       "destination": "X:\\Path\\To\\Destination",
       "skiplist": [],
       "recheck_intervals": [],
       "limit": 10,
       "limit_folders": ["Release", "Pre-release"],
       "sanity_check": "any_tag",
+      "shared_destination": false,
       "last_notification": "2026-01-01_12-00",
       "last_finalized": "",
+      "active": true
+    },
+    {
+      "repository": "example-org/customised-example",
+      "folder": "My name for this repository",
+      "subfolder": "Nightly",
+      "destination": "X:\\Path\\To\\Other\\Destination",
+      "skiplist": ["Pre-release"],
+      "recheck_intervals": [3, 10, 30, 120],
+      "limit": 25,
+      "limit_folders": ["Release"],
+      "sanity_check": "same_tag",
+      "shared_destination": true,
+      "last_notification": "2026-01-02_08-30",
+      "last_finalized": "2026-01-02_09-15",
       "active": true
     }
   ]

@@ -152,6 +152,33 @@ class TerminalLogTests(unittest.TestCase):
         self.assertTrue(settings["directory"].endswith("Transcripts"))
 
 
+class GuiTimingTests(unittest.TestCase):
+    def refresh(self, value):
+        return cm.get_gui_refresh_seconds({"gui": {"refresh_seconds": value}})
+
+    def message(self, value):
+        return cm.get_gui_status_message_seconds({"gui": {"status_message_seconds": value}})
+
+    def test_defaults(self) -> None:
+        self.assertEqual((cm.get_gui_refresh_seconds({}), cm.get_gui_status_message_seconds({})), (3.0, 6.0))
+        self.assertEqual(cm.get_gui_refresh_seconds({"gui": {"window": {"width": 900}}}), 3.0)  # other gui keys do not matter
+
+    def test_configured_values_are_used_as_numbers_or_text(self) -> None:
+        self.assertEqual((self.refresh(10), self.message(12)), (10.0, 12.0))
+        self.assertEqual((self.refresh(1.5), self.refresh("5"), self.message("2.5")), (1.5, 5.0, 2.5))
+
+    def test_values_are_kept_inside_their_limits(self) -> None:
+        self.assertEqual((self.refresh(0), self.refresh(-5), self.refresh(0.2)), (1.0, 1.0, 1.0))  # never a busy loop
+        self.assertEqual((self.refresh(100000), self.message(100000)), (60.0, 60.0))
+        self.assertEqual((self.message(0), self.message(1)), (2.0, 2.0))
+
+    def test_unusable_values_give_the_defaults(self) -> None:
+        for bad in ("fast", "", None, True, [3], {"a": 1}, float("nan")):
+            with self.subTest(value=bad):
+                self.assertEqual((self.refresh(bad), self.message(bad)), (3.0, 6.0))
+        self.assertEqual(cm.get_gui_refresh_seconds({"gui": "text"}), 3.0)
+
+
 class FingerprintTests(unittest.TestCase):
     BASE = {
         "polling": {"enabled": True, "interval_seconds": 300},
@@ -189,6 +216,7 @@ class FingerprintTests(unittest.TestCase):
     def test_things_the_daemon_ignores_do_not_change_it(self) -> None:
         base = self.fingerprint()
         self.assertEqual(self.fingerprint(gui={"window": {"width": 900}}), base)  # the GUI's remembered window size
+        self.assertEqual(self.fingerprint(gui={"refresh_seconds": 10, "status_message_seconds": 20}), base)  # GUI timing
         self.assertEqual(self.fingerprint(**{"polling": {"interval_seconds": "300"}}), base)  # same value, written as text
         self.assertEqual(self.fingerprint(**{"processing": {"recheck_intervals_minutes": [5, 15, 5, 0]}}), base)  # same effective list
         self.assertEqual(self.fingerprint(**{"processing": {"destination_check_every_n_polls": 10}}), base)  # an explicit default

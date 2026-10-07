@@ -255,6 +255,46 @@ class ValidationTests(LookupTestCase):
         self.assertIn("o/a, o/b", warning[0])
         self.assertNotIn("o/c", warning[0])
 
+    def shared(self, *marks):
+        """Entries sharing one folder; each mark is True / False / None (= key absent)."""
+        shared = {"destination": os.path.join(self.root, "d"), "folder": "Same", "subfolder": "@GitHub"}
+        entries = []
+        for number, mark in enumerate(marks):
+            entry = {"repository": f"o/r{number}", **shared}
+            if mark is not None:
+                entry["shared_destination"] = mark
+            entries.append(entry)
+        return [w for w in self.check(*entries)["warnings"] if "same destination folder" in w]
+
+    def test_a_shared_folder_marked_on_purpose_is_not_reported(self) -> None:
+        self.assertEqual(len(self.shared(None, None)), 1)  # not marked: the notice stays
+        self.assertEqual(len(self.shared(False, False)), 1)
+        self.assertEqual(self.shared(True, True), [])
+        self.assertEqual(self.shared(True, True, True), [])
+
+    def test_a_group_is_only_silenced_when_every_member_is_marked(self) -> None:
+        self.assertEqual(len(self.shared(True, None)), 1)
+        self.assertEqual(len(self.shared(True, True, False)), 1)
+
+    def test_one_marked_repository_alone_changes_nothing_for_other_groups(self) -> None:
+        shared_a = {"destination": os.path.join(self.root, "a"), "folder": "A", "shared_destination": True}
+        shared_b = {"destination": os.path.join(self.root, "b"), "folder": "B"}
+        result = self.check({"repository": "o/a1", **shared_a}, {"repository": "o/a2", **shared_a},
+                            {"repository": "o/b1", **shared_b}, {"repository": "o/b2", **shared_b})
+        notices = [w for w in result["warnings"] if "same destination folder" in w]
+        self.assertEqual(len(notices), 1)
+        self.assertIn("o/b1, o/b2", notices[0])
+
+    def test_the_notice_tells_how_to_silence_it(self) -> None:
+        self.assertIn("shared_destination", self.shared(None, None)[0])
+
+    def test_shared_destination_must_be_a_boolean(self) -> None:
+        for value in ("yes", 1, [True]):
+            with self.subTest(value=value):
+                self.assertIn(".shared_destination must be a boolean", self.errors({"repository": "o/app", "shared_destination": value}))
+        self.assertEqual(self.errors({"repository": "o/app", "shared_destination": True}), "")
+        self.assertEqual(self.check({"repository": "o/app", "shared_destination": False})["warnings"], [])  # a known key
+
     def test_the_file_check_reports_a_missing_or_broken_file(self) -> None:
         self.assertFalse(mapping_manager.validate_mapping_schema()["ok"])  # no file
         with open(self.path, "w", encoding="utf-8") as handle:

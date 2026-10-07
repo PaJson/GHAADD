@@ -99,13 +99,14 @@ Each repository entry supports these fields (in this order):
 
 - repository: repository identity in owner/repo form
 - folder: optional display and repository folder name (default: `repo (owner)`)
-- subfolder: optional nested folder path to append under the repository folder
+- subfolder: optional nested folder path to append under the repository folder. Every entry keeps its own value (an empty value means no subfolder); `paths.default_subfolder` in config.json only supplies the value for entries created from now on. `mapping.example.json` is only an example (the app never reads it): the first entry shows what a new entry looks like with the defaults, the second one shows every field with a non-default value
 - destination: optional destination base path for custom routing (can be any path on disk, not limited to paths.default_download_dir - see Deletion Safety below for what this does and does not do)
 - skiplist: optional array of release types to skip for this repository (for example, `['Pre-release']`); matching notifications are logged as a SKIPPED WARNING lifecycle event (see --lifecycle-log), the email is marked as read and deleted, and no job is queued. Leave empty (`[]`) to download both `Release` and `Pre-release`
 - recheck_intervals: optional list of positive integers (minutes) to override queue re-check cadence for this repository
 - limit: optional integer warning threshold for the number of folders at the destination (`0` disables checks)
 - limit_folders: optional array of release-type folder names to include in destination limit counting for this repository (for example, `['Release', 'Pre-release']`)
 - sanity_check: how the "file count changed" warning (SANITY_CHECK) picks the release to compare a finished release with: `any_tag` (default; the previous successful release of the repository whatever its tag), `same_tag` (only a previous release with the same tag, for rolling tags such as `nightly`), or `off`. Use `same_tag` or `off` for repositories where every tag is a different product (for example one tag per platform). A missing field means `any_tag`
+- shared_destination: `true` when this repository shares its destination folder (destination + folder + subfolder) with other repositories on purpose, for example one repository per platform. `--mapping-validate` and the Doctor then do not warn about the shared folder; the notice is hidden once every repository of the group is marked. Default `false`. In the GUI: the "Shared folder" checkbox
 - last_notification: timestamp when the last GitHub release notification was seen
 - last_finalized: timestamp when a release was last moved to its complete destination (empty when none has been finalized)
 - active: `true` (the default) downloads new releases; when `false`, matching notification emails move to Trash but remain unread, no new jobs are queued, and jobs already queued continue normally
@@ -116,8 +117,8 @@ When a new repository is seen, the app fills in a default skeleton entry with:
 
 - the repository name
 - a generated folder name (for example, repo (owner))
-- the default subfolder `@GitHub` and an empty destination
-- a default `limit` of `10`
+- the default subfolder (`paths.default_subfolder` in config.json; empty unless you set one, so the Release / Pre-release folders sit straight in the repository folder) and an empty destination
+- the default `limit` (`processing.default_limit` in config.json, `10` unless you changed it)
 - an empty `skiplist` (`[]`, nothing is skipped)
 - `active: true`
 - a last_notification timestamp
@@ -138,6 +139,7 @@ Example:
 	"limit": 25,
 	"limit_folders": ["Release", "Pre-release"],
 	"sanity_check": "any_tag",
+	"shared_destination": false,
 	"last_notification": "2026-08-08_14-59",
 	"last_finalized": "2026-08-16_15-20",
 	"active": true
@@ -307,7 +309,11 @@ Example:
 	},
 	"paths": {
 		"default_download_dir": "D:",
-		"default_subfolder": "@GitHub"
+		"default_subfolder": ""
+	},
+	"gui": {
+		"refresh_seconds": 3,
+		"status_message_seconds": 6
 	}
 }
 ```
@@ -323,7 +329,7 @@ Key behavior:
 - processing.default_limit
 	- The `limit` given to a repository entry when it is created (a new notification or the GUI's Add repository). 0 means new entries have no folder limit. Defaults to 10. Existing entries keep their own value. Applies at once, no daemon restart needed.
 - paths.default_subfolder
-	- The `subfolder` given to a new repository entry, appended to the repository folder (for example `@GitHub`). An empty string means no subfolder. It must be a relative path (no drive letter, no `..`); anything else falls back to `@GitHub`, which is also the default. Existing entries keep their own value. Applies at once.
+	- The `subfolder` given to a new repository entry, appended to the repository folder (for example `@GitHub`). The default is an empty string, which means no subfolder. It must be a relative path (no drive letter, no `..`); anything else falls back to the default (no subfolder). Existing entries keep their own value. Applies at once.
 - processing.recheck_intervals_minutes
 	- Re-check cadence list used by the queue system.
 	- Values are interpreted as minutes.
@@ -352,6 +358,10 @@ Key behavior:
 	- This setting only affects the terminal-output mirror. Lifecycle events (completed moves, superseded partial moves, typed warnings such as API, destination, move, sanity-check, supersede, and premature-finalize) are always recorded in state.db regardless of this setting, and are viewable with --lifecycle-log.
 - terminal_log.max_file_mb
 	- Size limit per log file in MB (default 10). When the current file reaches it, the daemon continues in a new, newer-named log file (the first line says which file it continues). Lines are never split across files. 0 disables rollover.
+- gui.refresh_seconds
+	- How often the GUI re-reads the data it shows, in seconds (default 3, allowed 1 to 60). A longer time uses less CPU on a slow machine. Edit config.json by hand; the GUI reads it when it starts. The daemon ignores the `gui` section.
+- gui.status_message_seconds
+	- How long a message in the GUI's status bar stays before the default text returns, in seconds (default 6, allowed 2 to 60). Same rules as above.
 - terminal_log.keep_files
 	- Number of log files to keep (default 30, including the current one). The oldest GHAADD log files (names matching YYYYMMDD_HHMMSS.log) beyond this are deleted when the polling daemon starts and after every rollover. 0 keeps everything. Never applied in --dry-run.
 

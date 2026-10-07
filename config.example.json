@@ -16,7 +16,7 @@
   },
   "paths": {
     "default_download_dir": "<set-local-download-path>",
-    "default_subfolder": "@GitHub"
+    "default_subfolder": ""
   },
   "polling": {
     "enabled": true,
@@ -32,5 +32,9 @@
   },
   "state": {
     "disable_state_persistence": false
+  },
+  "gui": {
+    "refresh_seconds": 3,
+    "status_message_seconds": 6
   }
 }

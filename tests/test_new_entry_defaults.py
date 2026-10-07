@@ -1,5 +1,5 @@
 """Subfolder and limit given to new mapping entries come from config.json (paths.default_subfolder,
-processing.default_limit) and fall back to "@GitHub" / 10.
+processing.default_limit) and fall back to "" (no subfolder) / 10.
 
 Nothing here touches the real config.json, mapping.json or state.db.
 Run from the project root: python -m unittest discover -s tests -t .
@@ -12,7 +12,7 @@ from modules import config_manager, gui_forms, mapping_manager
 
 class GetterTests(unittest.TestCase):
     def test_defaults_when_unset(self) -> None:
-        self.assertEqual(config_manager.get_default_subfolder({}), "@GitHub")
+        self.assertEqual(config_manager.get_default_subfolder({}), "")  # a personal choice like @GitHub belongs in config.json
         self.assertEqual(config_manager.get_default_repository_limit({}), 10)
 
     def test_configured_values(self) -> None:
@@ -28,7 +28,7 @@ class GetterTests(unittest.TestCase):
     def test_unusable_values_fall_back(self) -> None:
         for bad in ("C:\\x", "/abs", "..\\up", "a/../b", 5, None):
             with self.subTest(subfolder=bad):
-                self.assertEqual(config_manager.get_default_subfolder({"paths": {"default_subfolder": bad}}), "@GitHub")
+                self.assertEqual(config_manager.get_default_subfolder({"paths": {"default_subfolder": bad}}), "")
         for bad in (-1, "x", None):
             with self.subTest(limit=bad):
                 self.assertEqual(config_manager.get_default_repository_limit({"processing": {"default_limit": bad}}), 10)
@@ -44,7 +44,7 @@ class NewEntryTests(unittest.TestCase):
     def test_a_new_entry_without_settings_keeps_the_old_defaults(self) -> None:
         with mock.patch.object(config_manager, "load_config", lambda: {}):
             entry = mapping_manager._build_skeleton_entry("o/new", "")
-        self.assertEqual((entry["subfolder"], entry["limit"]), ("@GitHub", 10))
+        self.assertEqual((entry["subfolder"], entry["limit"]), ("", 10))
 
 
 class SettingsFormTests(unittest.TestCase):

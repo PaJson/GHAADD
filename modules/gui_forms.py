@@ -193,6 +193,7 @@ def build_repo_changes(form: Mapping[str, Any]) -> FormResult:
         "skiplist": parse_str_list(str(form.get("skiplist", ""))),
         "sanity_check": sanity_value(form.get("sanity_check")),
         "active": bool(form.get("active", True)),
+        "shared_destination": bool(form.get("shared_destination", False)),
     }
     return result
 
@@ -240,9 +241,9 @@ def build_settings_changes(form: Mapping[str, Any]) -> FormResult:
 
     download_dir = str(form.get("download_dir", "")).strip()
     if not download_dir:
-        errors.append("Default download dir must not be empty.")
+        errors.append("Default download folder must not be empty.")
     else:
-        warning = _directory_warning("Default download dir", download_dir)
+        warning = _directory_warning("Default download folder", download_dir)
         if warning:
             result.warnings.append(warning)
 

@@ -18,7 +18,11 @@ DEFAULT_POLL_JITTER_MAX_SECONDS = 30
 DEFAULT_MAX_EMAILS_TO_PROCESS = 0
 DEFAULT_RECHECK_INTERVALS_MINUTES = [5, 15, 30, 60, 120, 360, 720, 1440]
 DEFAULT_DESTINATION_CHECK_EVERY_N_POLLS = 10
-DEFAULT_SUBFOLDER = "@GitHub"
+DEFAULT_SUBFOLDER = ""  # no subfolder: Release / Pre-release folders sit straight in the repository folder
+DEFAULT_GUI_REFRESH_SECONDS = 3.0  # how often the GUI re-reads the data it shows
+DEFAULT_GUI_STATUS_MESSAGE_SECONDS = 6.0  # how long a status-bar message stays
+GUI_REFRESH_SECONDS_RANGE = (1.0, 60.0)
+GUI_STATUS_MESSAGE_SECONDS_RANGE = (2.0, 60.0)
 DEFAULT_REPOSITORY_LIMIT = 10
 DEFAULT_DISABLE_STATE_PERSISTENCE = False
 DEFAULT_GMAIL_FOLDER = "GitHubNotifications"
@@ -317,7 +321,7 @@ def is_valid_subfolder(value: Any) -> bool:
 def get_default_subfolder(config=None):
     """Return the subfolder given to newly created mapping entries (paths.default_subfolder).
 
-    An empty string means no subfolder; a missing or unusable value gives "@GitHub".
+    An empty string (also the default) means no subfolder; a missing or unusable value gives the default.
     """
     config = config if config is not None else load_config()
     value = _get_nested(config, "paths", "default_subfolder")
@@ -334,6 +338,34 @@ def get_default_repository_limit(config=None):
     config = config if config is not None else load_config()
     value = _as_int(_get_nested(config, "processing", "default_limit"), DEFAULT_REPOSITORY_LIMIT)
     return value if value >= 0 else DEFAULT_REPOSITORY_LIMIT
+
+
+def _gui_seconds(config, key, default, bounds):
+    """A number of seconds from the "gui" section, kept inside bounds; anything unusable gives the default."""
+    value = _get_nested(config, "gui", key)
+    if isinstance(value, bool) or value is None:
+        return default
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        return default
+    if seconds != seconds:  # NaN
+        return default
+    return min(max(seconds, bounds[0]), bounds[1])
+
+
+def get_gui_refresh_seconds(config=None):
+    """Seconds between the GUI's data refreshes (gui.refresh_seconds, default 3, 1 to 60)."""
+    config = config if config is not None else load_config()
+    return _gui_seconds(config, "refresh_seconds", DEFAULT_GUI_REFRESH_SECONDS, GUI_REFRESH_SECONDS_RANGE)
+
+
+def get_gui_status_message_seconds(config=None):
+    """Seconds a GUI status-bar message stays (gui.status_message_seconds, default 6, 2 to 60)."""
+    config = config if config is not None else load_config()
+    return _gui_seconds(
+        config, "status_message_seconds", DEFAULT_GUI_STATUS_MESSAGE_SECONDS, GUI_STATUS_MESSAGE_SECONDS_RANGE
+    )
 
 
 def get_default_download_dir(config: Optional[Dict[str, Any]] = None) -> str:

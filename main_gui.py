@@ -44,8 +44,6 @@ APP_TITLE = f"{APP_NAME} {__version__}"
 # The app icon is looked up here: ghaadd.ico (preferred on Windows) or ghaadd.png.
 ICON_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
 WINDOWS_APP_ID = "GHAADD.GUI"  # own taskbar identity, so the taskbar shows our icon instead of Python's
-REFRESH_INTERVAL_MS = 3000
-STATUS_MESSAGE_MS = 6000
 DAEMON_REFRESH_INTERVAL_MS = 1000
 UNEXPECTED_EXIT_WINDOW_SECONDS = 120.0  # a daemon this GUI started that dies within this long is reported
 DEFAULT_STATUS_TEXT = "config.json · mapping.json · state.db"
@@ -267,8 +265,8 @@ class ControlBar(ttk.Frame):
             widget.grid(row=0, column=column, padx=(0, 6))
         attach_tooltip(self.check_button, gui_tooltips.CONTROL_HELP["check_folders"])
         self.log_check.grid(row=0, column=5, padx=(6, 12))
-        self.restart_button.grid(row=0, column=6, padx=(0, 6))
-        self.doctor_button.grid(row=0, column=7, padx=(0, 6))
+        self.doctor_button.grid(row=0, column=6, padx=(0, 6))
+        self.restart_button.grid(row=0, column=7, padx=(0, 6))
         self.settings_button.grid(row=0, column=8)
         self.apply_view(gui_daemon.build_view(gui_daemon.DaemonSnapshot(), 0.0))
 
@@ -413,8 +411,9 @@ class MappingsTab(ttk.Frame):
     # Form values the user can change (the rest is read-only display).
     EDITABLE_KEYS = (
         "folder", "destination", "subfolder", "release_folders", "limit", "recheck", "skiplist", "sanity_check",
-        "active",
+        "shared_destination", "active",
     )
+    CHECK_KEYS = ("active", "shared_destination")  # yes/no fields (a check box instead of text)
 
     def __init__(self, master: tk.Misc, set_status: Callable[[str], None]) -> None:
         super().__init__(master, padding=10)
@@ -504,7 +503,8 @@ class MappingsTab(ttk.Frame):
         self.vars: dict[str, tk.Variable] = {
             key: tk.StringVar() for column in self.FORM_LAYOUT for row in column for key, _l, _k, _w in row
         }
-        self.vars["active"] = tk.BooleanVar()
+        for key in self.CHECK_KEYS:
+            self.vars[key] = tk.BooleanVar()
         for key in self.EDITABLE_KEYS:
             self.vars[key].trace_add("write", lambda *_: self._on_form_edited())
 
@@ -522,18 +522,21 @@ class MappingsTab(ttk.Frame):
         self.message_label.grid(row=row_count * 2, column=0, columnspan=2, sticky="w")
         self.message_label.grid_remove()
         actions = ttk.Frame(self.form_frame)
-        actions.grid(row=row_count * 2 - 1, column=len(self.FORM_LAYOUT) - 1, sticky="ew")
-        actions.columnconfigure(0, weight=1)
+        actions.grid(row=row_count * 2 - 2, rowspan=2, column=len(self.FORM_LAYOUT) - 1, sticky="ew")  # the whole last row
+        actions.columnconfigure(1, weight=1)  # the spare width goes between the check boxes and the buttons
         self.active_check = ttk.Checkbutton(actions, text="Active", variable=self.vars["active"])
+        self.shared_check = ttk.Checkbutton(actions, text="Shared folder", variable=self.vars["shared_destination"])
         self.revert_button = ttk.Button(actions, text="Revert", command=self._revert)
         self.save_button = ttk.Button(actions, text="Save", command=self._save)
         self.open_button = ttk.Button(actions, text="Open folder", command=self._open_folder)
-        self.active_check.grid(row=0, column=0, sticky="w")
-        self.open_button.grid(row=0, column=1, padx=(0, 6))
-        self.revert_button.grid(row=0, column=2, padx=(0, 6))
-        self.save_button.grid(row=0, column=3)
-        self.form_widgets.extend([self.active_check, self.open_button])
+        self.active_check.grid(row=0, column=0, sticky="w")  # the two check boxes stack; the buttons sit beside them
+        self.shared_check.grid(row=1, column=0, sticky="w")
+        self.open_button.grid(row=0, column=2, rowspan=2, padx=(0, 6))
+        self.revert_button.grid(row=0, column=3, rowspan=2, padx=(0, 6))
+        self.save_button.grid(row=0, column=4, rowspan=2)
+        self.form_widgets.extend([self.active_check, self.shared_check, self.open_button])
         attach_tooltip(self.active_check, gui_tooltips.FIELD_HELP["active"])
+        attach_tooltip(self.shared_check, gui_tooltips.FIELD_HELP["shared_destination"])
         attach_tooltip(self.open_button, gui_tooltips.FIELD_HELP["open_folder"])
 
     def _add_form_row(
@@ -825,6 +828,7 @@ class MappingsTab(ttk.Frame):
             "last_seen": str(entry.get("last_notification") or ""),
             "last_finalized": str(entry.get("last_finalized") or ""),
             "last_filecount": next((row.files_total for row in self._table.rows if row.repo == repo), ""),
+            "shared_destination": entry.get("shared_destination") is True,
             "active": entry.get("active") is not False,
         }
 
@@ -836,7 +840,7 @@ class MappingsTab(ttk.Frame):
             for key, var in self.vars.items():
                 if key == "default_recheck":
                     continue
-                var.set(values.get(key, False if key == "active" else ""))
+                var.set(values.get(key, False if key in self.CHECK_KEYS else ""))
         finally:
             self._loading = False
         self._current_repo = repo
@@ -1560,7 +1564,7 @@ class SettingsDialog(tk.Toplevel):
         row(processing, 0, "Default recheck (minutes)", ttk.Entry(processing, textvariable=self.vars["recheck"], width=28))
         row(processing, 1, "Max emails per poll (0 = all)", spin(processing, "max_emails", 0, 9999))
         row(processing, 2, "Destination check every N polls (0 = off)", spin(processing, "dest_check", 0, 999))
-        row(processing, 3, "Limit for new repositories (0 = none)", spin(processing, "default_limit", 0, 9999))
+        row(processing, 3, "Default limit (new mappings, 0 = none)", spin(processing, "default_limit", 0, 9999))
 
         polling = ttk.LabelFrame(body, text="Polling", padding=10)
         polling.grid(row=1, column=0, sticky="ew", pady=(10, 0))
@@ -1578,8 +1582,8 @@ class SettingsDialog(tk.Toplevel):
         ttk.Button(dir_frame, text="Browse…", width=9, command=lambda: pick_directory(self, self.vars["download_dir"])).grid(
             row=0, column=1, padx=(6, 0)
         )
-        row(paths, 0, "Default download dir", dir_frame)
-        row(paths, 1, "Subfolder for new repositories", ttk.Entry(paths, textvariable=self.vars["default_subfolder"], width=28))
+        row(paths, 0, "Default download folder", dir_frame)
+        row(paths, 1, "Default subfolder (new mappings)", ttk.Entry(paths, textvariable=self.vars["default_subfolder"], width=28))
         row(paths, 2, "Terminal log on at startup", ttk.Checkbutton(paths, variable=self.vars["log_enabled"]))
         row(paths, 3, "Max log file (MB, 0 = no rollover)", spin(paths, "log_max_mb", 0, 1000))
         row(paths, 4, "Keep log files (0 = all)", spin(paths, "log_keep", 0, 9999))
@@ -1722,11 +1726,15 @@ class DoctorDialog(tk.Toplevel):
 
 class MainWindow(tk.Tk):
     DEFAULT_SIZE = "1280x720"
-    MIN_SIZE = (900, 520)
+    MIN_SIZE = (1080, 520)  # narrower and the editor's last column (Active / Shared folder / buttons) is cut off
 
     def __init__(self, theme: Optional[str] = None) -> None:
         super().__init__()
         self.title(APP_TITLE)
+        # gui.refresh_seconds / gui.status_message_seconds in config.json (read once; a restart of the GUI applies changes)
+        config = config_manager.load_config()
+        self._refresh_ms = int(config_manager.get_gui_refresh_seconds(config) * 1000)
+        self._status_message_ms = int(config_manager.get_gui_status_message_seconds(config) * 1000)
         self._icon_image: Optional[tk.PhotoImage] = None  # keep a reference or Tk drops the icon
         self._set_icon()
         self.minsize(*self.MIN_SIZE)
@@ -1785,7 +1793,7 @@ class MainWindow(tk.Tk):
 
         self.notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
         self.bind("<Map>", self._on_map)
-        self._tick_job: Optional[str] = self.after(REFRESH_INTERVAL_MS, self._tick)
+        self._tick_job: Optional[str] = self.after(self._refresh_ms, self._tick)
         self._daemon_job: Optional[str] = None
         self._verify_log_job: Optional[str] = None
         self._update_daemon_view()
@@ -1797,7 +1805,7 @@ class MainWindow(tk.Tk):
         self.status_bar.configure(text=text)
         if self._status_reset_job is not None:
             self.after_cancel(self._status_reset_job)
-        self._status_reset_job = self.after(STATUS_MESSAGE_MS, self._reset_status)
+        self._status_reset_job = self.after(self._status_message_ms, self._reset_status)
 
     def _reset_status(self) -> None:
         self._status_reset_job = None
@@ -2013,7 +2021,7 @@ class MainWindow(tk.Tk):
             if self.state() != "iconic":
                 self._refresh_status_tabs()
         finally:
-            self._tick_job = self.after(REFRESH_INTERVAL_MS, self._tick)
+            self._tick_job = self.after(self._refresh_ms, self._tick)
 
     # ----- daemon status and control -----
 
@@ -2153,7 +2161,7 @@ class MainWindow(tk.Tk):
         if snapshot.running and not snapshot.log_on:
             self.set_status(
                 "The daemon could not start the log file. Check that the log folder exists and is writable "
-                "(Settings, default download dir)."
+                "(Settings, default download folder)."
             )
 
     def _open_settings(self) -> None:

@@ -40,6 +40,10 @@ FIELD_HELP = {
     "last_finalized": "When a release was last moved to its destination (set by the daemon).",
     "last_filecount": "Number of files in the newest release (what the Sanity check compares). "
                       "- = not known yet.",
+    "shared_destination": "Tick this when this repository shares its destination folder with other repositories on "
+                          "purpose (for example one repository per platform that all go to the same folder). "
+                          "The shared-folder notice in the Doctor and --mapping-validate is then not shown for it "
+                          "(it is hidden once every repository of the group is ticked). mapping.json: shared_destination.",
     "active": "Switched on: new releases of this repository are downloaded.\n"
               "Switched off: new notifications are ignored and their emails stay unread in the mailbox; jobs "
               "already queued still finish (mapping.json: active).",

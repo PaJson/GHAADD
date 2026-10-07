@@ -17,7 +17,7 @@ class TooltipCoverageTests(unittest.TestCase):
     def test_every_editor_field_and_button_has_help(self) -> None:
         layout = main_gui.MappingsTab.FORM_LAYOUT
         keys = {cell[0] for column in layout for row in column for cell in row}
-        keys |= {"active", "open_folder", "github"}
+        keys |= {"active", "shared_destination", "open_folder", "github"}
         self.assertEqual(keys - set(gui_tooltips.FIELD_HELP), set())
 
     def test_every_table_column_has_help_except_the_status_legend_column(self) -> None:

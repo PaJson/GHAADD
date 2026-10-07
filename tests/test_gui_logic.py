@@ -123,6 +123,11 @@ class RepoFormTests(unittest.TestCase):
         self.assertNotIn("repository", result.changes)
         self.assertNotIn("last_finalized", result.changes)
 
+    def test_the_shared_folder_flag_is_passed_on(self) -> None:
+        base = {"destination": tempfile.gettempdir(), "limit": "5"}
+        self.assertIs(gui_forms.build_repo_changes({**base, "shared_destination": True}).changes["shared_destination"], True)
+        self.assertIs(gui_forms.build_repo_changes(base).changes["shared_destination"], False)
+
     def test_empty_recheck_means_default(self) -> None:
         result = gui_forms.build_repo_changes(self.valid_form(recheck=""))
         self.assertTrue(result.ok)
@@ -190,7 +195,7 @@ class SettingsFormTests(unittest.TestCase):
 
         self.assertFalse(result.ok)
         joined = " ".join(result.errors)
-        for fragment in ("Default recheck", "Polling interval", "Jitter min", "Keep log files", "download dir"):
+        for fragment in ("Default recheck", "Polling interval", "Jitter min", "Keep log files", "download folder"):
             self.assertIn(fragment, joined)
 
 

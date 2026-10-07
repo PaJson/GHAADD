@@ -32,6 +32,7 @@ _MAPPING_FIELD_ORDER = (
     "limit",
     "limit_folders",
     "sanity_check",
+    "shared_destination",
     "last_notification",
     "last_finalized",
     "active",
@@ -1020,11 +1021,12 @@ def validate_mapping_payload(raw_payload: Any) -> MappingValidationResult:
 
             destination_group = seen_destinations.setdefault(
                 destination_key,
-                {"repo_names": [], "display_path": os.path.join(*display_path_parts)},
+                {"repo_names": [], "on_purpose": [], "display_path": os.path.join(*display_path_parts)},
             )
             destination_group["repo_names"].append(
                 str(name).strip() if isinstance(name, str) and name.strip() else f"repositories[{index}]"
             )
+            destination_group["on_purpose"].append(entry.get("shared_destination") is True)
 
         unknown_keys = sorted(
             key
@@ -1079,6 +1081,12 @@ def validate_mapping_payload(raw_payload: Any) -> MappingValidationResult:
         if active_value is not None and not isinstance(active_value, bool):
             errors.append(
                 f"{display_location}.active must be a boolean when provided.{display_suffix}"
+            )
+
+        shared_value = entry.get("shared_destination")
+        if shared_value is not None and not isinstance(shared_value, bool):
+            errors.append(
+                f"{display_location}.shared_destination must be a boolean when provided.{display_suffix}"
             )
 
         destination = entry.get("destination")
@@ -1184,11 +1192,14 @@ def validate_mapping_payload(raw_payload: Any) -> MappingValidationResult:
         repo_names = destination_group["repo_names"]
         if len(repo_names) < 2:
             continue
+        if all(destination_group["on_purpose"]):
+            continue  # every repository of the group is marked "shared on purpose"
         destination_display = destination_group["display_path"]
         warnings.append(
             "Multiple repositories resolve to the same destination folder "
             f"('{destination_display}'): {', '.join(repo_names)}. "
-            "This is expected if intentionally shared, but often happens after a "
+            "This is fine if intended (set shared_destination to true, the editor's \"Shared folder\" checkbox, "
+            "for every repository of the group to silence this notice), but it often happens after a "
             "repository rename left an old entry pointing at the same place."
         )
 
