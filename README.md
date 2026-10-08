@@ -330,6 +330,7 @@ Example:
 		"tray": true,
 		"notifications": true,
 		"close_to_tray": false,
+		"dark_mode": false,
 		"start_minimized": false,
 		"start_daemon": false
 	}
@@ -384,6 +385,8 @@ Key behavior:
 	- How often the GUI re-reads the data it shows, in seconds (default 3, allowed 1 to 60). A longer time uses less CPU on a slow machine. Edit config.json by hand; the GUI reads it when it starts. The daemon ignores the `gui` section.
 - gui.silenced_warning_types
 	- The warning types that never pop up a tray notification (a list; default `["API", "LIMIT"]`). The Warnings tab and its unread counter still show every warning. `API` is "could not resolve a release's current commit from GitHub", which is routine when a release was replaced or removed; `LIMIT` has its own notification. Change it in Settings → Warning notifications → "Choose warnings…", a checklist of all types with a description each (All / None / Defaults) that has its own Save and Cancel: Save writes `config.json` and applies at once, independently of the Settings window's own Save (Cancel with unsaved ticks asks first). Types are `API`, `SANITY_CHECK`, `SKIPPED`, `MOVE`, `SUPERSEDE_MOVE`, `SUPERSEDE_FINALIZE`, `PREMATURE_FINALIZE`, `FOLDER_RENAMED`, `FOLDER_RENAMED_MOVE`, `FOLDER_RENAMED_MOVED`, `DESTINATION`, `MAPPING`, `MAILBOX`, `LIMIT`, `BACKUP` (a scheduled backup failed) and `PARTIAL_MOVE` (superseded partial moves, "Partial move" in the tab).
+- gui.dark_mode
+	- The dark color scheme (true/false, default false). Toggled with the "Dark"/"Light" button at the right of the GUI header and saved here when you click it.
 - gui.start_minimized, gui.start_daemon
 	- What the GUI does when it opens (true/false, both default false; both are checkboxes in Settings → Startup). `start_minimized` starts it the way the minimize button leaves it: hidden in the tray when the tray icon is on and `minimize_to_tray` is on, otherwise minimized to the taskbar. `start_daemon` starts the polling daemon if none is running (like the Start button; a running daemon is left alone). `python main_gui.py --minimized` and `--start-daemon` ask for the same for one launch, whatever the settings say.
 - gui.tray, gui.notifications, gui.minimize_to_tray, gui.close_to_tray

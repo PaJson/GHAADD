@@ -94,6 +94,7 @@ STATUS_LEGEND_TITLE = "Status"
 
 # --- Buttons and small controls.
 CONTROL_HELP = {
+    "dark_mode": "Switch between the light and the dark colors. The choice is remembered (gui.dark_mode in config.json).",
     "backup": "Back up state.db, config.json and mapping.json (and .env if you tick it) into a zip file, now or on a "
               "schedule the daemon keeps. Opens its own window.",
     "queue_counts": "Jobs waiting in the queue.\n"

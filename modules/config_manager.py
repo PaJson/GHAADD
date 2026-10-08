@@ -291,6 +291,7 @@ def _hand_edited_defaults():
         ("gui.notifications", True),
         ("gui.minimize_to_tray", sys.platform != "linux"),
         ("gui.close_to_tray", False),
+        ("gui.dark_mode", False),
         ("gui.start_minimized", False),
         ("gui.start_daemon", False),
         ("gui.silenced_warning_types", list(DEFAULT_SILENCED_WARNING_TYPES)),
@@ -473,6 +474,12 @@ def get_gui_silenced_warning_types(config=None) -> list[str]:
     if isinstance(value, list) and all(isinstance(item, str) for item in value):
         return sorted({item.strip().upper() for item in value if item.strip()})
     return list(DEFAULT_SILENCED_WARNING_TYPES)
+
+
+def get_gui_dark_mode(config=None):
+    """Return gui.dark_mode (default false): the GUI's dark color scheme, toggled by the button in the header."""
+    config = config if config is not None else load_config()
+    return _gui_flag(config, "dark_mode", False)
 
 
 def get_gui_start_minimized(config=None):

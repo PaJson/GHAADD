@@ -12,7 +12,7 @@ from modules import config_manager, gui_data
 
 EXPECTED_KEYS = {
     "refresh_seconds", "status_message_seconds", "tray", "notifications", "minimize_to_tray", "close_to_tray",
-    "start_minimized", "start_daemon", "silenced_warning_types",
+    "dark_mode", "start_minimized", "start_daemon", "silenced_warning_types",
 }
 
 

@@ -11,7 +11,7 @@ import os
 import tempfile
 import unittest
 from contextlib import closing
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 from unittest import mock
 
@@ -475,3 +475,24 @@ class CliTests(CollectTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BucketDailyTests(unittest.TestCase):
+    def series(self, count):
+        start = date(2025, 1, 1)
+        return [{"date": str(start + timedelta(days=i)), "jobs": 1} for i in range(count)]
+
+    def test_short_series_stays_daily(self):
+        unit, buckets = stats.bucket_daily(self.series(30), 100)
+        self.assertEqual((unit, len(buckets)), ("day", 30))
+
+    def test_long_series_becomes_weeks_that_keep_the_total(self):
+        unit, buckets = stats.bucket_daily(self.series(400), 100)
+        self.assertEqual(unit, "week")
+        self.assertEqual(sum(b["jobs"] for b in buckets), 400)
+        self.assertEqual(buckets[0]["days"], 5)  # 2025-01-01 is a Wednesday: the first week is cut off
+
+    def test_very_long_series_becomes_months(self):
+        unit, buckets = stats.bucket_daily(self.series(1500), 100)
+        self.assertEqual(unit, "month")
+        self.assertEqual(sum(b["days"] for b in buckets), 1500)

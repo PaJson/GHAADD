@@ -40,6 +40,7 @@
     "minimize_to_tray": true,
     "notifications": true,
     "close_to_tray": false,
+    "dark_mode": false,
     "start_minimized": false,
     "start_daemon": false,
     "silenced_warning_types": ["API", "LIMIT"]

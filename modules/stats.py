@@ -263,12 +263,34 @@ def limited(report: Mapping[str, Any], busiest: Optional[int] = TOP_COUNT, bigge
     return copy
 
 
-def daily_title(report: Mapping[str, Any]) -> str:
-    """Heading of the jobs-per-day series ("last 30 days", or the chosen window)."""
+def daily_title(report: Mapping[str, Any], unit: str = "day") -> str:
+    """Heading of the jobs series ("last 30 days", or the chosen window); `unit` is what one bar stands for."""
     count = len(report["daily"])
     if report.get("range"):
-        return f"Jobs per day, {report['range']}, {count} days"
-    return f"Jobs per day, last {count} days"
+        return f"Jobs per {unit}, {report['range']}, {count} days"
+    return f"Jobs per {unit}, last {count} days"
+
+
+def bucket_daily(daily: Sequence[Mapping[str, Any]], max_bars: int) -> tuple[str, list[dict[str, Any]]]:
+    """Combine the daily series into weeks, then months, until it has at most `max_bars` bars.
+
+    Returns ("day" | "week" | "month", buckets); a bucket is {"date": its first day, "jobs": the sum, "days": count}.
+    Weeks start on Monday; a week or month cut off by the range counts only the days that are in it.
+    """
+    days = [{"date": str(day["date"]), "jobs": int(day["jobs"]), "days": 1} for day in daily]
+    if len(days) <= max_bars:
+        return "day", days
+    for unit in ("week", "month"):
+        groups: dict[str, dict[str, Any]] = {}
+        for day in days:
+            moment = date.fromisoformat(day["date"])
+            key = str(moment - timedelta(days=moment.weekday())) if unit == "week" else day["date"][:7]
+            group = groups.setdefault(key, {"date": day["date"], "jobs": 0, "days": 0})
+            group["jobs"] += day["jobs"]
+            group["days"] += 1
+        if len(groups) <= max_bars or unit == "month":
+            return unit, list(groups.values())
+    return "day", days  # not reached
 
 
 def list_titles(report: Mapping[str, Any]) -> tuple[str, str, str]:

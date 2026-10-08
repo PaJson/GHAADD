@@ -34,6 +34,7 @@ from modules import (
     gui_forms,
     gui_instance,
     gui_state,
+    gui_theme,
     gui_tooltips,
     gui_tray,
     log_tail,
@@ -62,6 +63,22 @@ COLOR_STRIPE = "#f2f5f9"  # every second table row
 COLOR_HEADER_BG = "#dde5ef"  # table column headers
 COLOR_HEADER_FG = "#1f2d3d"
 COLOR_SELECTED = "#0078d4"
+COLOR_OK = "#2e7d32"
+COLOR_FIELD = "#ffffff"  # entries, text areas, canvases
+COLOR_DETAIL = "#fbfbfb"  # the detail pane under the tables
+COLOR_BORDER = "#c8c8c8"
+COLOR_AXIS = "#999999"  # chart axes
+
+
+def set_palette(dark: bool) -> None:
+    """Point the COLOR_* constants at the light or dark palette (widgets built afterwards pick them up)."""
+    global COLOR_ERROR, COLOR_WARNING, COLOR_MUTED, COLOR_STRIPE, COLOR_HEADER_BG, COLOR_HEADER_FG
+    global COLOR_SELECTED, COLOR_OK, COLOR_FIELD, COLOR_DETAIL, COLOR_BORDER, COLOR_AXIS
+    colors = gui_theme.palette(dark)
+    COLOR_ERROR, COLOR_WARNING, COLOR_MUTED = colors["error"], colors["warning"], colors["muted"]
+    COLOR_STRIPE, COLOR_HEADER_BG, COLOR_HEADER_FG = colors["stripe"], colors["header_bg"], colors["header_fg"]
+    COLOR_SELECTED, COLOR_OK, COLOR_FIELD = colors["selected"], colors["ok"], colors["field"]
+    COLOR_DETAIL, COLOR_BORDER, COLOR_AXIS = colors["detail"], colors["border"], colors["axis"]
 
 # Row icon per status (first column). Inactive (active: false in mapping.json) wins over runtime state.
 STATUS_ICONS = {
@@ -319,6 +336,10 @@ class ControlBar(ttk.Frame):
         attach_tooltip(self.single_button, gui_tooltips.CONTROL_HELP["poll_one"])
         attach_tooltip(self.check_button, gui_tooltips.CONTROL_HELP["check_folders"])
         attach_tooltip(self.stats_button, gui_tooltips.CONTROL_HELP["stats"])
+        # The light/dark switch sits at the right edge of the header, clear of the centred groups.
+        self.theme_button = ttk.Button(self, text=gui_theme.button_text(False), width=8)
+        self.theme_button.place(relx=1.0, x=-2, y=0, anchor="ne")
+        attach_tooltip(self.theme_button, gui_tooltips.CONTROL_HELP["dark_mode"])
         self.apply_view(gui_daemon.build_view(gui_daemon.DaemonSnapshot(), 0.0))
 
     def set_doctor_attention(self, reasons: list[str], highlight: bool) -> None:
@@ -1146,8 +1167,8 @@ class TerminalLogTab(ttk.Frame):
     def _build_text(self) -> None:
         """Create the read-only log text with its scrollbars and the warning/error colours."""
         self.text = tk.Text(self, wrap="none", height=10, font=("Consolas", 10), state="disabled", undo=False)
-        self.text.tag_configure(log_tail.LEVEL_ERROR, foreground="#b3261e")
-        self.text.tag_configure(log_tail.LEVEL_WARNING, foreground="#9a6700")
+        self.text.tag_configure(log_tail.LEVEL_ERROR, foreground=COLOR_ERROR)
+        self.text.tag_configure(log_tail.LEVEL_WARNING, foreground=COLOR_WARNING)
         self.text.grid(row=2, column=0, sticky="nsew")
         yscroll = ttk.Scrollbar(self, orient="vertical", command=self.text.yview)
         self._xscroll = ttk.Scrollbar(self, orient="horizontal", command=self.text.xview)
@@ -1499,7 +1520,7 @@ class StatusTab(ttk.Frame):
         frame.grid(row=self._base + 1, column=0, columnspan=2, sticky="ew", pady=(8, 0))
         frame.columnconfigure(0, weight=1)
         self.detail = tk.Text(frame, height=5, wrap="word", state="disabled", relief="solid", borderwidth=1,
-                              background="#fbfbfb", font=("Segoe UI", 10))
+                              background=COLOR_DETAIL, font=("Segoe UI", 10))
         self.detail.tag_configure("head", font=("Segoe UI", 10, "bold"))
         self.detail.tag_configure("hint", foreground=COLOR_MUTED)
         self.detail.grid(row=0, column=0, sticky="ew")
@@ -2369,7 +2390,7 @@ class CredentialsDialog(tk.Toplevel):
         while self._results:
             name, result = self._results.pop(0)
             self._busy.discard(name)
-            ok_color = "#2e7d32" if result.ok and result.folder_found is not False else COLOR_WARNING if result.ok else COLOR_ERROR
+            ok_color = COLOR_OK if result.ok and result.folder_found is not False else COLOR_WARNING if result.ok else COLOR_ERROR
             if name == "gmail":
                 self.test_gmail_button.state(["!disabled"])
                 self.gmail_result.configure(text=result.message, foreground=ok_color)
@@ -2577,7 +2598,7 @@ class BackupDialog(tk.Toplevel):
             return
         result = self._answer[0]
         self.now_button.state(["!disabled"])
-        self.message.configure(text=result.message, foreground="#2e7d32" if result.ok else COLOR_ERROR)
+        self.message.configure(text=result.message, foreground=COLOR_OK if result.ok else COLOR_ERROR)
         self._update_last()
 
     def _close_request(self) -> None:
@@ -2640,7 +2661,7 @@ class DoctorDialog(tk.Toplevel):
         self.text.tag_configure("heading", font=self._bold, spacing1=8, spacing3=2)
         self.text.tag_configure("error", foreground=COLOR_ERROR)
         self.text.tag_configure("warning", foreground=COLOR_WARNING)
-        self.text.tag_configure("ok", foreground="#2e7d32")
+        self.text.tag_configure("ok", foreground=COLOR_OK)
         self.text.tag_configure("muted", foreground=COLOR_MUTED)
 
         buttons = ttk.Frame(body)
@@ -2854,7 +2875,7 @@ class StatsDialog(tk.Toplevel):
         daily.rowconfigure(1, weight=1)
         self.daily_title = ttk.Label(daily, text="", font=self._bold)
         self.daily_title.grid(row=0, column=0, sticky="w", pady=(0, 4))
-        self.chart = tk.Canvas(daily, background="white", highlightthickness=1, highlightbackground="#c8c8c8", height=260)
+        self.chart = tk.Canvas(daily, background=COLOR_FIELD, highlightthickness=1, highlightbackground=COLOR_BORDER, height=260)
         self.chart.grid(row=1, column=0, sticky="nsew")
         self.chart.bind("<Configure>", lambda _event: self._draw_chart())
         self.notebook.add(daily, text="Per day")
@@ -3145,35 +3166,81 @@ class StatsDialog(tk.Toplevel):
             text.configure(height=current)
 
     def _draw_chart(self) -> None:
-        """Draw the jobs-per-day bar chart on the canvas."""
+        """Draw the jobs bar chart: bars (days, or weeks/months for long ranges), then day, month and year rows."""
         canvas = self.chart
         canvas.delete("all")
         if not self._report:
             return
-        daily = self._report["daily"]
+        small = tkfont.Font(font=("TkDefaultFont", 8))
+        row_h = small.metrics("linespace") + 3
         width, height = max(canvas.winfo_width(), 200), max(canvas.winfo_height(), 120)
-        left, right, top, bottom = 36, 12, 18, 30
+        left, right, top = 36, 12, 18
+        # Bars thinner than ~5 px are useless: a long range is summed into weeks, and a very long one into months.
+        unit, daily = stats.bucket_daily(self._report["daily"], max(1, (width - left - right) // 5))
+        self.daily_title.configure(text=stats.daily_title(self._report, unit))
+        slot = (width - left - right) / max(len(daily), 1)
+        # Day numbers lie on their side when two digits do not fit across a bar; the week/month views have none.
+        vertical = slot < small.measure("00") + 10
+        day_row_h = small.measure("00") + 6 if vertical else row_h
+        show_days = unit == "day" and (not vertical or slot >= small.metrics("linespace") * 0.6)
+        bottom = (day_row_h if show_days else 0) + 2 * row_h + 6
         peak = max((day["jobs"] for day in daily), default=0) or 1
-        plot_w, plot_h = width - left - right, height - top - bottom
-        slot = plot_w / max(len(daily), 1)
-        long_range = len(daily) > 150  # months repeat across years: then the label carries the year
-        label_width = 75 if long_range else 40
-        canvas.create_line(left, top, left, top + plot_h, fill="#999999")
-        canvas.create_line(left, top + plot_h, width - right, top + plot_h, fill="#999999")
+        plot_h = height - top - bottom
+        axis_y = top + plot_h
+        canvas.create_line(left, top, left, axis_y, fill=COLOR_AXIS)
+        canvas.create_line(left, axis_y, width - right, axis_y, fill=COLOR_AXIS)
         canvas.create_text(left - 4, top, text=str(peak), anchor="e", fill=COLOR_MUTED)
-        canvas.create_text(left - 4, top + plot_h, text="0", anchor="e", fill=COLOR_MUTED)
+        canvas.create_text(left - 4, axis_y, text="0", anchor="e", fill=COLOR_MUTED)
+
+        # Day numbers need their width (lying down: their height) plus a gap; when that is more than a bar, every
+        # n-th day is labelled. The last day is always labelled, so a regular label too close before it makes way.
+        labelled: set[int] = set()
+        if show_days:
+            need = (small.metrics("linespace") + 4) if vertical else (small.measure("00") + 10)
+            marks = list(range(0, len(daily), max(1, round(need / slot))))
+            if marks and marks[-1] != len(daily) - 1:
+                if (len(daily) - 1 - marks[-1]) * slot < need:
+                    marks.pop()
+                marks.append(len(daily) - 1)
+            labelled = set(marks)
         for index, day in enumerate(daily):
             x0 = left + index * slot + slot * 0.15
             x1 = left + (index + 1) * slot - slot * 0.15
             bar_h = plot_h * day["jobs"] / peak
             if day["jobs"]:
-                canvas.create_rectangle(x0, top + plot_h - bar_h, x1, top + plot_h, fill=self.DAILY_BAR, outline="")
+                canvas.create_rectangle(x0, axis_y - bar_h, x1, axis_y, fill=self.DAILY_BAR, outline="")
                 if slot >= 22:
-                    canvas.create_text((x0 + x1) / 2, top + plot_h - bar_h - 2, text=str(day["jobs"]), anchor="s",
+                    canvas.create_text((x0 + x1) / 2, axis_y - bar_h - 2, text=str(day["jobs"]), anchor="s",
                                        fill=COLOR_MUTED, font=("TkDefaultFont", 8))
-            if index % max(1, round(label_width / slot)) == 0 or index == len(daily) - 1:
-                canvas.create_text((x0 + x1) / 2, top + plot_h + 4, text=day["date"] if long_range else day["date"][5:], anchor="n",
-                                   fill=COLOR_MUTED, font=("TkDefaultFont", 8))
+            if index in labelled:
+                label = str(int(day["date"][8:10]))
+                # A rotated text is placed by its centre (an anchor like "n" refers to the unrotated text and shifts it
+                # sideways), so the centre sits half the text's length below the axis.
+                canvas.create_text((x0 + x1) / 2, axis_y + 4 + (small.measure(label) / 2 if vertical else small.metrics("linespace") / 2),
+                                   text=label, anchor="center", angle=90 if vertical else 0, fill=COLOR_MUTED,
+                                   font=("TkDefaultFont", 8))
+
+        # Months and years: each name is centred under the bars it covers (a cut-off first or last month is centred
+        # under the part that is shown), the full name when it fits, else the short one, else nothing.
+        month_names = ["January", "February", "March", "April", "May", "June", "July", "August", "September",
+                       "October", "November", "December"]
+        month_y = axis_y + 4 + (day_row_h if show_days else 0)
+        for key_len, row, names in ((7, 0, month_names), (4, 1, None)):
+            start = 0
+            for index in range(1, len(daily) + 1):
+                if index < len(daily) and daily[index]["date"][:key_len] == daily[start]["date"][:key_len]:
+                    continue
+                span_l, span_r = left + start * slot, left + index * slot
+                key = daily[start]["date"][:key_len]
+                full = names[int(key[5:7]) - 1] if names else key
+                for text in ((full, full[:3]) if names else (full,)):
+                    if small.measure(text) + 8 <= span_r - span_l:
+                        canvas.create_text((span_l + span_r) / 2, month_y + row * row_h, text=text, anchor="n",
+                                           fill=COLOR_MUTED, font=("TkDefaultFont", 8))
+                        break
+                if row == 0 and start > 0:  # a faint tick marks where a month begins
+                    canvas.create_line(span_l, axis_y, span_l, month_y + row_h * 2 - 3, fill=COLOR_BORDER)
+                start = index
 
     def _copy(self) -> None:
         """Copy the plain-text report to the clipboard."""
@@ -3191,6 +3258,7 @@ class MainWindow(tk.Tk):
     logic lives in the toolkit-independent gui_* modules. The daemon is never stopped by closing this window.
     """
     DEFAULT_SIZE = "1280x720"
+    _dark_active = False  # the mode in use, for the static style helper
     MIN_SIZE = (1080, 520)  # narrower and the editor's last column (Active / Shared folder / buttons) is cut off
 
     def __init__(self, theme: Optional[str] = None, start_minimized: bool = False, start_daemon: bool = False) -> None:
@@ -3208,6 +3276,9 @@ class MainWindow(tk.Tk):
         self._normal_state: Optional[gui_state.WindowState] = None  # last size/position while not maximized
         self.bind("<Configure>", self._remember_normal_state)
         self.protocol("WM_DELETE_WINDOW", self._on_close_request)
+        self._theme_name = theme
+        self._dark = MainWindow._dark_active = config_manager.get_gui_dark_mode(config)
+        set_palette(self._dark)
         self._apply_theme(theme)
         self._status_reset_job: Optional[str] = None
         try:  # a mapping.json with pre-2.0 key names is upgraded now (after a backup), unless an older daemon runs
@@ -3252,6 +3323,8 @@ class MainWindow(tk.Tk):
         self.control_bar.restart_button.configure(command=self._on_restart)
         self.control_bar.doctor_button.configure(command=self._open_doctor)
         self.control_bar.stats_button.configure(command=self._open_stats)
+        self.control_bar.theme_button.configure(command=self._toggle_dark_mode)
+        self.control_bar.theme_button.configure(text=gui_theme.button_text(self._dark))
         ttk.Separator(self).pack(fill="x")
 
         self.status_bar = ttk.Label(self.footer, text=DEFAULT_STATUS_TEXT, anchor="w", padding=(10, 3))
@@ -4047,13 +4120,126 @@ class MainWindow(tk.Tk):
             pass  # a broken icon file must never stop the GUI from starting
 
     def _apply_theme(self, preferred: Optional[str] = None) -> None:
-        """Pick the ttk theme: the requested one, else the native Windows theme, else clam."""
+        """Pick the ttk theme: dark mode needs clam (the native theme ignores colors); else the requested one."""
         style = ttk.Style(self)
-        for theme in ((preferred,) if preferred else ()) + ("vista", "winnative", "clam"):
+        order = ("clam",) if self._dark else ((preferred,) if preferred else ()) + ("vista", "winnative", "clam")
+        for theme in order:
             if theme in style.theme_names():
                 style.theme_use(theme)
                 break
+        if style.theme_use() == "clam":  # clam draws everything from the palette, light or dark
+            self._configure_palette_styles(style)
         self._configure_styles(style)
+        colors = gui_theme.palette(self._dark)
+        self.configure(background=colors["window"])
+        # Plain Tk widgets (and the drop-down of a combobox) created from now on, e.g. in dialogs, start in these colors.
+        for pattern, value in (
+            ("*Toplevel.background", colors["window"]), ("*Frame.background", colors["window"]),
+            ("*Label.background", colors["window"]), ("*Label.foreground", colors["text"]),
+            ("*Text.background", colors["field"]), ("*Text.foreground", colors["text"]),
+            ("*Text.insertBackground", colors["text"]), ("*Canvas.background", colors["field"]),
+            ("*Menu.background", colors["window"]), ("*Menu.foreground", colors["text"]),
+            ("*TCombobox*Listbox.background", colors["field"]), ("*TCombobox*Listbox.foreground", colors["text"]),
+            ("*TCombobox*Listbox.selectBackground", colors["selected"]),
+        ):
+            self.option_add(pattern, value)
+
+    def _configure_palette_styles(self, style: ttk.Style) -> None:
+        """Give the clam theme's widgets the current palette (so the same code serves dark and light)."""
+        c = gui_theme.palette(self._dark)
+        style.configure(
+            ".", background=c["window"], foreground=c["text"], fieldbackground=c["field"], bordercolor=c["border"],
+            darkcolor=c["window"], lightcolor=c["window"], troughcolor=c["field"], insertcolor=c["text"],
+            selectbackground=c["selected"], selectforeground="#ffffff",
+        )
+        style.map(".", foreground=[("disabled", c["disabled"])])
+        style.configure("TButton", background=c["button"], bordercolor=c["border"], lightcolor=c["button"], darkcolor=c["button"])
+        style.map("TButton", background=[("active", c["button_active"]), ("disabled", c["window"])])
+        style.configure("TEntry", fieldbackground=c["field"], foreground=c["text"])
+        style.configure("TCombobox", fieldbackground=c["field"], foreground=c["text"], background=c["button"], arrowcolor=c["text"])
+        style.map("TCombobox", fieldbackground=[("readonly", c["field"])], foreground=[("readonly", c["text"])])
+        style.configure("TSpinbox", fieldbackground=c["field"], foreground=c["text"], arrowcolor=c["text"])
+        # clam maps its own greys onto the disabled and hover states of these, which showed as light boxes in dark mode
+        for kind in ("TCheckbutton", "TRadiobutton"):
+            style.configure(kind, background=c["window"], indicatorbackground=c["field"], indicatorforeground=c["text"])
+            style.map(
+                kind,
+                background=[("disabled", c["window"]), ("active", c["window"])],
+                indicatorbackground=[("disabled", c["window"]), ("pressed", c["field"])],
+                foreground=[("disabled", c["disabled"])],
+            )
+        style.configure("TNotebook", background=c["window"], bordercolor=c["border"])
+        style.configure("TNotebook.Tab", background=c["button"], foreground=c["text"])
+        style.map("TNotebook.Tab", background=[("selected", c["window"]), ("active", c["button_active"])])
+        style.configure("TScrollbar", background=c["button"], troughcolor=c["field"], arrowcolor=c["text"], bordercolor=c["border"])
+        style.configure("Treeview", background=c["field"], fieldbackground=c["field"], foreground=c["text"])
+
+    def _toggle_dark_mode(self) -> None:
+        """Switch between the light and dark colors and remember the choice in config.json."""
+        self._dark = not self._dark
+        MainWindow._dark_active = self._dark
+        set_palette(self._dark)
+        self._apply_theme(self._theme_name)
+        self._recolor(self, gui_theme.color_swaps(self._dark))
+        self.control_bar.theme_button.configure(text=gui_theme.button_text(self._dark))
+        try:
+            config_manager.set_config_values({"gui.dark_mode": self._dark})
+        except Exception as exc:  # the colors still changed; only the memory of them failed
+            self.set_status(f"Could not save the color mode: {describe_error(exc)}")
+
+    def _recolor(self, widget: tk.Misc, swaps: dict[str, str]) -> None:
+        """Recolor a widget and all its children: palette colors are swapped, plain Tk widgets get the base colors."""
+        colors = gui_theme.palette(self._dark)
+
+        def swapped(value: str) -> Optional[str]:
+            """Return the new color for an old palette color, or None when it is not one of ours."""
+            try:
+                red, green, blue = (part >> 8 for part in widget.winfo_rgb(value))
+            except tk.TclError:
+                return None
+            return swaps.get(f"#{red:02x}{green:02x}{blue:02x}")
+
+        kind = widget.winfo_class()
+        field_kinds = ("Text", "Canvas", "Entry", "Listbox", "Spinbox")
+        plain_kinds = ("Tk", "Toplevel", "Frame", "Label", "Menu")
+        for option in ("foreground", "background", "highlightbackground", "highlightcolor", "insertbackground"):
+            if option == "background" and kind in plain_kinds + field_kinds:
+                continue  # set below from the widget's role
+            try:
+                current = str(widget.cget(option))  # type: ignore[call-overload]
+            except tk.TclError:
+                continue
+            new = swapped(current) if current else None
+            if new:
+                widget.configure(**{option: new})  # type: ignore[call-overload]
+        if kind in plain_kinds + field_kinds:
+            try:
+                current = str(widget.cget("background"))  # type: ignore[call-overload]
+                role = colors["field"] if kind in field_kinds else colors["window"]
+                widget.configure(background=swapped(current) or role)  # type: ignore[call-overload]
+            except tk.TclError:
+                pass
+            if kind in ("Text", "Entry", "Listbox", "Spinbox"):
+                try:
+                    if not swapped(str(widget.cget("foreground"))):  # type: ignore[call-overload]
+                        widget.configure(foreground=colors["text"])  # type: ignore[call-overload]
+                    widget.configure(insertbackground=colors["text"])  # type: ignore[call-overload]
+                except tk.TclError:
+                    pass
+        if isinstance(widget, tk.Text):
+            for tag in widget.tag_names():
+                for option in ("foreground", "background"):
+                    new = swapped(str(widget.tag_cget(tag, option)) or "")
+                    if new:
+                        widget.tag_configure(tag, **{option: new})
+        elif isinstance(widget, ttk.Treeview):
+            for tag in ("odd", "limit_warn"):
+                for option in ("foreground", "background"):
+                    new = swapped(str(widget.tag_configure(tag, option)) or "")  # type: ignore[call-overload]
+                    if new:
+                        widget.tag_configure(tag, **{option: new})  # type: ignore[call-overload]
+        for child in widget.winfo_children():
+            self._recolor(child, swaps)
 
     @staticmethod
     def _configure_styles(style: ttk.Style) -> None:
@@ -4066,7 +4252,8 @@ class MainWindow(tk.Tk):
             "Treeview.Heading", background=COLOR_HEADER_BG, foreground=COLOR_HEADER_FG, relief="flat", font=heading_font
         )
         MainWindow._heading_font = heading_font  # keep a reference so Tk does not drop the font
-        style.map("Treeview.Heading", background=[("active", "#cbd7e6"), ("pressed", "#bccbdf")])
+        colors = gui_theme.palette(MainWindow._dark_active)
+        style.map("Treeview.Heading", background=[("active", colors["header_active"]), ("pressed", colors["header_pressed"])])
         # Explicit selection colors: tag backgrounds (striping) otherwise win over the theme's.
         style.map(
             "Treeview",
