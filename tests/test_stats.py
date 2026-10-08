@@ -11,7 +11,7 @@ import os
 import tempfile
 import unittest
 from contextlib import closing
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 from unittest import mock
 
@@ -155,6 +155,36 @@ class BuildTests(unittest.TestCase):
         self.assertEqual(len(self.build(top=2)["busiest_repositories"]), 2)
         self.assertEqual(len(self.build(top=1)["biggest_releases"]), 1)
 
+    def test_top_none_keeps_every_row_and_totals_count_them(self) -> None:
+        report = self.build(top=None)
+        self.assertEqual(len(report["busiest_repositories"]), 3)
+        self.assertEqual(len(report["biggest_repositories"]), 4)
+        self.assertEqual(len(report["biggest_releases"]), 5)
+        self.assertEqual(report["totals"], {"busiest_repositories": 3, "biggest_repositories": 4, "biggest_releases": 5})
+        self.assertEqual(self.build(top=1)["totals"], report["totals"])  # the totals do not depend on the cut
+
+    def test_limited_cuts_a_full_report_without_touching_it(self) -> None:
+        full = self.build(top=None)
+        cut = stats.limited(full, busiest=1, biggest=2)
+        self.assertEqual(len(cut["busiest_repositories"]), 1)
+        self.assertEqual(len(cut["biggest_repositories"]), 2)
+        self.assertEqual(len(cut["biggest_releases"]), 2)
+        self.assertEqual(len(full["biggest_releases"]), 5)
+        everything = stats.limited(full, busiest=None, biggest=None)
+        self.assertEqual(everything["biggest_releases"], full["biggest_releases"])
+
+    def test_titles_say_all_only_when_more_than_the_default_top_is_listed_in_full(self) -> None:
+        small = self.build(top=None)
+        self.assertEqual(stats.list_titles(small)[2], "Top 5 biggest single releases")
+        many = {name: [{}] * 30 for name in ("busiest_repositories", "biggest_repositories", "biggest_releases")}
+        report = {**many, "totals": {name: 30 for name in many}}
+        self.assertTrue(stats.list_titles(report)[0].startswith("All 30 busiest"))
+        cut = stats.limited(report, busiest=10, biggest=25)
+        cut["totals"] = report["totals"]
+        titles = stats.list_titles(cut)
+        self.assertTrue(titles[0].startswith("Top 10 busiest"))
+        self.assertTrue(titles[1].startswith("Top 25 biggest repositories"))
+
     def test_biggest_repositories_rank_by_total_size(self) -> None:
         rows = self.build()["biggest_repositories"]
         self.assertEqual([row["repo"] for row in rows], ["o/gone", "o/old", "o/busy", "o/quiet"])
@@ -193,6 +223,113 @@ class BuildTests(unittest.TestCase):
         text = stats.format_report(report)
         self.assertIn("No jobs recorded yet.", text)
         self.assertIn("0 mapped", text)
+
+
+class DateRangeTests(unittest.TestCase):
+    def test_parse_date_reads_iso_dates_and_empty_means_none(self) -> None:
+        self.assertEqual(stats.parse_date(" 2026-09-30 "), date(2026, 9, 30))
+        self.assertIsNone(stats.parse_date("  "))
+
+    def test_parse_date_explains_a_bad_date(self) -> None:
+        for text in ("30/09/2026", "2026-13-01", "yesterday"):
+            with self.assertRaisesRegex(ValueError, "YYYY-MM-DD"):
+                stats.parse_date(text)
+
+    def test_the_last_day_is_included(self) -> None:
+        window = stats.date_range(date(2026, 10, 1), date(2026, 10, 5))
+        assert window is not None and window.start is not None and window.end is not None
+        self.assertEqual(datetime.fromtimestamp(window.start), datetime(2026, 10, 1))
+        self.assertEqual(datetime.fromtimestamp(window.end), datetime(2026, 10, 6))
+        self.assertEqual(window.label, "2026-10-01 to 2026-10-05")
+
+    def test_open_ends_and_no_window(self) -> None:
+        self.assertIsNone(stats.date_range(None, None))
+        only_first = stats.date_range(date(2026, 10, 1), None)
+        assert only_first is not None
+        self.assertIsNone(only_first.end)
+        self.assertEqual(only_first.label, "2026-10-01 to now")
+        only_last = stats.date_range(None, date(2026, 10, 1))
+        assert only_last is not None
+        self.assertIsNone(only_last.start)
+        self.assertEqual(only_last.label, "the beginning to 2026-10-01")
+
+    def test_a_reversed_window_is_refused(self) -> None:
+        with self.assertRaisesRegex(ValueError, "after"):
+            stats.date_range(date(2026, 10, 5), date(2026, 10, 1))
+
+    def test_presets_count_today_as_the_first_day(self) -> None:
+        self.assertIsNone(stats.preset_range(None, date(2026, 10, 8)))
+        week = stats.preset_range(7, date(2026, 10, 8))
+        assert week is not None
+        self.assertEqual(week.label, "2026-10-02 to 2026-10-08")
+        today = stats.preset_range(1, date(2026, 10, 8))
+        assert today is not None
+        self.assertEqual(today.label, "2026-10-08 to 2026-10-08")
+
+
+class BuildRangeTests(unittest.TestCase):
+    def build(self, window, **overrides):
+        arguments: dict[str, Any] = dict(entries=ENTRIES, jobs=jobs_fixture(), cycles=[], sizes=SIZES, folder_counts={},
+                                         now=NOW, top=None, date_range=window)
+        arguments.update(overrides)
+        return stats.build(**arguments)
+
+    def test_without_a_window_nothing_changes(self) -> None:
+        report = self.build(None)
+        self.assertIsNone(report["range"])
+        self.assertEqual(len(report["daily"]), stats.DAILY_DAYS)
+        self.assertEqual([row["key"] for row in report["periods"]], [key for key, _label, _days in stats.PERIODS])
+
+    def test_busiest_counts_only_jobs_in_the_window(self) -> None:
+        report = self.build(stats.date_range(date(2026, 10, 1), date(2026, 10, 5)))
+        self.assertEqual([(row["repo"], row["jobs"]) for row in report["busiest_repositories"]],
+                         [("o/quiet", 1), ("o/busy", 1)])
+        self.assertEqual(report["totals"]["busiest_repositories"], 2)
+
+    def test_biggest_uses_the_day_of_a_releases_first_job_and_drops_purged_ones(self) -> None:
+        report = self.build(stats.date_range(date(2026, 10, 1), date(2026, 10, 5)))
+        self.assertEqual([(row["repo"], row["tag"]) for row in report["biggest_releases"]], [("o/quiet", "v1")])
+        self.assertEqual([row["repo"] for row in report["biggest_repositories"]], ["o/quiet"])  # o/gone has no job at all
+
+    def test_the_activity_table_gets_a_row_for_the_window(self) -> None:
+        report = self.build(stats.date_range(date(2026, 10, 1), date(2026, 10, 5)))
+        row = report["periods"][-1]
+        self.assertEqual((row["key"], row["label"]), ("range", "2026-10-01 to 2026-10-05"))
+        self.assertEqual((row["jobs"], row["completed"], row["superseded"], row["bytes"], row["files"]), (2, 1, 1, 100, 1))
+        self.assertEqual(report["periods"][0]["key"], "day")  # the fixed rows stay
+
+    def test_the_daily_series_follows_the_window(self) -> None:
+        report = self.build(stats.date_range(date(2026, 10, 1), date(2026, 10, 5)))
+        self.assertEqual([day["date"] for day in report["daily"]],
+                         ["2026-10-01", "2026-10-02", "2026-10-03", "2026-10-04", "2026-10-05"])
+        self.assertEqual([day["jobs"] for day in report["daily"]], [0, 1, 0, 0, 1])
+        self.assertEqual(stats.daily_title(report), "Jobs per day, 2026-10-01 to 2026-10-05, 5 days")
+
+    def test_an_open_start_begins_at_the_first_job_and_the_end_stops_at_today(self) -> None:
+        report = self.build(stats.date_range(None, date(2027, 1, 1)))
+        self.assertEqual(report["daily"][0]["date"], datetime.fromtimestamp(NOW - 400 * DAY).date().isoformat())
+        self.assertEqual(report["daily"][-1]["date"], "2026-10-08")
+        self.assertEqual(sum(day["jobs"] for day in report["daily"]), 7)
+
+    def test_a_window_without_jobs_is_empty_not_an_error(self) -> None:
+        report = self.build(stats.date_range(date(2020, 1, 1), date(2020, 1, 3)))
+        self.assertEqual(report["busiest_repositories"], [])
+        self.assertEqual(report["biggest_releases"], [])
+        self.assertEqual(report["periods"][-1]["jobs"], 0)
+
+    def test_a_window_in_the_future_has_no_days(self) -> None:
+        report = self.build(stats.date_range(date(2027, 1, 1), date(2027, 1, 3)))
+        self.assertEqual(report["daily"], [])
+
+    def test_mapping_and_reliability_ignore_the_window(self) -> None:
+        everything, windowed = self.build(None), self.build(stats.date_range(date(2026, 10, 1), date(2026, 10, 5)))
+        self.assertEqual(everything["reliability"], windowed["reliability"])
+        self.assertEqual(everything["mapping"], windowed["mapping"])
+
+    def test_the_text_report_names_the_window(self) -> None:
+        report = self.build(stats.date_range(date(2026, 10, 1), date(2026, 10, 5)))
+        report["storage"] = {}
+        self.assertIn("Jobs per day, 2026-10-01 to 2026-10-05, 5 days", stats.format_report(report))
 
 
 class TextReportTests(unittest.TestCase):
@@ -294,6 +431,41 @@ class CliTests(CollectTestCase):
     def test_stats_json_is_pure_json(self) -> None:
         report = json.loads(self.run_cli("--stats", "--json"))
         self.assertEqual(report["mapping"]["total"], 2)
+
+    def test_stats_top_all_and_a_number(self) -> None:
+        self.assertEqual(cli_commands.parse_cli_args(["--stats", "--stats-top", "all"], "test").stats_top, 0)
+        self.assertEqual(cli_commands.parse_cli_args(["--stats", "--stats-top", "25"], "test").stats_top, 25)
+        self.assertIsNone(cli_commands.parse_cli_args(["--stats"], "test").stats_top)
+        for bad in ("0", "-3", "lots"):
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                cli_commands.parse_cli_args(["--stats", "--stats-top", bad], "test")
+
+    def test_stats_top_changes_how_many_rows_are_listed(self) -> None:
+        with mock.patch.object(stats, "collect", wraps=stats.collect) as collect:
+            self.run_cli("--stats")
+            self.run_cli("--stats", "--stats-top", "3")
+            self.run_cli("--stats", "--stats-top", "all")
+        self.assertEqual([call.kwargs["top"] for call in collect.call_args_list], [stats.TOP_COUNT, 3, None])
+
+    def test_stats_dates_make_a_window_and_are_checked(self) -> None:
+        with mock.patch.object(stats, "collect", wraps=stats.collect) as collect:
+            report = json.loads(self.run_cli("--stats", "--json", "--stats-from", "2026-10-01", "--stats-to", "2026-10-05"))
+        self.assertEqual(report["range"], "2026-10-01 to 2026-10-05")
+        self.assertEqual(collect.call_args.kwargs["date_range"].label, "2026-10-01 to 2026-10-05")
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            cli_commands.parse_cli_args(["--stats", "--stats-from", "01.10.2026"], "test")
+
+    def test_stats_window_with_the_first_day_after_the_last_is_refused(self) -> None:
+        parsed = cli_commands.parse_cli_args(["--stats", "--stats-from", "2026-10-05", "--stats-to", "2026-10-01"], "test")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), self.assertRaises(SystemExit):
+            cli_commands.handle_cli_command(parsed, lambda: None)
+        self.assertIn("after the last date", out.getvalue())
+
+    def test_stats_options_need_stats(self) -> None:
+        for option in (["--stats-top", "5"], ["--stats-from", "2026-10-01"], ["--stats-to", "2026-10-01"]):
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                cli_commands.parse_cli_args(option, "test")
 
     def test_json_is_accepted_with_stats_and_rejected_without_a_command(self) -> None:
         cli_commands.parse_cli_args(["--stats", "--json"], "test")

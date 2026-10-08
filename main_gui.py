@@ -15,7 +15,7 @@ import sys
 import threading
 import time
 import webbrowser
-from datetime import datetime
+from datetime import date, datetime
 import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import filedialog, messagebox, ttk
@@ -2705,10 +2705,50 @@ class DoctorDialog(tk.Toplevel):
         self._on_report(report)
 
 
+def calendar_module() -> Any:
+    """Return the optional tkcalendar module, or None when it is not installed (the date fields still work)."""
+    try:
+        import tkcalendar  # optional extra, see requirements-optional.txt
+    except ImportError:
+        return None
+    return tkcalendar
+
+
+class DatePicker(tk.Toplevel):
+    """A small pop-up calendar (needs tkcalendar): clicking a day hands it to `on_pick` and closes the pop-up."""
+
+    def __init__(self, master: tk.Misc, anchor: tk.Misc, initial: Optional[date], on_pick: Callable[[date], None]) -> None:
+        """Open the calendar just below `anchor`, showing `initial` (or today)."""
+        super().__init__(master)
+        self.transient(master.winfo_toplevel())  # type: ignore[arg-type]
+        self.title("Pick a date")
+        self.resizable(False, False)
+        start = initial or date.today()
+        calendar = calendar_module().Calendar(
+            self, selectmode="day", year=start.year, month=start.month, day=start.day, date_pattern="yyyy-mm-dd",
+            firstweekday="monday", showweeknumbers=False,
+        )
+        calendar.pack(padx=6, pady=6)
+        self._on_pick = on_pick
+        self._calendar = calendar
+        calendar.bind("<<CalendarSelected>>", self._picked)
+        self.bind("<Escape>", lambda _event: self.destroy())
+        self.geometry(f"+{anchor.winfo_rootx()}+{anchor.winfo_rooty() + anchor.winfo_height() + 2}")
+        self.focus_set()
+
+    def _picked(self, _event: tk.Event) -> None:  # type: ignore[type-arg]
+        """Pass the clicked day on and close."""
+        chosen = self._calendar.selection_get()
+        self.destroy()
+        if chosen:
+            self._on_pick(chosen)
+
+
 class StatsDialog(tk.Toplevel):
     """Statistics about the mapped repositories and the work done so far (the figures of `--stats`)."""
 
     DAILY_BAR = "#0078d4"
+    CUSTOM = "Custom range"
 
     def __init__(self, master: tk.Misc) -> None:
         """Build the Stats window (tabs Overview, Busiest, Biggest, Per day) and start collecting."""
@@ -2717,7 +2757,10 @@ class StatsDialog(tk.Toplevel):
         self.transient(master)  # type: ignore[arg-type]
         self.minsize(760, 480)
         self._report: Optional[dict] = None
+        self._data: Optional[dict] = None  # what stats.load() read; every window change re-builds the report from it
         self._result: Optional[dict] = None
+        self._range: Optional[stats.DateRange] = None
+        self._applied_dates = ("", "")
         self._error: Optional[str] = None
         self._bold = tkfont.nametofont("TkDefaultFont").copy()
         self._bold.configure(weight="bold")
@@ -2725,12 +2768,13 @@ class StatsDialog(tk.Toplevel):
         body = ttk.Frame(self, padding=12)
         body.pack(fill="both", expand=True)
         body.columnconfigure(0, weight=1)
-        body.rowconfigure(1, weight=1)
+        body.rowconfigure(2, weight=1)
         self.summary = ttk.Label(body, text="", font=self._bold)
         self.summary.grid(row=0, column=0, sticky="w", pady=(0, 8))
+        self._build_period_bar(body).grid(row=1, column=0, sticky="ew", pady=(0, 8))
 
         self.notebook = ttk.Notebook(body)
-        self.notebook.grid(row=1, column=0, sticky="nsew")
+        self.notebook.grid(row=2, column=0, sticky="nsew")
 
         overview = ttk.Frame(self.notebook, padding=8)
         overview.columnconfigure(0, weight=1)
@@ -2751,6 +2795,7 @@ class StatsDialog(tk.Toplevel):
         busiest.rowconfigure(1, weight=1)
         self.busiest_title = ttk.Label(busiest, text="", font=self._bold)
         self.busiest_title.grid(row=0, column=0, sticky="w", pady=(0, 4))
+        self.busiest_show = self._make_show_box(busiest, self._on_show_changed)
         self.busiest = self._make_table(busiest, stats.BUSIEST_HEADERS, row=1)
         self.notebook.add(busiest, text="Busiest")
 
@@ -2760,6 +2805,7 @@ class StatsDialog(tk.Toplevel):
         biggest.rowconfigure(3, weight=1)
         self.biggest_title = ttk.Label(biggest, text="", font=self._bold)
         self.biggest_title.grid(row=0, column=0, sticky="w", pady=(0, 4))
+        self.biggest_show = self._make_show_box(biggest, self._on_show_changed)
         self.biggest = self._make_table(biggest, stats.BIGGEST_HEADERS, row=1)
         self.releases_title = ttk.Label(biggest, text="", font=self._bold)
         self.releases_title.grid(row=2, column=0, sticky="w", pady=(10, 4))
@@ -2777,9 +2823,9 @@ class StatsDialog(tk.Toplevel):
         self.notebook.add(daily, text="Per day")
 
         self.footer = ttk.Label(body, text="", foreground=COLOR_MUTED)
-        self.footer.grid(row=2, column=0, sticky="w", pady=(8, 0))
+        self.footer.grid(row=3, column=0, sticky="w", pady=(8, 0))
         buttons = ttk.Frame(body)
-        buttons.grid(row=3, column=0, sticky="e", pady=(8, 0))
+        buttons.grid(row=4, column=0, sticky="e", pady=(8, 0))
         self.refresh_button = ttk.Button(buttons, text="Refresh", command=self._start)
         self.refresh_button.grid(row=0, column=0, padx=(0, 6))
         self.copy_button = ttk.Button(buttons, text="Copy as text", command=self._copy)
@@ -2790,10 +2836,104 @@ class StatsDialog(tk.Toplevel):
         center_dialog(self, master)
         self._start()
 
+    def _build_period_bar(self, parent: tk.Misc) -> ttk.Frame:
+        """Create the "Period: preset, From, To" bar that narrows Busiest, Biggest and Per day to a window."""
+        bar = ttk.Frame(parent)
+        ttk.Label(bar, text="Period:").pack(side="left", padx=(0, 4))
+        self.preset = ttk.Combobox(bar, values=[label for label, _days in stats.PRESETS] + [self.CUSTOM], state="readonly",
+                                   width=14)
+        self.preset.current(0)
+        self.preset.pack(side="left", padx=(0, 12))
+        self.preset.bind("<<ComboboxSelected>>", lambda _event: self._on_preset())
+        self.date_entries: dict[str, ttk.Entry] = {}
+        for name, title in (("from", "From"), ("to", "To")):
+            ttk.Label(bar, text=f"{title}:").pack(side="left", padx=(0, 4))
+            entry = ttk.Entry(bar, width=11)
+            entry.pack(side="left")
+            entry.bind("<Return>", lambda _event: self._on_dates_typed())
+            entry.bind("<FocusOut>", lambda _event: self._on_dates_typed())
+            self.date_entries[name] = entry
+            if calendar_module() is not None:  # without tkcalendar the typed YYYY-MM-DD field is all there is
+                ttk.Button(bar, text="\u25be", width=2, command=lambda n=name: self._open_calendar(n)).pack(side="left")
+            ttk.Frame(bar, width=10).pack(side="left")
+        self.period_message = ttk.Label(bar, text="", foreground=COLOR_ERROR)
+        self.period_message.pack(side="left")
+        hint = "dates as YYYY-MM-DD; empty = no limit" if calendar_module() is None else "pick a day or type YYYY-MM-DD"
+        ttk.Label(bar, text=hint, foreground=COLOR_MUTED).pack(side="right")
+        return bar
+
+    def _open_calendar(self, name: str) -> None:
+        """Pop up the calendar for the From or To field and put the clicked day into it."""
+        entry = self.date_entries[name]
+        try:
+            initial = stats.parse_date(entry.get())
+        except ValueError:
+            initial = None
+
+        def picked(day: date) -> None:
+            """Write the chosen day into the field and apply the window."""
+            entry.delete(0, "end")
+            entry.insert(0, day.isoformat())
+            self._on_dates_typed()
+
+        DatePicker(self, entry, initial, picked)
+
+    def _on_preset(self) -> None:
+        """A preset was chosen: fill the date fields with what it means and apply it ("Custom range" leaves them)."""
+        label = self.preset.get()
+        if label == self.CUSTOM:
+            self.date_entries["from"].focus_set()
+            return
+        window = stats.preset_range(dict(stats.PRESETS)[label], date.today())
+        first = last = ""
+        if window is not None and window.start is not None:
+            first = datetime.fromtimestamp(window.start).date().isoformat()
+            last = date.today().isoformat()
+        for name, text in (("from", first), ("to", last)):
+            self.date_entries[name].delete(0, "end")
+            self.date_entries[name].insert(0, text)
+        self._on_dates_typed(from_preset=True)
+
+    def _on_dates_typed(self, from_preset: bool = False) -> None:
+        """Read the two date fields; apply the window when they are valid and changed, else say what is wrong."""
+        texts = (self.date_entries["from"].get().strip(), self.date_entries["to"].get().strip())
+        if texts == self._applied_dates:
+            return
+        try:
+            window = stats.date_range(stats.parse_date(texts[0]), stats.parse_date(texts[1]))
+        except ValueError as exc:
+            self.period_message.configure(text=str(exc))
+            return
+        self.period_message.configure(text="")
+        self._applied_dates = texts
+        self._range = window
+        if not from_preset:
+            self.preset.set(self.CUSTOM if window is not None else stats.PRESETS[0][0])
+        if self._data is not None:
+            self._rebuild()
+
+    @staticmethod
+    def _make_show_box(parent: tk.Misc, command: Callable[[], None]) -> ttk.Combobox:
+        """Add the "Show: Top 10 / 25 / 50 / All" drop-down at the right end of a tab's title row."""
+        box = ttk.Frame(parent)
+        box.grid(row=0, column=1, sticky="e", pady=(0, 4))
+        ttk.Label(box, text="Show:").pack(side="left", padx=(0, 4))
+        combo = ttk.Combobox(box, values=[label for label, _rows in stats.TOP_CHOICES], state="readonly", width=8)
+        combo.current(0)
+        combo.pack(side="left")
+        combo.bind("<<ComboboxSelected>>", lambda _event: command())
+        return combo
+
+    @staticmethod
+    def _choice(combo: ttk.Combobox) -> Optional[int]:
+        """Return the number of rows a "Show" drop-down asks for (None = all)."""
+        index = combo.current()
+        return stats.TOP_CHOICES[index][1] if 0 <= index < len(stats.TOP_CHOICES) else stats.TOP_COUNT
+
     def _make_table(self, parent: tk.Misc, headers: tuple[str, ...], row: int) -> ttk.Treeview:
         """Create a table with the given headings in a grid row and return it."""
         frame = ttk.Frame(parent)
-        frame.grid(row=row, column=0, sticky="nsew")
+        frame.grid(row=row, column=0, columnspan=2, sticky="nsew")
         frame.columnconfigure(0, weight=1)
         frame.rowconfigure(0, weight=1)
         tree = ttk.Treeview(frame, columns=headers, show="headings", selectmode="browse", height=6)
@@ -2825,7 +2965,7 @@ class StatsDialog(tk.Toplevel):
     def _work(self) -> None:
         """Thread body: collect the figures, or keep the error text."""
         try:
-            self._result = stats.collect()
+            self._result = stats.load()  # the window and "Show" drop-downs cut it down later without a new query
         except Exception as exc:  # shown in the dialog instead of vanishing
             self._error = describe_error(exc)
 
@@ -2841,7 +2981,13 @@ class StatsDialog(tk.Toplevel):
             self.summary.configure(text="The statistics could not be counted.")
             self.footer.configure(text=self._error)
             return
-        self._show(self._result or {})
+        self._data = self._result
+        self._rebuild()
+
+    def _rebuild(self) -> None:
+        """Build the report for the chosen window from the loaded data and show it."""
+        if self._data is not None:
+            self._show(stats.report_from(self._data, top=None, date_range=self._range))
 
     def _show(self, report: dict) -> None:
         """Fill the summary line, the overview and the tables from the report."""
@@ -2859,17 +3005,31 @@ class StatsDialog(tk.Toplevel):
         self.overview_text.configure(state="disabled")
         self._fit_overview()
         self._fill(self.periods, stats.period_rows(report))
-        busiest, biggest, releases = stats.busiest_rows(report), stats.biggest_rows(report), stats.release_rows(report)
-        self.busiest_title.configure(text=f"Top {len(busiest)} busiest repositories (most jobs)")
-        self.biggest_title.configure(text=f"Top {len(biggest)} biggest repositories (total size of the releases on record)")
-        self.releases_title.configure(text=f"Top {len(releases)} biggest single releases")
-        self._fill(self.busiest, busiest)
-        self._fill(self.biggest, biggest)
-        self._fill(self.releases, releases)
+        self._show_lists()
         daily = report["daily"]
-        self.daily_title.configure(text=f"Jobs per day, last {len(daily)} days")
+        self.daily_title.configure(text=stats.daily_title(report))
         self._draw_chart()
         self.footer.configure(text="  |  ".join(stats.storage_lines(report)) + "   (data sizes are those of the releases on record)")
+
+    def _shown_report(self) -> dict:
+        """The report cut to what the two "Show" drop-downs ask for (what is on screen and what Copy gives)."""
+        return stats.limited(self._report or {}, self._choice(self.busiest_show), self._choice(self.biggest_show))
+
+    def _show_lists(self) -> None:
+        """Fill the Busiest and Biggest tables and their headings for the chosen number of rows."""
+        report = self._shown_report()
+        busiest_title, biggest_title, releases_title = stats.list_titles(report)
+        self.busiest_title.configure(text=busiest_title)
+        self.biggest_title.configure(text=biggest_title)
+        self.releases_title.configure(text=releases_title)
+        self._fill(self.busiest, stats.busiest_rows(report))
+        self._fill(self.biggest, stats.biggest_rows(report))
+        self._fill(self.releases, stats.release_rows(report))
+
+    def _on_show_changed(self) -> None:
+        """Re-cut the lists after a "Show" drop-down changed (the data is already loaded)."""
+        if self._report:
+            self._show_lists()
 
     def _on_overview_resized(self, event: tk.Event) -> None:  # type: ignore[type-arg]
         """Refit only when the WIDTH changed: fitting changes the height, and reacting to that would loop forever."""
@@ -2914,6 +3074,8 @@ class StatsDialog(tk.Toplevel):
         peak = max((day["jobs"] for day in daily), default=0) or 1
         plot_w, plot_h = width - left - right, height - top - bottom
         slot = plot_w / max(len(daily), 1)
+        long_range = len(daily) > 150  # months repeat across years: then the label carries the year
+        label_width = 75 if long_range else 40
         canvas.create_line(left, top, left, top + plot_h, fill="#999999")
         canvas.create_line(left, top + plot_h, width - right, top + plot_h, fill="#999999")
         canvas.create_text(left - 4, top, text=str(peak), anchor="e", fill=COLOR_MUTED)
@@ -2927,8 +3089,8 @@ class StatsDialog(tk.Toplevel):
                 if slot >= 22:
                     canvas.create_text((x0 + x1) / 2, top + plot_h - bar_h - 2, text=str(day["jobs"]), anchor="s",
                                        fill=COLOR_MUTED, font=("TkDefaultFont", 8))
-            if index % max(1, round(40 / slot)) == 0 or index == len(daily) - 1:
-                canvas.create_text((x0 + x1) / 2, top + plot_h + 4, text=day["date"][5:], anchor="n",
+            if index % max(1, round(label_width / slot)) == 0 or index == len(daily) - 1:
+                canvas.create_text((x0 + x1) / 2, top + plot_h + 4, text=day["date"] if long_range else day["date"][5:], anchor="n",
                                    fill=COLOR_MUTED, font=("TkDefaultFont", 8))
 
     def _copy(self) -> None:
@@ -2936,7 +3098,7 @@ class StatsDialog(tk.Toplevel):
         if not self._report:
             return
         self.clipboard_clear()
-        self.clipboard_append(stats.format_report(self._report))
+        self.clipboard_append(stats.format_report(self._shown_report()))
         self.footer.configure(text="Copied to the clipboard.")
 
 

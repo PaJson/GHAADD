@@ -48,6 +48,9 @@ MODIFIER_COMMANDS: dict[str, tuple[str, ...]] = {
     "queue_report": ("queue_status",),
     "queue_report_only": ("queue_status",),
     "queue_report_csv": ("queue_status",),
+    "stats_top": ("stats",),
+    "stats_from": ("stats",),
+    "stats_to": ("stats",),
     "lifecycle_limit": ("lifecycle_log",),
     "lifecycle_type": ("lifecycle_log",),
     "lifecycle_repo_filter": ("lifecycle_log",),
@@ -80,6 +83,30 @@ def find_unused_options(parsed: argparse.Namespace) -> list[str]:
         flags = " or ".join("--" + command.replace("_", "-") for command in commands)
         problems.append(f"--{option.replace('_', '-')} has no effect without {flags}")
     return problems
+
+
+def _stats_top(text: str) -> int:
+    """Parse --stats-top: a positive number of rows, or "all" (returned as 0)."""
+    if text.strip().lower() == "all":
+        return 0
+    try:
+        count = int(text)
+    except ValueError:
+        count = 0
+    if count < 1:
+        raise argparse.ArgumentTypeError(f"'{text}' is not a number of rows: use a number such as 25, or all")
+    return count
+
+
+def _stats_date(text: str) -> str:
+    """Check a --stats-from / --stats-to date (YYYY-MM-DD) and return it unchanged."""
+    from modules import stats  # imported here: no other command needs it
+
+    try:
+        stats.parse_date(text)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from None
+    return text
 
 
 def parse_cli_args(args: list[str], version: str) -> argparse.Namespace:
@@ -147,6 +174,24 @@ def parse_cli_args(args: list[str], version: str) -> argparse.Namespace:
             "Show statistics: repositories mapped/active, jobs per day/week/month/year/lifetime, the busiest and the "
             "biggest repositories and the age of the history (read-only, safe while the daemon runs; --json for machine output)."
         ),
+    )
+    parser.add_argument(
+        "--stats-top",
+        type=_stats_top,
+        metavar="N|all",
+        help="With --stats: list N rows (or all of them) in the busiest / biggest lists instead of 10.",
+    )
+    parser.add_argument(
+        "--stats-from",
+        type=_stats_date,
+        metavar="YYYY-MM-DD",
+        help="With --stats: narrow the busiest / biggest lists and the per-day series to the days from this one on (included).",
+    )
+    parser.add_argument(
+        "--stats-to",
+        type=_stats_date,
+        metavar="YYYY-MM-DD",
+        help="With --stats: narrow them to the days up to this one (included); either end may be left out.",
     )
     parser.add_argument(
         "--backup",
@@ -377,7 +422,13 @@ def handle_cli_command(parsed_args: argparse.Namespace, run_smoke_tests: Callabl
     if parsed_args.stats:
         from modules import stats  # imported here: no other command needs it
 
-        report = stats.collect()
+        try:
+            window = stats.date_range(stats.parse_date(parsed_args.stats_from or ""), stats.parse_date(parsed_args.stats_to or ""))
+        except ValueError as exc:  # the dates were each valid, but the first is after the last
+            print(f"--stats: {exc}")
+            sys.exit(2)
+        top = stats.TOP_COUNT if parsed_args.stats_top is None else (parsed_args.stats_top or None)
+        report = stats.collect(top=top, date_range=window)
         print(json.dumps(report, indent=2) if parsed_args.json else stats.format_report(report))
         return True
 

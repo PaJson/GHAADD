@@ -2,3 +2,6 @@
 # The system tray icon and its notifications (GUI only). Without these packages the GUI works as before.
 pystray>=0.19
 Pillow>=10.0
+# A pop-up calendar beside the date fields of the Stats window (GUI only; it pulls in Babel, about 30 MB).
+# Without it the dates are typed as YYYY-MM-DD.
+tkcalendar>=1.6

@@ -17,6 +17,7 @@ import os
 import time
 from collections import Counter
 from contextlib import closing
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any, Mapping, Optional, Sequence
 
@@ -24,6 +25,8 @@ from modules import db_manager, mapping_manager
 from modules.app_info import __version__
 
 TOP_COUNT = 10
+# What the Stats window's "Show" drop-downs offer: (label, rows); None = every row.
+TOP_CHOICES: tuple[tuple[str, Optional[int]], ...] = (("Top 10", 10), ("Top 25", 25), ("Top 50", 50), ("All", None))
 DAILY_DAYS = 30
 DAY_SECONDS = 86400
 
@@ -34,6 +37,11 @@ PERIODS: tuple[tuple[str, str, Optional[int]], ...] = (
     ("month", "Last 30 days", 30),
     ("year", "Last 365 days", 365),
     ("lifetime", "Lifetime", None),
+)
+
+# What the Stats window's "Period" drop-down offers: (label, last N days including today); None = everything.
+PRESETS: tuple[tuple[str, Optional[int]], ...] = (
+    ("All time", None), ("Today", 1), ("Last 7 days", 7), ("Last 30 days", 30), ("Last 365 days", 365),
 )
 
 SPARK_BLOCKS = "▁▂▃▄▅▆▇█"
@@ -89,6 +97,45 @@ def mapping_stats(entries: Sequence[Mapping[str, Any]], folder_counts: Mapping[s
     }
 
 
+@dataclass(frozen=True)
+class DateRange:
+    """A chosen window [start, end) in epoch seconds; None = open on that side. `label` names it in the tables."""
+
+    start: Optional[float]
+    end: Optional[float]
+    label: str
+
+
+def parse_date(text: str) -> Optional[date]:
+    """Return the date of a YYYY-MM-DD text (None for empty text); raise ValueError with a plain message otherwise."""
+    text = text.strip()
+    if not text:
+        return None
+    try:
+        return datetime.strptime(text, "%Y-%m-%d").date()
+    except ValueError:
+        raise ValueError(f"'{text}' is not a date: write it as YYYY-MM-DD, for example 2026-09-30.") from None
+
+
+def date_range(first: Optional[date], last: Optional[date]) -> Optional[DateRange]:
+    """Build the window from the first and last day (both inclusive, either may be None); None when both are."""
+    if first is None and last is None:
+        return None
+    if first is not None and last is not None and first > last:
+        raise ValueError("The first date is after the last date.")
+    start = None if first is None else datetime.combine(first, datetime.min.time()).timestamp()
+    end = None if last is None else datetime.combine(last + timedelta(days=1), datetime.min.time()).timestamp()
+    label = f"{first.isoformat() if first else 'the beginning'} to {last.isoformat() if last else 'now'}"
+    return DateRange(start, end, label)
+
+
+def preset_range(days: Optional[int], today: date) -> Optional[DateRange]:
+    """The window for "last N days" including today (None = no window = everything)."""
+    if days is None:
+        return None
+    return date_range(today - timedelta(days=days - 1), today)
+
+
 def _period_rows(
     jobs: Sequence[tuple[str, str, str, float]],
     cycles: Sequence[float],
@@ -96,26 +143,30 @@ def _period_rows(
     sizes: Mapping[str, Mapping[str, int]],
     now: float,
     history_start: Optional[float],
+    date_range: Optional["DateRange"] = None,
 ) -> list[dict[str, Any]]:
-    """Build the per-period figures (24 h, 7/30/365 days, lifetime): jobs by outcome, polls, files and data."""
-    rows = []
+    """Build the per-period figures (24 h, 7/30/365 days, lifetime, then the chosen range): jobs, polls, files, data."""
     history_days = 1.0 if history_start is None else max(1.0, (now - history_start) / DAY_SECONDS)
-    for key, label, days in PERIODS:
-        cutoff = None if days is None else now - days * DAY_SECONDS
-        in_window = [job for job in jobs if cutoff is None or job[3] >= cutoff]
+
+    def row(key: str, label: str, start: Optional[float], end: Optional[float], span: float) -> dict[str, Any]:
+        """One table row for the window [start, end) (None = open); `span` is its length in days."""
+        def inside(moment: float) -> bool:
+            """True when a timestamp falls in the window."""
+            return (start is None or moment >= start) and (end is None or moment < end)
+
+        in_window = [job for job in jobs if inside(job[3])]
         by_status = Counter(job[2] for job in in_window)
         data = files = 0
-        if cutoff is None:  # lifetime also counts releases whose jobs were purged from the history
+        if start is None and end is None:  # lifetime also counts releases whose jobs were purged from the history
             data = sum(size["bytes"] for size in sizes.values())
             files = sum(size["files"] for size in sizes.values())
         else:
             for release_key, started in release_first_job.items():
                 size = sizes.get(release_key)
-                if size and started >= cutoff:
+                if size and inside(started):
                     data += size["bytes"]
                     files += size["files"]
-        span = history_days if days is None else min(float(days), history_days)
-        rows.append({
+        return {
             "key": key,
             "label": label,
             "jobs": len(in_window),
@@ -123,18 +174,30 @@ def _period_rows(
             "failed": by_status["FAILED"],
             "superseded": by_status["SUPERSEDED"],
             "pending": by_status["PENDING"],
-            "cycles": sum(1 for cycle in cycles if cutoff is None or cycle >= cutoff),
+            "cycles": sum(1 for cycle in cycles if inside(cycle)),
             "bytes": data,
             "files": files,
             "jobs_per_day": round(len(in_window) / span, 1),
-        })
+        }
+
+    rows = []
+    for key, label, days in PERIODS:
+        span = history_days if days is None else min(float(days), history_days)
+        rows.append(row(key, label, None if days is None else now - days * DAY_SECONDS, None, span))
+    if date_range is not None:
+        first = date_range.start if date_range.start is not None else (history_start or now)
+        last = min(date_range.end, now) if date_range.end is not None else now
+        rows.append(row("range", date_range.label, date_range.start, date_range.end, max(1.0, (last - first) / DAY_SECONDS)))
     return rows
 
 
-def _daily(jobs: Sequence[tuple[str, str, str, float]], today: date) -> list[dict[str, Any]]:
-    """Count jobs per day for the last DAILY_DAYS days (days without jobs count 0)."""
+def _daily(
+    jobs: Sequence[tuple[str, str, str, float]], first_day: date, last_day: date
+) -> list[dict[str, Any]]:
+    """Count jobs per day from first_day to last_day inclusive (days without jobs count 0)."""
     per_day = Counter(_day(job[3]) for job in jobs)
-    days = [today - timedelta(days=offset) for offset in range(DAILY_DAYS - 1, -1, -1)]
+    count = max((last_day - first_day).days + 1, 0)
+    days = [first_day + timedelta(days=offset) for offset in range(count)]
     return [{"date": day.isoformat(), "jobs": per_day.get(day, 0)} for day in days]
 
 
@@ -142,9 +205,9 @@ def _busiest_repositories(
     jobs: Sequence[tuple[str, str, str, float]],
     sizes_by_repo: Mapping[str, int],
     now: float,
-    limit: int,
+    limit: Optional[int],
 ) -> list[dict[str, Any]]:
-    """Rank repositories by number of jobs and return the top `limit` with their recent activity."""
+    """Rank repositories by number of jobs and return the top `limit` (None = all) with their recent activity."""
     grouped: dict[str, dict[str, Any]] = {}
     month_ago = now - 30 * DAY_SECONDS
     for repo, _tag, status, created in jobs:
@@ -163,9 +226,12 @@ def _busiest_repositories(
 
 
 def _biggest(
-    sizes: Mapping[str, Mapping[str, int]], limit: int
+    sizes: Mapping[str, Mapping[str, int]], limit: Optional[int]
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, int]]:
-    """(top repositories by total size, top single releases, per-repository byte totals by lower-cased name)."""
+    """(top repositories by total size, top single releases, per-repository byte totals by lower-cased name).
+
+    `limit` None = every repository and release; the byte totals always cover all of them.
+    """
     per_repo: dict[str, dict[str, Any]] = {}
     for release_key, size in sizes.items():
         repo, tag = _split_release_key(release_key)
@@ -184,6 +250,43 @@ def _biggest(
     return repos, releases, {name: entry["bytes"] for name, entry in per_repo.items()}
 
 
+def limited(report: Mapping[str, Any], busiest: Optional[int] = TOP_COUNT, biggest: Optional[int] = TOP_COUNT) -> dict[str, Any]:
+    """Return a copy of a report whose ranked lists are cut to the given sizes (None = keep all).
+
+    The report must have been built with top=None to hold more than it already shows; the GUI collects everything once
+    and re-cuts it here when the "Show" drop-down changes, so no new query is needed.
+    """
+    copy = dict(report)
+    copy["busiest_repositories"] = list(report["busiest_repositories"])[:busiest]
+    copy["biggest_repositories"] = list(report["biggest_repositories"])[:biggest]
+    copy["biggest_releases"] = list(report["biggest_releases"])[:biggest]
+    return copy
+
+
+def daily_title(report: Mapping[str, Any]) -> str:
+    """Heading of the jobs-per-day series ("last 30 days", or the chosen window)."""
+    count = len(report["daily"])
+    if report.get("range"):
+        return f"Jobs per day, {report['range']}, {count} days"
+    return f"Jobs per day, last {count} days"
+
+
+def list_titles(report: Mapping[str, Any]) -> tuple[str, str, str]:
+    """Headings of the busiest / biggest repositories and biggest releases lists ("Top 10 ..." or "All 143 ...")."""
+    totals = report["totals"]
+
+    def heading(shown: int, total: int, what: str) -> str:
+        """Say "All N" when more than the default top is listed in full, else "Top N"."""
+        return f"{'All' if shown == total and total > TOP_COUNT else 'Top'} {shown} {what}"
+
+    return (
+        heading(len(report["busiest_repositories"]), totals["busiest_repositories"], "busiest repositories (most jobs)"),
+        heading(len(report["biggest_repositories"]), totals["biggest_repositories"],
+                "biggest repositories (total size of the releases on record)"),
+        heading(len(report["biggest_releases"]), totals["biggest_releases"], "biggest single releases"),
+    )
+
+
 def build(
     entries: Sequence[Mapping[str, Any]],
     jobs: Sequence[tuple[str, str, str, float]],
@@ -191,9 +294,15 @@ def build(
     sizes: Mapping[str, Mapping[str, int]],
     folder_counts: Mapping[str, Mapping[str, Any]],
     now: float,
-    top: int = TOP_COUNT,
+    top: Optional[int] = TOP_COUNT,
+    date_range: Optional[DateRange] = None,
 ) -> dict[str, Any]:
-    """Assemble the report from already loaded data (no file or database access; this is what the tests feed)."""
+    """Assemble the report from already loaded data (no file or database access; this is what the tests feed).
+
+    With a `date_range` the Busiest, Biggest and Per day figures cover only that window (a release counts for the day
+    of its first job, so releases whose jobs were purged drop out) and the Activity table gets one more row for it.
+    Mapping, history and reliability always describe everything on record.
+    """
     first_job = jobs[0][3] if jobs else None
     last_job = jobs[-1][3] if jobs else None
 
@@ -203,7 +312,30 @@ def build(
         if key not in release_first_job or created < release_first_job[key]:
             release_first_job[key] = created
 
-    biggest_repos, biggest_releases, bytes_by_repo = _biggest(sizes, top)
+    def inside(moment: float) -> bool:
+        """True when a timestamp is in the chosen window (always, without one)."""
+        return date_range is None or (
+            (date_range.start is None or moment >= date_range.start) and (date_range.end is None or moment < date_range.end)
+        )
+
+    ranked_jobs = [job for job in jobs if inside(job[3])]
+    ranked_sizes = sizes if date_range is None else {
+        key: size for key, size in sizes.items() if key in release_first_job and inside(release_first_job[key])
+    }
+    biggest_repos, biggest_releases, bytes_by_repo = _biggest(ranked_sizes, top)
+    busiest_repositories = _busiest_repositories(ranked_jobs, bytes_by_repo, now, top)
+    totals = {
+        "busiest_repositories": len({job[0].lower() for job in ranked_jobs}),
+        "biggest_repositories": len(bytes_by_repo),
+        "biggest_releases": len(ranked_sizes),
+    }
+    today = _day(now)
+    if date_range is None:
+        daily = _daily(jobs, today - timedelta(days=DAILY_DAYS - 1), today)
+    else:
+        first_day = _day(date_range.start) if date_range.start is not None else (_day(first_job) if first_job else today)
+        last_day = min(_day(date_range.end - 1), today) if date_range.end is not None else today
+        daily = _daily(jobs, first_day, last_day)
     per_day = Counter(_day(job[3]) for job in jobs)
     busiest_day = max(per_day.items(), key=lambda item: (item[1], item[0])) if per_day else None
 
@@ -237,11 +369,13 @@ def build(
             "pending": sum(1 for job in jobs if job[2] == "PENDING"),
             "success_percent": round(100.0 * completed / finished, 1) if finished else None,
         },
-        "periods": _period_rows(jobs, cycles, release_first_job, sizes, now, first_job),
-        "daily": _daily(jobs, _day(now)),
-        "busiest_repositories": _busiest_repositories(jobs, bytes_by_repo, now, top),
+        "periods": _period_rows(jobs, cycles, release_first_job, sizes, now, first_job, date_range),
+        "range": None if date_range is None else date_range.label,
+        "daily": daily,
+        "busiest_repositories": busiest_repositories,
         "biggest_repositories": biggest_repos,
         "biggest_releases": biggest_releases,
+        "totals": totals,
         "tracked": {
             "bytes": sum(size["bytes"] for size in sizes.values()),
             "files": sum(size["files"] for size in sizes.values()),
@@ -251,29 +385,46 @@ def build(
     }
 
 
-def collect(now: Optional[float] = None, top: int = TOP_COUNT) -> dict[str, Any]:
-    """Read mapping.json and state.db and build the report (nothing is written)."""
-    now = time.time() if now is None else now
+def load() -> dict[str, Any]:
+    """Read mapping.json and state.db into plain data (nothing is written); report_from() turns it into a report."""
     entries = mapping_manager.load_mapping().get("repositories", [])
     with closing(db_manager.open_database()) as connection:
-        report = build(
-            entries,
-            db_manager.get_job_history(connection),
-            db_manager.get_cycle_times(connection),
-            db_manager.get_release_sizes(connection),
-            db_manager.get_folder_counts(connection),
-            now,
-            top,
-        )
+        data = {
+            "entries": entries,
+            "jobs": db_manager.get_job_history(connection),
+            "cycles": db_manager.get_cycle_times(connection),
+            "sizes": db_manager.get_release_sizes(connection),
+            "folder_counts": db_manager.get_folder_counts(connection),
+        }
         storage = db_manager.get_storage_stats(connection)
     state_db = db_manager.get_state_db_path()
     oldest = [value for value in (storage["oldest_job_at"], storage["oldest_event_at"]) if value]
-    report["storage"] = {
+    data["storage"] = {
         "state_db_bytes": os.path.getsize(state_db) if os.path.exists(state_db) else None,
         "rows": storage["tables"],
         "oldest_record": _stamp(min(oldest)) if oldest else None,
     }
+    return data
+
+
+def report_from(
+    data: Mapping[str, Any],
+    now: Optional[float] = None,
+    top: Optional[int] = TOP_COUNT,
+    date_range: Optional[DateRange] = None,
+) -> dict[str, Any]:
+    """Build the report from load()'s data; the GUI calls this again for every new window or "now"."""
+    report = build(
+        data["entries"], data["jobs"], data["cycles"], data["sizes"], data["folder_counts"],
+        time.time() if now is None else now, top, date_range,
+    )
+    report["storage"] = data["storage"]
     return report
+
+
+def collect(now: Optional[float] = None, top: Optional[int] = TOP_COUNT, date_range: Optional[DateRange] = None) -> dict[str, Any]:
+    """Read mapping.json and state.db and build the report (nothing is written)."""
+    return report_from(load(), now, top, date_range)
 
 
 def sparkline(values: Sequence[int]) -> str:
@@ -396,14 +547,14 @@ def format_report(report: Mapping[str, Any]) -> str:
 
     lines += ["", "Activity", *_table(PERIOD_HEADERS, period_rows(report))]
     daily = report["daily"]
-    lines += ["", f"Jobs per day, last {len(daily)} days (oldest first, busiest day = {max((d['jobs'] for d in daily), default=0)})",
+    lines += ["", f"{daily_title(report)} (oldest first, busiest day = {max((d['jobs'] for d in daily), default=0)})",
               "  " + sparkline([day["jobs"] for day in daily])]
 
     busiest, biggest, releases = busiest_rows(report), biggest_rows(report), release_rows(report)
-    lines += ["", f"Top {len(busiest)} busiest repositories (most jobs)", *_table(BUSIEST_HEADERS, busiest)]
-    lines += ["", f"Top {len(biggest)} biggest repositories (total size of the releases on record)",
-              *_table(BIGGEST_HEADERS, biggest)]
-    lines += ["", f"Top {len(releases)} biggest single releases", *_table(RELEASE_HEADERS, releases)]
+    busiest_title, biggest_title, releases_title = list_titles(report)
+    lines += ["", busiest_title, *_table(BUSIEST_HEADERS, busiest)]
+    lines += ["", biggest_title, *_table(BIGGEST_HEADERS, biggest)]
+    lines += ["", releases_title, *_table(RELEASE_HEADERS, releases)]
 
     storage = storage_lines(report)
     if storage:
