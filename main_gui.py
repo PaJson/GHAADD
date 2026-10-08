@@ -2218,7 +2218,7 @@ class CredentialsDialog(tk.Toplevel):
             try:
                 result = work()
             except Exception as exc:  # shown in the window instead of vanishing
-                result = connection_tests.ConnectionResult(False, f"The test could not run: {exc}")
+                result = connection_tests.ConnectionResult(ok=False, message=f"The test could not run: {exc}")
             self._results.append((name, result))
 
         threading.Thread(target=run, daemon=True).start()
