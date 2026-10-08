@@ -36,7 +36,7 @@ from modules.queue_worker import process_selected_pending_jobs
 # Options that only change what another command does, and the commands they work with. Given without one of those
 # commands they would silently do nothing (and the program would carry on polling), so they are rejected instead.
 MODIFIER_COMMANDS: dict[str, tuple[str, ...]] = {
-    "json": ("queue_status", "mapping_validate", "doctor", "perf_report", "lifecycle_log", "move_complete_to_destination"),
+    "json": ("queue_status", "mapping_validate", "doctor", "perf_report", "stats", "lifecycle_log", "move_complete_to_destination"),
     "queue_all": ("queue_status",),
     "queue_limit": ("queue_status",),
     "queue_hours": ("queue_status",),
@@ -136,6 +136,14 @@ def parse_cli_args(args: list[str], version: str) -> argparse.Namespace:
         "--perf-report",
         action="store_true",
         help="Measure data sizes, growth and the timings of the routine queries (read-only, safe while the daemon runs; --json for machine output).",
+    )
+    parser.add_argument(
+        "--stats",
+        action="store_true",
+        help=(
+            "Show statistics: repositories mapped/active, jobs per day/week/month/year/lifetime, the busiest and the "
+            "biggest repositories and the age of the history (read-only, safe while the daemon runs; --json for machine output)."
+        ),
     )
     parser.add_argument(
         "--run-pending",
@@ -346,6 +354,13 @@ def handle_cli_command(parsed_args: argparse.Namespace, run_smoke_tests: Callabl
 
         report = perf_report.collect()
         print(json.dumps(report, indent=2) if parsed_args.json else perf_report.format_report(report))
+        return True
+
+    if parsed_args.stats:
+        from modules import stats  # imported here: no other command needs it
+
+        report = stats.collect()
+        print(json.dumps(report, indent=2) if parsed_args.json else stats.format_report(report))
         return True
 
     if parsed_args.doctor:

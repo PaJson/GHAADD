@@ -1454,6 +1454,35 @@ def get_storage_stats(connection):
     }
 
 
+def get_job_history(connection):
+    """Every job as (repo, tag, status, created_at), oldest first (read-only; feeds the --stats figures)."""
+    rows = connection.execute("SELECT repo, tag, status, created_at FROM job_queue ORDER BY created_at, id").fetchall()
+    return [(row[0], row[1], row[2], float(row[3])) for row in rows]
+
+
+def get_cycle_times(connection):
+    """Creation times of the CYCLE_SUMMARY events (one per polling cycle), oldest first (read-only)."""
+    rows = connection.execute(
+        "SELECT created_at FROM lifecycle_events WHERE event_type = 'CYCLE_SUMMARY' ORDER BY created_at"
+    ).fetchall()
+    return [float(row[0]) for row in rows]
+
+
+def get_release_sizes(connection):
+    """{"owner/repo|tag": {"bytes": int, "files": int}} from asset_state: what each release's files weigh (read-only).
+
+    Uses the size of the local file, else the size the server reported (source archives may lack one).
+    """
+    rows = connection.execute(
+        """
+        SELECT release_key, COALESCE(SUM(COALESCE(local_size, size, 0)), 0), COUNT(*)
+        FROM asset_state
+        GROUP BY release_key
+        """
+    ).fetchall()
+    return {str(row[0]): {"bytes": int(row[1]), "files": int(row[2])} for row in rows}
+
+
 def get_max_event_id(connection):
     """Return the newest lifecycle event id (0 when there are no events)."""
     row = connection.execute("SELECT MAX(id) FROM lifecycle_events").fetchone()

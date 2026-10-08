@@ -149,6 +149,8 @@ CONTROL_HELP = {
                      "It does not poll the mailbox.",
     "doctor": "Check that the installation is ready: the Gmail login (.env), config.json, mapping.json, "
               "path styles and that every mapped destination exists (the same checks as --doctor).",
+    "stats": "Statistics: how many repositories are mapped and active, how many jobs ran per day, week, month, year and "
+             "in total, the busiest and the biggest repositories and how old the history is (the same as --stats).",
     "doctor_attention": "This looks like a first run, or something needed is missing. Click to see what to set up.",
     "clear_filter": "Clear the filter (Esc)",
     "open_log": "Open the log file this tab is following in your default program for .log files "

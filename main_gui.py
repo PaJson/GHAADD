@@ -38,6 +38,7 @@ from modules import (
     log_tail,
     mapping_manager,
     shortcuts,
+    stats,
     status_tabs,
     warning_types,
 )
@@ -265,6 +266,7 @@ class ControlBar(ttk.Frame):
         self.log_check = ttk.Checkbutton(tools_box, text="Terminal log", variable=self.detailed_log)
         self.restart_button = ttk.Button(daemon_box, text="\u21bb Restart")  # shown only while it is needed
         self.doctor_button = ttk.Button(tools_box, text="Doctor")
+        self.stats_button = ttk.Button(tools_box, text="Stats")
         self.settings_button = ttk.Button(tools_box, text="Settings\u2026")
         bold = tkfont.nametofont("TkDefaultFont").copy()
         bold.configure(weight="bold")
@@ -283,7 +285,7 @@ class ControlBar(ttk.Frame):
         for box, widgets in (
             (daemon_box, (self.start_button, self.stop_button, self.pause_button, self.restart_button)),
             (polling_box, (self.poll_button, self.single_button, self.check_button)),
-            (tools_box, (self.log_check, self.doctor_button, self.settings_button)),
+            (tools_box, (self.log_check, self.doctor_button, self.stats_button, self.settings_button)),
         ):
             box.pack(side="left", padx=(0, 10))
             for column, widget in enumerate(widgets):
@@ -292,6 +294,7 @@ class ControlBar(ttk.Frame):
         attach_tooltip(self.poll_button, gui_tooltips.CONTROL_HELP["poll_now"])
         attach_tooltip(self.single_button, gui_tooltips.CONTROL_HELP["poll_one"])
         attach_tooltip(self.check_button, gui_tooltips.CONTROL_HELP["check_folders"])
+        attach_tooltip(self.stats_button, gui_tooltips.CONTROL_HELP["stats"])
         self.apply_view(gui_daemon.build_view(gui_daemon.DaemonSnapshot(), 0.0))
 
     def set_doctor_attention(self, reasons: list[str], highlight: bool) -> None:
@@ -2127,6 +2130,197 @@ class DoctorDialog(tk.Toplevel):
         self._on_report(report)
 
 
+class StatsDialog(tk.Toplevel):
+    """Statistics about the mapped repositories and the work done so far (the figures of `--stats`)."""
+
+    DAILY_BAR = "#0078d4"
+
+    def __init__(self, master: tk.Misc) -> None:
+        super().__init__(master)
+        self.title("Statistics")
+        self.transient(master)  # type: ignore[arg-type]
+        self.minsize(760, 480)
+        self._report: Optional[dict] = None
+        self._result: Optional[dict] = None
+        self._error: Optional[str] = None
+        self._bold = tkfont.nametofont("TkDefaultFont").copy()
+        self._bold.configure(weight="bold")
+
+        body = ttk.Frame(self, padding=12)
+        body.pack(fill="both", expand=True)
+        body.columnconfigure(0, weight=1)
+        body.rowconfigure(1, weight=1)
+        self.summary = ttk.Label(body, text="", font=self._bold)
+        self.summary.grid(row=0, column=0, sticky="w", pady=(0, 8))
+
+        self.notebook = ttk.Notebook(body)
+        self.notebook.grid(row=1, column=0, sticky="nsew")
+
+        overview = ttk.Frame(self.notebook, padding=8)
+        overview.columnconfigure(0, weight=1)
+        overview.rowconfigure(2, weight=1)
+        self.overview_text = tk.Text(overview, width=96, height=11, wrap="word", state="disabled", relief="flat",
+                                     borderwidth=0, font="TkDefaultFont", background=self.cget("background"))
+        self.overview_text.grid(row=0, column=0, sticky="ew")
+        self.overview_text.tag_configure("heading", font=self._bold, spacing1=6, spacing3=2)
+        ttk.Label(overview, text="Activity", font=self._bold).grid(row=1, column=0, sticky="w", pady=(10, 2))
+        self.periods = self._make_table(overview, stats.PERIOD_HEADERS, row=2)
+        self.notebook.add(overview, text="Overview")
+
+        busiest = ttk.Frame(self.notebook, padding=8)
+        busiest.columnconfigure(0, weight=1)
+        busiest.rowconfigure(1, weight=1)
+        self.busiest_title = ttk.Label(busiest, text="", font=self._bold)
+        self.busiest_title.grid(row=0, column=0, sticky="w", pady=(0, 4))
+        self.busiest = self._make_table(busiest, stats.BUSIEST_HEADERS, row=1)
+        self.notebook.add(busiest, text="Busiest")
+
+        biggest = ttk.Frame(self.notebook, padding=8)
+        biggest.columnconfigure(0, weight=1)
+        biggest.rowconfigure(1, weight=1)
+        biggest.rowconfigure(3, weight=1)
+        self.biggest_title = ttk.Label(biggest, text="", font=self._bold)
+        self.biggest_title.grid(row=0, column=0, sticky="w", pady=(0, 4))
+        self.biggest = self._make_table(biggest, stats.BIGGEST_HEADERS, row=1)
+        self.releases_title = ttk.Label(biggest, text="", font=self._bold)
+        self.releases_title.grid(row=2, column=0, sticky="w", pady=(10, 4))
+        self.releases = self._make_table(biggest, stats.RELEASE_HEADERS, row=3)
+        self.notebook.add(biggest, text="Biggest")
+
+        daily = ttk.Frame(self.notebook, padding=8)
+        daily.columnconfigure(0, weight=1)
+        daily.rowconfigure(1, weight=1)
+        self.daily_title = ttk.Label(daily, text="", font=self._bold)
+        self.daily_title.grid(row=0, column=0, sticky="w", pady=(0, 4))
+        self.chart = tk.Canvas(daily, background="white", highlightthickness=1, highlightbackground="#c8c8c8", height=260)
+        self.chart.grid(row=1, column=0, sticky="nsew")
+        self.chart.bind("<Configure>", lambda _event: self._draw_chart())
+        self.notebook.add(daily, text="Per day")
+
+        self.footer = ttk.Label(body, text="", foreground=COLOR_MUTED)
+        self.footer.grid(row=2, column=0, sticky="w", pady=(8, 0))
+        buttons = ttk.Frame(body)
+        buttons.grid(row=3, column=0, sticky="e", pady=(8, 0))
+        self.refresh_button = ttk.Button(buttons, text="Refresh", command=self._start)
+        self.refresh_button.grid(row=0, column=0, padx=(0, 6))
+        self.copy_button = ttk.Button(buttons, text="Copy as text", command=self._copy)
+        self.copy_button.grid(row=0, column=1, padx=(0, 6))
+        ttk.Button(buttons, text="Close", command=self.destroy).grid(row=0, column=2)
+
+        self.bind("<Escape>", lambda _event: self.destroy())
+        center_dialog(self, master)
+        self._start()
+
+    def _make_table(self, parent: tk.Misc, headers: tuple[str, ...], row: int) -> ttk.Treeview:
+        frame = ttk.Frame(parent)
+        frame.grid(row=row, column=0, sticky="nsew")
+        frame.columnconfigure(0, weight=1)
+        frame.rowconfigure(0, weight=1)
+        tree = ttk.Treeview(frame, columns=headers, show="headings", selectmode="browse", height=6)
+        scrollbar = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=scrollbar.set)
+        for index, header in enumerate(headers):
+            tree.heading(header, text=header, anchor="w" if index == 0 else "e")
+            tree.column(header, anchor="w" if index == 0 else "e", width=230 if index == 0 else 90, stretch=index == 0)
+        tree.tag_configure("odd", background=COLOR_STRIPE)
+        tree.grid(row=0, column=0, sticky="nsew")
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        return tree
+
+    @staticmethod
+    def _fill(tree: ttk.Treeview, rows: list[tuple[str, ...]]) -> None:
+        tree.delete(*tree.get_children())
+        for index, row in enumerate(rows):
+            tree.insert("", "end", values=row, tags=("odd",) if index % 2 else ())
+
+    def _start(self) -> None:
+        self.summary.configure(text="Counting…")
+        self.refresh_button.state(["disabled"])
+        self._result, self._error = None, None
+        threading.Thread(target=self._work, daemon=True).start()  # a big history on a slow disk must not freeze the window
+        self.after(100, self._poll)
+
+    def _work(self) -> None:
+        try:
+            self._result = stats.collect()
+        except Exception as exc:  # shown in the dialog instead of vanishing
+            self._error = describe_error(exc)
+
+    def _poll(self) -> None:
+        if not self.winfo_exists():
+            return
+        if self._result is None and self._error is None:
+            self.after(100, self._poll)
+            return
+        self.refresh_button.state(["!disabled"])
+        if self._error:
+            self.summary.configure(text="The statistics could not be counted.")
+            self.footer.configure(text=self._error)
+            return
+        self._show(self._result or {})
+
+    def _show(self, report: dict) -> None:
+        self._report = report
+        mapping, history = report["mapping"], report["history"]
+        days = f", {history['days']} days of history" if history["days"] else ""
+        self.summary.configure(
+            text=f"{mapping['total']} repositories mapped, {mapping['active']} active; {history['jobs']:,} jobs on record{days}"
+        )
+        self.overview_text.configure(state="normal")
+        self.overview_text.delete("1.0", "end")
+        for line in stats.summary_lines(report):
+            heading = bool(line) and not line.startswith(" ")
+            self.overview_text.insert("end", line + "\n", "heading" if heading else "")
+        self.overview_text.configure(state="disabled")
+        self._fill(self.periods, stats.period_rows(report))
+        busiest, biggest, releases = stats.busiest_rows(report), stats.biggest_rows(report), stats.release_rows(report)
+        self.busiest_title.configure(text=f"Top {len(busiest)} busiest repositories (most jobs)")
+        self.biggest_title.configure(text=f"Top {len(biggest)} biggest repositories (total size of the releases on record)")
+        self.releases_title.configure(text=f"Top {len(releases)} biggest single releases")
+        self._fill(self.busiest, busiest)
+        self._fill(self.biggest, biggest)
+        self._fill(self.releases, releases)
+        daily = report["daily"]
+        self.daily_title.configure(text=f"Jobs per day, last {len(daily)} days")
+        self._draw_chart()
+        self.footer.configure(text="  |  ".join(stats.storage_lines(report)) + "   (data sizes are those of the releases on record)")
+
+    def _draw_chart(self) -> None:
+        canvas = self.chart
+        canvas.delete("all")
+        if not self._report:
+            return
+        daily = self._report["daily"]
+        width, height = max(canvas.winfo_width(), 200), max(canvas.winfo_height(), 120)
+        left, right, top, bottom = 36, 12, 18, 30
+        peak = max((day["jobs"] for day in daily), default=0) or 1
+        plot_w, plot_h = width - left - right, height - top - bottom
+        slot = plot_w / max(len(daily), 1)
+        canvas.create_line(left, top, left, top + plot_h, fill="#999999")
+        canvas.create_line(left, top + plot_h, width - right, top + plot_h, fill="#999999")
+        canvas.create_text(left - 4, top, text=str(peak), anchor="e", fill=COLOR_MUTED)
+        canvas.create_text(left - 4, top + plot_h, text="0", anchor="e", fill=COLOR_MUTED)
+        for index, day in enumerate(daily):
+            x0 = left + index * slot + slot * 0.15
+            x1 = left + (index + 1) * slot - slot * 0.15
+            bar_h = plot_h * day["jobs"] / peak
+            if day["jobs"]:
+                canvas.create_rectangle(x0, top + plot_h - bar_h, x1, top + plot_h, fill=self.DAILY_BAR, outline="")
+                if slot >= 22:
+                    canvas.create_text((x0 + x1) / 2, top + plot_h - bar_h - 2, text=str(day["jobs"]), anchor="s",
+                                       fill=COLOR_MUTED, font=("TkDefaultFont", 8))
+            if index % max(1, round(40 / slot)) == 0 or index == len(daily) - 1:
+                canvas.create_text((x0 + x1) / 2, top + plot_h + 4, text=day["date"][5:], anchor="n",
+                                   fill=COLOR_MUTED, font=("TkDefaultFont", 8))
+
+    def _copy(self) -> None:
+        if not self._report:
+            return
+        self.clipboard_clear()
+        self.clipboard_append(stats.format_report(self._report))
+        self.footer.configure(text="Copied to the clipboard.")
+
+
 class MainWindow(tk.Tk):
     DEFAULT_SIZE = "1280x720"
     MIN_SIZE = (1080, 520)  # narrower and the editor's last column (Active / Shared folder / buttons) is cut off
@@ -2188,6 +2382,7 @@ class MainWindow(tk.Tk):
         self.control_bar.log_check.configure(command=self._on_log_toggle)
         self.control_bar.restart_button.configure(command=self._on_restart)
         self.control_bar.doctor_button.configure(command=self._open_doctor)
+        self.control_bar.stats_button.configure(command=self._open_stats)
         ttk.Separator(self).pack(fill="x")
 
         self.status_bar = ttk.Label(self.footer, text=DEFAULT_STATUS_TEXT, anchor="w", padding=(10, 3))
@@ -2668,6 +2863,9 @@ class MainWindow(tk.Tk):
 
     def _open_doctor(self) -> None:
         DoctorDialog(self, self._refresh_doctor_attention)
+
+    def _open_stats(self) -> None:
+        StatsDialog(self)
 
     def _refresh_doctor_attention(self, report: Optional[dict] = None) -> None:
         """Highlight the Doctor button on a first run (missing files / login) or after a report with problems."""
