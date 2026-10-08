@@ -2,6 +2,16 @@
 
 Automated Python utility that reads GitHub release notification emails from Gmail, extracts release metadata, and downloads release assets, source archives, and release attestations.
 
+## Screenshots
+
+![The main window, light theme](docs/screenshots/Main-Light.png)
+
+![The main window, dark theme](docs/screenshots/Main-Dark.png)
+
+![The Stats window](docs/screenshots/Stats.png)
+
+![The Settings window](docs/screenshots/Settings.png)
+
 ## Features
 
 - Fetches unread GitHub release notifications from a dedicated Gmail folder.
