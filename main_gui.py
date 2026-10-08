@@ -399,8 +399,8 @@ class MappingsTab(ttk.Frame):
     # (key, heading, width, anchor) for the table; keys match repo_overview.RepoRow fields.
     TABLE_COLUMNS: tuple[tuple[str, str, int, Anchor], ...] = (
         ("icon", "?", 40, "center"),  # status icon; the "?" header explains it on hover
-        ("folder", "Name (folder)", 150, "w"),
         ("repo", "Repository (owner/repo)", 150, "w"),
+        ("folder", "Name (folder)", 150, "w"),
         ("destination", "Destination", 150, "w"),
         ("tag", "Tag", 100, "w"),
         ("last_check", "Last check", 135, "w"),
@@ -409,7 +409,7 @@ class MappingsTab(ttk.Frame):
         ("files", "Files", 70, "center"),
         ("limit", "Limit", 75, "center"),
     )
-    STRETCH_COLUMNS = ("folder", "repo", "destination", "tag")
+    STRETCH_COLUMNS = ("repo", "folder", "destination", "tag")
     SHOW_FILTERS = ("All", "Active", "Inactive", "Has pending")
     # Editor layout: three columns of up to three rows; a row holds one or more fields side by side.
     # A field is (key, label, kind, weight): kinds name, entry, readonly, dest, spin, choice; weight is its share of the
@@ -1319,8 +1319,10 @@ class StatusTab(ttk.Frame):
         on_clear_repo: Optional[Callable[[str], None]] = None,
         detail: bool = False,
         filterable: bool = False,
+        cell_actions: Optional[dict[str, Callable[[str], None]]] = None,
     ) -> None:
         super().__init__(master, padding=10)
+        self._cell_actions = cell_actions or {}  # column key -> what a double-click in that column does (given the repository)
         self._has_detail = detail
         self._empty_text = empty_text
         self._base = 1 if filterable else 0  # grid row of the table (the filter bar is above it)
@@ -1554,7 +1556,21 @@ class StatusTab(ttk.Frame):
         if self._rows and self._current_widths() != self._column_widths:
             self._render()
 
+    def _cell_action_key(self, event: object) -> Optional[str]:
+        """The key of the clicked column when it has its own double-click action (None otherwise)."""
+        x, y = getattr(event, "x", None), getattr(event, "y", None)
+        if x is None or y is None or self.tree.identify_region(x, y) != "cell":
+            return None
+        index = int(self.tree.identify_column(x)[1:]) - 1
+        if not 0 <= index < len(self._columns):
+            return None
+        key = self._columns[index][0]
+        return key if key in self._cell_actions else None
+
     def _on_motion(self, event: tk.Event) -> None:  # type: ignore[type-arg]
+        if self._cell_actions:
+            over_action = self._cell_action_key(event) is not None and bool(self.tree.identify_row(event.y))
+            self.tree.configure(cursor="hand2" if over_action else "")
         if self.tree.identify_region(event.x, event.y) != "cell":
             self._hide_tip()
             return
@@ -1593,12 +1609,14 @@ class StatusTab(ttk.Frame):
         selection = self.tree.selection()
         return self._repos[int(selection[0])] if selection else ""
 
-    def _on_double_click(self, _event: object = None) -> None:
+    def _on_double_click(self, event: object = None) -> None:
         selection = self.tree.selection()
         if selection:
             repo = self._repos[int(selection[0])]
             if repo:
-                self._open_repo(repo)
+                clicked = str(getattr(event, "type", "ButtonPress")) in ("ButtonPress", "4")  # Enter also carries the pointer position
+                key = self._cell_action_key(event) if clicked else None
+                (self._cell_actions[key] if key else self._open_repo)(repo)
 
 
 class SettingsDialog(tk.Toplevel):
@@ -2502,20 +2520,21 @@ class MainWindow(tk.Tk):
 
     EVENT_COLUMNS: tuple[StatusTab.Column, ...] = (
         ("time", "Time", 150, "w", False),
-        ("repo", "Repository", 220, "w", False),
+        ("repo", "Repository (owner/repo)", 220, "w", False),
         ("kind", "Type", 175, "w", False),
         ("message", "Message", 420, "w", True),
     )
     # The Completed tab's third column holds the release tag, not a type: heading and key differ per tab.
     COMPLETED_COLUMNS: tuple[StatusTab.Column, ...] = (
         ("time", "Time", 150, "w", False),
-        ("repo", "Repository", 220, "w", False),
+        ("repo", "Repository (owner/repo)", 220, "w", False),
+        ("folder", "Name (folder)", 200, "w", False),  # double-click opens the folder
         ("kind", "Tag", 175, "w", False),
         ("message", "Message", 420, "w", True),
     )
     FILTERABLE_TABS = ("warnings", "completed")
     UNMAPPED_COLUMNS: tuple[StatusTab.Column, ...] = (
-        ("repo", "Repository", 280, "w", True),
+        ("repo", "Repository (owner/repo)", 280, "w", True),
         ("folder", "Name (folder)", 280, "w", True),
         ("first_seen", "Last notification", 160, "w", False),
     )
@@ -2537,7 +2556,11 @@ class MainWindow(tk.Tk):
             self.notebook,
             self.COMPLETED_COLUMNS if definition.key == "completed" else self.EVENT_COLUMNS,
             self.EMPTY_TEXTS.get(definition.key, "Nothing to show."), self._show_repo,
-            hint="Double-click a row to open its repository in the Mappings tab.",
+            hint=("Double-click a row to open its repository in the Mappings tab; double-click its Name (folder) "
+                  "to open the folder in the file manager."
+                  if definition.key == "completed"
+                  else "Double-click a row to open its repository in the Mappings tab."),
+            cell_actions={"folder": self._open_repo_folder} if definition.key == "completed" else None,
             on_mark_read=(lambda key=definition.key: self._mark_status_read(key)) if definition.counter else None,
             on_clear=lambda key=definition.key: self._clear_status_tab(key),
             on_clear_repo=(lambda repo: self._clear_repo_limit_warnings(repo)) if definition.key == "limits" else None,
@@ -2563,10 +2586,38 @@ class MainWindow(tk.Tk):
             self._status_titles[key] = title
             self.notebook.tab(self._status_tabs[key], text=title)
 
+    def _open_repo_folder(self, repo: str) -> None:
+        """Open a repository's folder like the Mappings tab's "Open folder" button does."""
+        entry = mapping_manager.get_repository_mapping(repo)
+        if not isinstance(entry, dict):
+            self.set_status(f"{repo} is not in mapping.json.")
+            return
+        folder = gui_forms.open_folder_for_entry(repo, entry)
+        if folder is None:
+            self.set_status(f"No existing folder to open for {repo}: set a destination that exists first.")
+            return
+        try:
+            open_in_file_manager(folder)
+        except OSError as exc:
+            self.set_status(f"Cannot open {folder}: {describe_error(exc)}")
+            return
+        self.set_status(f"Opened {folder}")
+
     def _show_event_rows(self, key: str, highlight_after: Optional[int]) -> None:
         rows = self.status_feed.model.rows(key)
+        if key == "completed":
+            entries = {
+                str(entry.get("repository", "")).lower(): entry
+                for entry in mapping_manager.load_mapping().get("repositories", [])
+            }
+            table = [
+                (r.time, r.repo, gui_forms.folder_display_name(r.repo, entries.get(r.repo.lower())), r.kind, r.message)
+                for r in rows
+            ]
+        else:
+            table = [(r.time, r.repo, r.kind, r.message) for r in rows]
         self._status_tabs[key].set_rows(
-            [(r.time, r.repo, r.kind, r.message) for r in rows],
+            table,
             [r.repo for r in rows],
             [r.id for r in rows],
             highlight_after,

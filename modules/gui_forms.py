@@ -130,6 +130,25 @@ def resolve_open_folder(repo: str, destination: str, folder: str, subfolder: str
     return None
 
 
+def folder_display_name(repo: str, entry: Optional[Mapping[str, Any]]) -> str:
+    """The "Name (folder)" of a mapped repository as the Mappings tab shows it ("" when it is not in mapping.json)."""
+    if not isinstance(entry, Mapping):
+        return ""
+    return str(entry.get("folder") or "").strip() or mapping_manager.build_default_folder(repo)
+
+
+def open_folder_for_entry(repo: str, entry: Optional[Mapping[str, Any]]) -> Optional[str]:
+    """What the Mappings tab's "Open folder" button opens, from a mapping.json entry (None: nothing to open)."""
+    if not isinstance(entry, Mapping):
+        return None
+    return resolve_open_folder(
+        repo,
+        str(entry.get("destination") or ""),
+        str(entry.get("folder") or ""),
+        str(entry.get("subfolder") or ""),
+    )
+
+
 # The sanity-check choices of the editor: (mapping.json value, text shown in the drop-down).
 SANITY_CHOICES = (
     ("any_tag", "Compare with previous release"),
