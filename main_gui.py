@@ -1319,10 +1319,9 @@ class StatusTab(ttk.Frame):
         on_clear_repo: Optional[Callable[[str], None]] = None,
         detail: bool = False,
         filterable: bool = False,
-        cell_actions: Optional[dict[str, Callable[[str], None]]] = None,
+        on_open_folder: Optional[Callable[[str], None]] = None,
     ) -> None:
         super().__init__(master, padding=10)
-        self._cell_actions = cell_actions or {}  # column key -> what a double-click in that column does (given the repository)
         self._has_detail = detail
         self._empty_text = empty_text
         self._base = 1 if filterable else 0  # grid row of the table (the filter bar is above it)
@@ -1374,23 +1373,29 @@ class StatusTab(ttk.Frame):
         bottom.grid(row=bottom_row, column=0, columnspan=2, sticky="ew", pady=(8, 0))
         bottom.columnconfigure(0, weight=1)
         ttk.Label(bottom, text=hint, foreground=COLOR_MUTED).grid(row=0, column=0, sticky="w")
+        self.open_folder_button: Optional[ttk.Button] = None  # opens the selected row's repository folder
+        if on_open_folder is not None:
+            self._open_folder = on_open_folder
+            self.open_folder_button = ttk.Button(bottom, text="Open folder", command=self._on_open_folder, state="disabled")
+            self.open_folder_button.grid(row=0, column=1, padx=(0, 6))
+            attach_tooltip(self.open_folder_button, gui_tooltips.CONTROL_HELP["open_repo_folder"])
         if detail:
             self.copy_button = ttk.Button(bottom, text="Copy text", command=self._copy_selected)
-            self.copy_button.grid(row=0, column=1, padx=(0, 6))
+            self.copy_button.grid(row=0, column=2, padx=(0, 6))
         self.mark_read_button: Optional[ttk.Button] = None  # only tabs with an unread counter have one
         if on_mark_read is not None:
             self.mark_read_button = ttk.Button(bottom, text="Mark all read", command=on_mark_read)
-            self.mark_read_button.grid(row=0, column=2)
+            self.mark_read_button.grid(row=0, column=3)
         self.clear_button: Optional[ttk.Button] = None  # deletes the listed events from state.db
         if on_clear is not None:
             self.clear_button = ttk.Button(bottom, text="Clear…", command=on_clear)
-            self.clear_button.grid(row=0, column=3, padx=(6, 0))
+            self.clear_button.grid(row=0, column=4, padx=(6, 0))
             attach_tooltip(self.clear_button, gui_tooltips.CONTROL_HELP["clear_tab"])
         self.clear_repo_button: Optional[ttk.Button] = None  # deletes one repository's events
         if on_clear_repo is not None:
             self._clear_repo = on_clear_repo
             self.clear_repo_button = ttk.Button(bottom, text="Clear selected", command=self._on_clear_repo, state="disabled")
-            self.clear_repo_button.grid(row=0, column=2, padx=(0, 6))
+            self.clear_repo_button.grid(row=0, column=3, padx=(0, 6))
             attach_tooltip(self.clear_repo_button, gui_tooltips.CONTROL_HELP["clear_repo"])
 
         font_spec = ttk.Style(self).lookup("Treeview", "font") or "TkDefaultFont"
@@ -1401,6 +1406,7 @@ class StatusTab(ttk.Frame):
         self._tooltip = Tooltip(self.tree)
         self.tree.bind("<<TreeviewSelect>>", self._show_detail)
         self.tree.bind("<<TreeviewSelect>>", lambda _event: self._update_clear_repo_button(), add="+")
+        self.tree.bind("<<TreeviewSelect>>", lambda _event: self._update_open_folder_button(), add="+")
         self.tree.bind("<Double-1>", self._on_double_click)
         self.tree.bind("<Return>", self._on_double_click)
         self.tree.bind("<Motion>", self._on_motion)
@@ -1556,21 +1562,7 @@ class StatusTab(ttk.Frame):
         if self._rows and self._current_widths() != self._column_widths:
             self._render()
 
-    def _cell_action_key(self, event: object) -> Optional[str]:
-        """The key of the clicked column when it has its own double-click action (None otherwise)."""
-        x, y = getattr(event, "x", None), getattr(event, "y", None)
-        if x is None or y is None or self.tree.identify_region(x, y) != "cell":
-            return None
-        index = int(self.tree.identify_column(x)[1:]) - 1
-        if not 0 <= index < len(self._columns):
-            return None
-        key = self._columns[index][0]
-        return key if key in self._cell_actions else None
-
     def _on_motion(self, event: tk.Event) -> None:  # type: ignore[type-arg]
-        if self._cell_actions:
-            over_action = self._cell_action_key(event) is not None and bool(self.tree.identify_row(event.y))
-            self.tree.configure(cursor="hand2" if over_action else "")
         if self.tree.identify_region(event.x, event.y) != "cell":
             self._hide_tip()
             return
@@ -1609,14 +1601,21 @@ class StatusTab(ttk.Frame):
         selection = self.tree.selection()
         return self._repos[int(selection[0])] if selection else ""
 
-    def _on_double_click(self, event: object = None) -> None:
+    def _update_open_folder_button(self) -> None:
+        if self.open_folder_button is not None:
+            self.open_folder_button.state(["!disabled"] if self.selected_repo() else ["disabled"])
+
+    def _on_open_folder(self) -> None:
+        repo = self.selected_repo()
+        if repo:
+            self._open_folder(repo)
+
+    def _on_double_click(self, _event: object = None) -> None:
         selection = self.tree.selection()
         if selection:
             repo = self._repos[int(selection[0])]
             if repo:
-                clicked = str(getattr(event, "type", "ButtonPress")) in ("ButtonPress", "4")  # Enter also carries the pointer position
-                key = self._cell_action_key(event) if clicked else None
-                (self._cell_actions[key] if key else self._open_repo)(repo)
+                self._open_repo(repo)
 
 
 class SettingsDialog(tk.Toplevel):
@@ -2556,11 +2555,8 @@ class MainWindow(tk.Tk):
             self.notebook,
             self.COMPLETED_COLUMNS if definition.key == "completed" else self.EVENT_COLUMNS,
             self.EMPTY_TEXTS.get(definition.key, "Nothing to show."), self._show_repo,
-            hint=("Double-click a row to open its repository in the Mappings tab; double-click its Name (folder) "
-                  "to open the folder in the file manager."
-                  if definition.key == "completed"
-                  else "Double-click a row to open its repository in the Mappings tab."),
-            cell_actions={"folder": self._open_repo_folder} if definition.key == "completed" else None,
+            hint="Double-click a row to open its repository in the Mappings tab.",
+            on_open_folder=self._open_repo_folder,  # every event tab; Unmapped has no folder to open
             on_mark_read=(lambda key=definition.key: self._mark_status_read(key)) if definition.counter else None,
             on_clear=lambda key=definition.key: self._clear_status_tab(key),
             on_clear_repo=(lambda repo: self._clear_repo_limit_warnings(repo)) if definition.key == "limits" else None,
