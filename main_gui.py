@@ -2163,7 +2163,8 @@ class StatsDialog(tk.Toplevel):
                                      borderwidth=0, font="TkDefaultFont", background=self.cget("background"))
         self.overview_text.grid(row=0, column=0, sticky="ew")
         self.overview_text.tag_configure("heading", font=self._bold, spacing1=6, spacing3=2)
-        self.overview_text.bind("<Configure>", lambda _event: self.after_idle(self._fit_overview))  # lines re-wrap on resize
+        self._overview_width = 0
+        self.overview_text.bind("<Configure>", self._on_overview_resized)  # lines re-wrap when the width changes
         self.overview_text.bind("<MouseWheel>", lambda _event: "break")  # it is sized to fit, never scrolled
         ttk.Label(overview, text="Activity", font=self._bold).grid(row=1, column=0, sticky="w", pady=(10, 2))
         self.periods = self._make_table(overview, stats.PERIOD_HEADERS, row=2)
@@ -2288,25 +2289,35 @@ class StatsDialog(tk.Toplevel):
         self._draw_chart()
         self.footer.configure(text="  |  ".join(stats.storage_lines(report)) + "   (data sizes are those of the releases on record)")
 
+    def _on_overview_resized(self, event: tk.Event) -> None:  # type: ignore[type-arg]
+        """Refit only when the WIDTH changed: fitting changes the height, and reacting to that would loop forever."""
+        if event.width != self._overview_width:
+            self._overview_width = event.width
+            self.after_idle(self._fit_overview)
+
     def _fit_overview(self) -> None:
-        """Make the summary box exactly as tall as its (wrapped) text, so it neither scrolls nor leaves a gap."""
+        """Make the summary box as tall as its (wrapped) text, so it neither scrolls nor leaves a gap."""
         try:
             self._fit_overview_now()
         except tk.TclError:  # the window was closed while the fit was still queued
             pass
 
     def _fit_overview_now(self) -> None:
-        self.overview_text.update_idletasks()
-        pixels = self.overview_text.count("1.0", "end-1c", "ypixels")  # headings add spacing, so count pixels, not lines
-        line_height = max(tkfont.nametofont(self.overview_text.cget("font")).metrics("linespace"), 1)
+        text = self.overview_text
+        text.update_idletasks()
+        pixels = text.count("1.0", "end-1c", "ypixels")  # headings add spacing, so count pixels, not lines
+        line_height = max(tkfont.nametofont(text.cget("font")).metrics("linespace"), 1)
         wanted = max(-(-int(pixels[0] if pixels else line_height) // line_height), 1)
-        if int(self.overview_text.cget("height")) != wanted:
-            self.overview_text.configure(height=wanted)
+        current = int(text.cget("height"))
+        if current < wanted or current > wanted + 1:  # one line of slack is fine: leave it alone so nothing flaps
+            text.configure(height=wanted)
+            current = wanted
         for _ in range(4):  # a few pixels of heading spacing can still be hidden: add a line until all text shows
-            self.overview_text.update_idletasks()
-            if self.overview_text.yview()[1] >= 1.0:
+            text.update_idletasks()
+            if text.yview()[1] >= 1.0:
                 break
-            self.overview_text.configure(height=int(self.overview_text.cget("height")) + 1)
+            current += 1
+            text.configure(height=current)
 
     def _draw_chart(self) -> None:
         canvas = self.chart
