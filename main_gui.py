@@ -2163,6 +2163,8 @@ class StatsDialog(tk.Toplevel):
                                      borderwidth=0, font="TkDefaultFont", background=self.cget("background"))
         self.overview_text.grid(row=0, column=0, sticky="ew")
         self.overview_text.tag_configure("heading", font=self._bold, spacing1=6, spacing3=2)
+        self.overview_text.bind("<Configure>", lambda _event: self.after_idle(self._fit_overview))  # lines re-wrap on resize
+        self.overview_text.bind("<MouseWheel>", lambda _event: "break")  # it is sized to fit, never scrolled
         ttk.Label(overview, text="Activity", font=self._bold).grid(row=1, column=0, sticky="w", pady=(10, 2))
         self.periods = self._make_table(overview, stats.PERIOD_HEADERS, row=2)
         self.notebook.add(overview, text="Overview")
@@ -2272,6 +2274,7 @@ class StatsDialog(tk.Toplevel):
             heading = bool(line) and not line.startswith(" ")
             self.overview_text.insert("end", line + "\n", "heading" if heading else "")
         self.overview_text.configure(state="disabled")
+        self._fit_overview()
         self._fill(self.periods, stats.period_rows(report))
         busiest, biggest, releases = stats.busiest_rows(report), stats.biggest_rows(report), stats.release_rows(report)
         self.busiest_title.configure(text=f"Top {len(busiest)} busiest repositories (most jobs)")
@@ -2284,6 +2287,26 @@ class StatsDialog(tk.Toplevel):
         self.daily_title.configure(text=f"Jobs per day, last {len(daily)} days")
         self._draw_chart()
         self.footer.configure(text="  |  ".join(stats.storage_lines(report)) + "   (data sizes are those of the releases on record)")
+
+    def _fit_overview(self) -> None:
+        """Make the summary box exactly as tall as its (wrapped) text, so it neither scrolls nor leaves a gap."""
+        try:
+            self._fit_overview_now()
+        except tk.TclError:  # the window was closed while the fit was still queued
+            pass
+
+    def _fit_overview_now(self) -> None:
+        self.overview_text.update_idletasks()
+        pixels = self.overview_text.count("1.0", "end-1c", "ypixels")  # headings add spacing, so count pixels, not lines
+        line_height = max(tkfont.nametofont(self.overview_text.cget("font")).metrics("linespace"), 1)
+        wanted = max(-(-int(pixels[0] if pixels else line_height) // line_height), 1)
+        if int(self.overview_text.cget("height")) != wanted:
+            self.overview_text.configure(height=wanted)
+        for _ in range(4):  # a few pixels of heading spacing can still be hidden: add a line until all text shows
+            self.overview_text.update_idletasks()
+            if self.overview_text.yview()[1] >= 1.0:
+                break
+            self.overview_text.configure(height=int(self.overview_text.cget("height")) + 1)
 
     def _draw_chart(self) -> None:
         canvas = self.chart
