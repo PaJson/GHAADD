@@ -37,6 +37,10 @@ TYPE_FIXED = "fixed"
 
 @dataclass(frozen=True)
 class TabDef:
+    """Definition of one status tab: key, title and which events (types, categories) it shows.
+
+    Adding a tab means adding a TabDef.
+    """
     key: str
     title: str
     kind: str = KIND_EVENTS
@@ -74,6 +78,7 @@ TAB_DEFS: tuple[TabDef, ...] = (
 
 @dataclass(frozen=True)
 class StatusRow:
+    """One row of a status tab, ready to display (id, time, repository, kind and message)."""
     id: int
     time: str
     repo: str
@@ -84,6 +89,7 @@ class StatusRow:
 
 @dataclass(frozen=True)
 class UnmappedRow:
+    """One repository that still has no destination (for the Unmapped tab)."""
     repo: str
     folder: str
     first_seen: str
@@ -109,6 +115,7 @@ def format_title(title: str, unread: int) -> str:
 
 
 def format_event_time(epoch: Any) -> str:
+    """Format an event's epoch time as "YYYY-MM-DD HH:MM:SS", or "" when it is not a valid time."""
     try:
         return datetime.fromtimestamp(float(epoch)).strftime("%Y-%m-%d %H:%M:%S")
     except (TypeError, ValueError, OSError, OverflowError):
@@ -165,6 +172,7 @@ def _format_stamp(stamp: str) -> str:
 
 @dataclass
 class _TabState:
+    """What the model keeps per event tab: its rows (newest first) and the newest event id seen."""
     rows: list[StatusRow] = field(default_factory=list)  # newest first
     newest_id: Optional[int] = None
 
@@ -182,6 +190,7 @@ class StatusTabsModel:
         limit: int = DEFAULT_ROW_LIMIT,
         existing_ids: Optional[Callable[[list[int]], set[int]]] = None,
     ) -> None:
+        """Wire the model to its data sources (fetch functions, read-mark store, repo names), all injectable for tests."""
         self._defs = {tab.key: tab for tab in defs}
         self._fetch = fetch
         self._fetch_max_id = fetch_max_id
@@ -195,6 +204,7 @@ class StatusTabsModel:
 
     @property
     def event_tab_keys(self) -> list[str]:
+        """Return the keys of the tabs fed by lifecycle events."""
         return list(self._states)
 
     def refresh(self) -> set[str]:
@@ -219,6 +229,7 @@ class StatusTabsModel:
         return changed
 
     def rows(self, key: str) -> list[StatusRow]:
+        """Return a tab's rows; tabs with latest_per_repo keep only the newest row per repository."""
         rows = list(self._states[key].rows)
         if not self._defs[key].latest_per_repo:
             return rows
@@ -246,6 +257,7 @@ class StatusTabsModel:
         state.rows = [row for row in state.rows if row.repo != repo]
 
     def seen_id(self, key: str) -> int:
+        """Return the highest event id the user has seen in this tab."""
         return self._seen.get(key, 0)
 
     def unread_rows(self, key: str) -> list[StatusRow]:
@@ -256,9 +268,11 @@ class StatusTabsModel:
         return [row for row in self._states[key].rows if row.id > seen]
 
     def unread(self, key: str) -> int:
+        """Return how many rows of the tab are unread."""
         return len(self.unread_rows(key))
 
     def title(self, key: str) -> str:
+        """Return the tab title with its unread count, e.g. "Warnings (3)"."""
         return format_title(self._defs[key].title, self.unread(key))
 
     def clear(self, key: str) -> None:
@@ -291,6 +305,7 @@ class StatusTabsModel:
 
     @staticmethod
     def _to_row(tab: TabDef, event: Mapping[str, Any], known: Mapping[str, str]) -> StatusRow:
+        """Convert one stored event into a display row (the tab decides what goes in the Type column)."""
         message = str(event.get("message") or "")
         if tab.type_source == TYPE_TAG:
             kind = format_tag(event.get("tag"), release_type_from_path(event.get("destination_path")))

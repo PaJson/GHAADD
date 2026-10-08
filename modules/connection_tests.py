@@ -20,6 +20,7 @@ TIMEOUT_SECONDS = 15
 
 @dataclass(frozen=True)
 class ConnectionResult:
+    """Outcome of a connection test: ok, a plain message, and (Gmail only) the folder list and folder check."""
     ok: bool
     message: str
     folders: list[str] = field(default_factory=list)  # Gmail only: the selectable folders, sorted
@@ -27,16 +28,19 @@ class ConnectionResult:
 
 
 def _scrub(text: str, secret: str) -> str:
+    """Replace the secret in a message with *** so a password never reaches the screen."""
     return text.replace(secret, "***") if secret else text
 
 
 def _default_client(host: str) -> Any:
+    """Open the IMAP client; imported here so this module imports without the network package."""
     from imapclient import IMAPClient  # imported here: the module stays importable without the network package
 
     return IMAPClient(host, use_uid=True, timeout=TIMEOUT_SECONDS)
 
 
 def _selectable(entries: Any) -> list[str]:
+    """Return the sorted names of real folders, leaving out containers such as "[Gmail]"."""
     names = []
     for flags, _delimiter, name in entries:
         if any(bytes(flag).lower() == b"\\noselect" for flag in flags):

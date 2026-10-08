@@ -1,7 +1,10 @@
+"""Shared TypedDict shapes passed between the queue worker, the reports and the CLI (no logic lives here)."""
+
 from typing import Literal, Optional, TypedDict, Union
 
 
 class QueueStatusOptions(TypedDict):
+    """The parsed options of --queue-status / --queue-report."""
     as_json: bool
     limit: Optional[int]
     hours: Optional[float]
@@ -14,6 +17,7 @@ class QueueStatusOptions(TypedDict):
 
 
 class QueueStatusFilters(TypedDict):
+    """The filters (hours, date, repo, status, limit) echoed back in the status payload."""
     hours: Optional[float]
     date: Optional[str]
     repo_filter: Optional[str]
@@ -22,6 +26,7 @@ class QueueStatusFilters(TypedDict):
 
 
 class SkippedItemPreview(TypedDict):
+    """A skipped item as shown in the reports: how often, which file and why."""
     attempt_count: int
     item_key: Optional[str]
     file_name: Optional[str]
@@ -31,6 +36,7 @@ class SkippedItemPreview(TypedDict):
 
 
 class QueueJobPayload(TypedDict):
+    """One job_queue row as reported by --queue-status."""
     id: int
     status: str
     repo: str
@@ -58,6 +64,7 @@ class QueueJobPayload(TypedDict):
 
 
 class NextPendingJobPayload(TypedDict):
+    """The next pending job (the one due soonest)."""
     id: int
     repo: str
     tag: str
@@ -81,11 +88,13 @@ class NextPendingJobPayload(TypedDict):
 
 
 class TopFailedRepoPayload(TypedDict):
+    """A repository with its number of failed jobs."""
     repo: str
     failed_count: int
 
 
 class TopSuccessfulRepoPayload(TypedDict):
+    """A repository with its success, skip, failed and terminal job counts."""
     repo: str
     success_count: int
     skip_count: int
@@ -95,16 +104,19 @@ class TopSuccessfulRepoPayload(TypedDict):
 
 
 class TopSkippedItemPayload(TypedDict):
+    """A skipped item with how many times it was skipped."""
     item_label: str
     skip_count: int
 
 
 class SkipReasonPayload(TypedDict):
+    """A skip reason with its count."""
     reason: str
     count: int
 
 
 class PurgeableJobAgeSummary(TypedDict):
+    """A terminal job with its age, as a candidate for --purge."""
     id: int
     repo: str
     tag: str
@@ -116,11 +128,13 @@ class PurgeableJobAgeSummary(TypedDict):
 
 
 class PurgeAgePreviewEntry(TypedDict):
+    """How many jobs a purge of at least `age_days` days would remove."""
     age_days: int
     would_purge_count: int
 
 
 class QueueReportPayload(TypedDict):
+    """The figures of --queue-report: status breakdown, success/skip/failed counts and the top lists."""
     window_total_jobs: int
     status_breakdown: dict[str, int]
     terminal_jobs: int
@@ -142,6 +156,7 @@ class QueueReportPayload(TypedDict):
 
 
 class QueueStatusPayload(TypedDict):
+    """The full result of --queue-status (also its --json output)."""
     captured_at: str
     captured_at_unix: float
     filters: QueueStatusFilters
@@ -154,6 +169,7 @@ class QueueStatusPayload(TypedDict):
 
 
 class ReleaseAssetQueueItem(TypedDict):
+    """One release asset to download: key, name, url and the size/time expected from GitHub."""
     key: str
     name: Optional[str]
     url: str
@@ -162,12 +178,14 @@ class ReleaseAssetQueueItem(TypedDict):
 
 
 class SkippedItemPayload(TypedDict):
+    """One skipped asset: its key, file name and the reason."""
     item_key: Optional[str]
     file_name: Optional[str]
     reason: str
 
 
 class DownloadResultPayload(TypedDict):
+    """Result of download_release(): the status, the counts and the skipped items."""
     status: Literal["SUCCESS", "SKIP", "FAILED"]
     downloaded_count: int
     skipped_count: int
@@ -181,6 +199,7 @@ DownloadReleaseResult = Union[bool, str, DownloadResultPayload]
 
 
 class NotificationPayload(TypedDict):
+    """One parsed notification e-mail: repository, tag, release type and the e-mail id."""
     repo: Optional[str]
     tag: Optional[str]
     release_type: Optional[str]
@@ -188,10 +207,12 @@ class NotificationPayload(TypedDict):
 
 
 class QueuedNotificationPayload(NotificationPayload):
+    """A notification after duplicates were collapsed: all e-mail ids that belong to it."""
     email_ids: list[str]
 
 
 class IngestCycleStats(TypedDict):
+    """Counters of one ingest cycle (found, collapsed, queued, skipped...)."""
     notifications_found: int
     notifications_collapsed_duplicates: int
     notifications_queued: int
@@ -202,6 +223,7 @@ class IngestCycleStats(TypedDict):
 
 
 class QueueCycleStats(TypedDict):
+    """Counters of one queue cycle (due, completed, failed, retried, superseded...)."""
     due_jobs: int
     completed: int
     failed: int
@@ -212,6 +234,7 @@ class QueueCycleStats(TypedDict):
 
 
 class QueuedItemInfo(TypedDict):
+    """Identity of the one item just queued (--single processes exactly this job)."""
     repo: str
     tag: str
     release_type: Optional[str]

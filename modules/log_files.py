@@ -78,6 +78,7 @@ class RollingLogFile:
     """
 
     def __init__(self, directory: str, max_bytes: int, keep_files: int) -> None:
+        """Open the first log file in `directory`; `max_bytes` 0 = never roll over, `keep_files` 0 = keep all."""
         self.directory = directory
         self.max_bytes = max_bytes
         self.keep_files = keep_files
@@ -88,9 +89,11 @@ class RollingLogFile:
 
     @staticmethod
     def _open(path: str):
+        """Open a log file for appending, line-buffered, UTF-8."""
         return open(path, "a", encoding="utf-8", buffering=1)
 
     def write(self, data: str) -> int:
+        """Write text to the file and roll over to a new file at a line boundary once it is too big."""
         self._stream.write(data)
         self._size += len(data.encode("utf-8"))
         if (
@@ -103,9 +106,11 @@ class RollingLogFile:
         return len(data)
 
     def flush(self) -> None:
+        """Flush the current file."""
         self._stream.flush()
 
     def close(self) -> None:
+        """Close the current file."""
         self._stream.close()
 
     def prune(self) -> int:
@@ -113,6 +118,7 @@ class RollingLogFile:
         return prune_log_files(self.directory, self.keep_files, protect=self.path)
 
     def _roll(self) -> None:
+        """Start a newer file (with a "Log continued from" header); if that fails, keep writing to the old one."""
         previous_path = self.path
         try:
             new_path = new_log_path(self.directory)

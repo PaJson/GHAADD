@@ -53,6 +53,7 @@ def count_notifying(kinds: Iterable[object], silenced: Iterable[str]) -> int:
 
 
 def describe(code: str) -> str:
+    """Return the plain-language meaning of a warning type code, or "" when it is unknown."""
     for known, meaning in WARNING_TYPES:
         if known == code:
             return meaning

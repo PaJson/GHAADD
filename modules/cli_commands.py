@@ -1,3 +1,5 @@
+"""Command-line flags: argument parsing and the dispatch of every one-shot command (queue, purge, report, doctor...)."""
+
 import argparse
 import json
 import os
@@ -63,6 +65,7 @@ MODIFIER_COMMANDS: dict[str, tuple[str, ...]] = {
 
 
 def _is_given(value: object) -> bool:
+    """Return True when an option was actually passed (not None and not False)."""
     return value is not None and value is not False
 
 

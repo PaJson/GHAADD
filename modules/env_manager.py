@@ -101,6 +101,7 @@ def credentials_fingerprint() -> str:
 
 
 def _format_value(value: str) -> str:
+    """Return the value as written to .env: bare when plain, otherwise double-quoted and escaped."""
     if _PLAIN_VALUE.fullmatch(value):
         return value
     escaped = value.replace("\\", "\\\\").replace('"', '\\"')
@@ -108,6 +109,7 @@ def _format_value(value: str) -> str:
 
 
 def _key_pattern(key: str) -> re.Pattern[str]:
+    """Return a regex matching the line that sets `key` (also with a leading `export`)."""
     return re.compile(rf"^\s*(?:export\s+)?{re.escape(key)}\s*=")
 
 
@@ -169,6 +171,7 @@ def update_values(changes: Mapping[str, Optional[str]]) -> bool:
 
 
 def _write_atomically(path: str, text: str) -> None:
+    """Write through a temporary file and replace the original (retried on a Windows lock); owner-only on POSIX."""
     temporary = f"{path}.{os.getpid()}.tmp"
     try:
         with open(temporary, "w", encoding="utf-8", newline="") as handle:

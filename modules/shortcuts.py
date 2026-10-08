@@ -31,6 +31,7 @@ Runner = Callable[..., "subprocess.CompletedProcess[str]"]
 
 @dataclass(frozen=True)
 class ShortcutSpec:
+    """One Windows shortcut to create: where it goes, what it starts, its arguments, working folder and icon."""
     path: str
     target: str
     arguments: str
@@ -41,14 +42,17 @@ class ShortcutSpec:
 
 
 def _run(command: list[str]) -> "subprocess.CompletedProcess[str]":
+    """Default command runner (hidden window, 2 minute limit); tests pass a fake runner instead."""
     return run_hidden(command, timeout=120)
 
 
 def gui_script_path() -> str:
+    """Return the path of main_gui.py."""
     return os.path.join(_APP_DIR, "main_gui.py")
 
 
 def icon_path(extension: str) -> str:
+    """Return the path of the app icon with the given extension (ico or png) in assets/."""
     return os.path.join(_APP_DIR, "assets", f"ghaadd.{extension}")
 
 
@@ -70,14 +74,17 @@ def gui_options(minimized: bool = False, start_daemon: bool = False) -> tuple[st
 
 
 def _with_options(arguments: str, options: tuple[str, ...]) -> str:
+    """Append the extra GUI options (e.g. --minimized) to the argument string."""
     return " ".join([arguments, *options])
 
 
 def _options_note(options: tuple[str, ...]) -> str:
+    """Return the sentence telling the user which options the GUI shortcut starts with."""
     return f" The GUI shortcut starts with {' '.join(options)}." if options else ""
 
 
 def windows_specs(directory: str, python: Optional[str] = None, options: tuple[str, ...] = ()) -> list[ShortcutSpec]:
+    """Return the two Windows shortcuts (GUI and daemon) for `directory`; `options` go to the GUI shortcut only."""
     interpreter = windowless_python(python)
     icon = icon_path("ico")
     return [
@@ -168,6 +175,7 @@ def _ps(text: str) -> str:
 
 
 def powershell_script(specs: list[ShortcutSpec]) -> str:
+    """Build the PowerShell script that creates the shortcuts and sets their AppUserModelID."""
     lines = [
         "$ErrorActionPreference = 'Stop'",
         "Add-Type -TypeDefinition @'",
@@ -214,6 +222,7 @@ def create_shortcuts(
 def remove_shortcuts(
     directory: Optional[str] = None, platform: Optional[str] = None, home: Optional[str] = None
 ) -> AutostartResult:
+    """Delete the shortcuts of this platform (Start menu / applications folder, or `directory`)."""
     system = platform if platform is not None else sys.platform
     if system == "win32":
         paths = [os.path.join(directory or start_menu_folder(), name) for name in (GUI_SHORTCUT, DAEMON_SHORTCUT)]
@@ -234,6 +243,7 @@ def remove_shortcuts(
 
 
 def _create_windows(directory: str, runner: Runner, python: Optional[str], options: tuple[str, ...] = ()) -> AutostartResult:
+    """Create the Windows .lnk files by running the generated PowerShell script."""
     specs = windows_specs(directory, python, options)
     try:
         os.makedirs(directory, exist_ok=True)
@@ -261,11 +271,14 @@ def _create_windows(directory: str, runner: Runner, python: Optional[str], optio
 
 
 def _applications_folder(home: Optional[str] = None) -> str:
+    """Return the per-user applications folder for .desktop files (Linux)."""
     return os.path.join(home or os.path.expanduser("~"), ".local", "share", "applications")
 
 
 def desktop_entry_text(python: str, script: str, icon: str, workdir: str, options: tuple[str, ...] = ()) -> str:
+    """Build the text of the Linux .desktop file that starts the GUI."""
     def quote(text: str) -> str:
+        """Quote a value for the Exec line of a .desktop file."""
         return '"' + text.replace("\\", "\\\\").replace('"', '\\"').replace("$", "\\$").replace("`", "\\`") + '"'
 
     lines = [
@@ -287,6 +300,7 @@ def desktop_entry_text(python: str, script: str, icon: str, workdir: str, option
 def _create_linux(
     directory: Optional[str], python: Optional[str], home: Optional[str], options: tuple[str, ...] = ()
 ) -> AutostartResult:
+    """Write the .desktop file (with the PNG icon when it exists)."""
     folder = directory or _applications_folder(home)
     png = icon_path("png")
     text = desktop_entry_text(

@@ -1,3 +1,5 @@
+"""The only module that talks to state.db (SQLite, WAL mode): job queue, lifecycle events, release state, folder counts."""
+
 import re
 import os
 import sqlite3
@@ -721,11 +723,11 @@ def get_failed_jobs_since(connection, since_epoch):
 
 
 def get_repo_job_summaries(connection):
-    """Return one read-only job_queue summary per repo, keyed by lower-cased owner/repo.
+    """Return one read-only job_queue summary per repo, keyed by lower-cased owner/repo (GUI Mappings table).
 
-    Used by the GUI Mappings table. Per repo: latest_* come from its newest
-    non-SUPERSEDED job (None when it only has superseded ones), pending_next_check / pending_attempts from its earliest PENDING job (None
-    when nothing is pending), last_activity is the newest updated_at of any job.
+    latest_* come from the newest non-SUPERSEDED job (None if only superseded ones exist); pending_next_check and
+    pending_attempts from the earliest PENDING job (None if nothing is pending); last_activity is the newest
+    updated_at of any job.
     """
     summaries = {}
 
@@ -1254,10 +1256,9 @@ def get_previous_successful_completed_job(
 ):
     """Return the previous successful completed job for the same repo and release_type.
 
-    With match_tag=True (the original behaviour) it must also have the same tag; with False the
-    newest earlier successful job of the repository counts, whatever its tag. finished_before (a
-    completed_at timestamp of the excluded job) limits the search to jobs that finished before it, which a
-    report about an old job needs so it is not compared with a newer one.
+    match_tag=True also requires the same tag; False accepts the newest earlier success of the repository.
+    `finished_before` (a completed_at stamp) limits the search to jobs finished before it, so a report about an
+    old job is not compared with a newer one.
     """
     tag_condition = "AND (tag = ? OR (tag IS NULL AND ? IS NULL))" if match_tag else ""
     params = [int(exclude_job_id), repo]
@@ -1430,10 +1431,12 @@ def get_events_for_tab(
 def get_storage_stats(connection):
     """Return read-only size and growth figures for state.db (used by the --perf-report diagnostics)."""
     def scalar(sql, params=()):
+        """Run a query and return its single value, or None when there is no row or the value is NULL."""
         row = connection.execute(sql, params).fetchone()
         return None if row is None or row[0] is None else row[0]
 
     def grouped(sql):
+        """Run a two-column query and return it as {first column as text: second column as int}."""
         return {str(row[0]): int(row[1]) for row in connection.execute(sql).fetchall()}
 
     week_ago = scalar("SELECT CAST(strftime('%s', 'now') AS REAL) - 7 * 86400")
@@ -1496,12 +1499,10 @@ def get_max_event_id(connection):
 
 
 def purge_lifecycle_events(connection, event_type=None, repo_filter=None, min_age_days=None, dry_run=False):
-    """Delete lifecycle events matching the given filters and return the number removed.
+    """Delete lifecycle events matching the filters and return the number removed.
 
-    min_age_days=0 matches every event created up to now (i.e. no age floor);
-    larger values only match events at least that many days old. When
-    dry_run is True, no rows are deleted - the matching count is returned
-    instead, computed via SELECT COUNT(*).
+    min_age_days=0 means no age floor; larger values only match events at least that many days old.
+    With dry_run=True nothing is deleted and the matching count (SELECT COUNT(*)) is returned.
     """
     conditions = []
     params: list = []
@@ -1532,17 +1533,10 @@ def purge_lifecycle_events(connection, event_type=None, repo_filter=None, min_ag
 
 
 def purge_job_queue_rows(connection, status=None, repo_filter=None, min_age_days=None, oldest_count=None, dry_run=False):
-    """Delete terminal (non-PENDING) job_queue rows matching the given filters.
+    """Delete terminal (non-PENDING) job_queue rows matching the filters; return the number removed.
 
-    PENDING jobs are always excluded, regardless of filters, so an active
-    queue can never be purged by accident. Deleting a job_queue row cascades
-    to its job_skip_details rows via ON DELETE CASCADE. Exactly one of
-    min_age_days or oldest_count is expected to be provided by the caller:
-    min_age_days deletes rows at least that many days old (by
-    completed_at/updated_at/created_at, 0 matches every terminal job up to
-    now), while oldest_count deletes the N oldest matching rows by that same
-    age fallback regardless of age. When dry_run is True, no rows are
-    deleted - the matching count is returned instead.
+    PENDING jobs are never purged. The delete cascades to job_skip_details. The caller gives min_age_days (0 = all
+    terminal jobs) or oldest_count (the N oldest rows, whatever their age). With dry_run=True only the count returns.
     """
     conditions = ["status != 'PENDING'"]
     params: list = []

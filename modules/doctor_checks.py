@@ -1,3 +1,5 @@
+"""The --doctor health check: config, paths, mapping.json and credentials, returned as one report."""
+
 import os
 import re
 import sys
@@ -8,6 +10,7 @@ from modules.mapping_manager import find_missing_mapped_destinations, validate_m
 
 
 class DoctorReport(TypedDict):
+    """Result of run_doctor(): overall ok flag plus the error, warning and passed-check texts."""
     ok: bool
     platform: str
     errors: list[str]
@@ -29,24 +32,29 @@ def _platform_family(platform_name: str) -> str:
 
 
 def _config_file_path() -> str:
+    """Return the path of config.json beside the app files."""
     app_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(app_dir, "config.json")
 
 
 def _mapping_file_path() -> str:
+    """Return the path of mapping.json beside the app files."""
     app_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(app_dir, "mapping.json")
 
 
 def _looks_windows_style(path_value: str) -> bool:
+    """True for a path that starts with a drive letter or is a UNC (network share) path."""
     return bool(_WINDOWS_DRIVE_RE.match(path_value)) or path_value.startswith("\\\\")
 
 
 def _looks_posix_style(path_value: str) -> bool:
+    """True for a path starting with /."""
     return path_value.startswith("/")
 
 
 def _warn_path_style_mismatch(path_value: Optional[str], platform_name: str) -> str | None:
+    """Return a warning when a path is written in the other OS's style (e.g. a drive letter on Linux), else None."""
     if not isinstance(path_value, str) or not path_value.strip():
         return None
 
@@ -66,6 +74,7 @@ def _warn_path_style_mismatch(path_value: Optional[str], platform_name: str) -> 
 
 
 def _iter_config_paths(config_payload: dict) -> list[tuple[str, str]]:
+    """List the (label, path) pairs for every directory setting in config.json."""
     paths = []
     paths_section = config_payload.get("paths")
     if not isinstance(paths_section, dict):
@@ -79,6 +88,7 @@ def _iter_config_paths(config_payload: dict) -> list[tuple[str, str]]:
 
 
 def _iter_mapping_paths(mapping_payload: dict) -> list[tuple[str, str]]:
+    """List the (label, path) pairs for every repository destination in mapping.json."""
     paths = []
     repositories = mapping_payload.get("repositories")
     if not isinstance(repositories, list):
@@ -96,6 +106,10 @@ def _iter_mapping_paths(mapping_payload: dict) -> list[tuple[str, str]]:
 
 
 def run_doctor() -> DoctorReport:
+    """Run all health checks (platform, config, mapping, paths, credentials) and return one DoctorReport.
+
+    Read-only: nothing is created or changed.
+    """
     errors: list[str] = []
     warnings: list[str] = []
     checks: list[str] = []

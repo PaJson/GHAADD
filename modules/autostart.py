@@ -41,12 +41,14 @@ Runner = Callable[..., "subprocess.CompletedProcess[str]"]
 
 @dataclass(frozen=True)
 class AutostartResult:
+    """Outcome of an install/uninstall: `ok` plus a plain-language `message` for the user."""
     ok: bool
     message: str
 
 
 @dataclass(frozen=True)
 class AutostartStatus:
+    """Whether autostart is supported here, installed, and a short `detail` text for display."""
     supported: bool
     installed: bool
     detail: str
@@ -62,10 +64,12 @@ def run_hidden(command: list[str], timeout: float = 30) -> "subprocess.Completed
 
 
 def _run(command: list[str]) -> "subprocess.CompletedProcess[str]":
+    """Default command runner (a hidden window on Windows); tests pass a fake runner instead."""
     return run_hidden(command)
 
 
 def _platform(platform: Optional[str]) -> str:
+    """Return the given platform name, or sys.platform (a parameter so tests can fake it)."""
     return platform if platform is not None else sys.platform
 
 
@@ -84,6 +88,7 @@ def set_autostart(enabled: bool) -> AutostartResult:
 
 
 def main_script_path() -> str:
+    """Return the path of main.py, which every autostart entry runs."""
     return os.path.join(_APP_DIR, "main.py")
 
 
@@ -99,6 +104,7 @@ def windowless_python(executable: Optional[str] = None) -> str:
 
 
 def unit_path(home: Optional[str] = None) -> str:
+    """Return the path of the systemd user unit file (Linux)."""
     return os.path.join(home or os.path.expanduser("~"), ".config", "systemd", "user", SERVICE_NAME)
 
 
@@ -108,6 +114,7 @@ def _systemd_quote(text: str) -> str:
 
 
 def systemd_unit_text(python: str, script: str, workdir: str) -> str:
+    """Build the systemd user unit: runs `main.py --daemon`, restarts only on failure (a clean Stop stays stopped)."""
     return (
         "[Unit]\n"
         "Description=GHAADD GitHub release downloader (polling daemon)\n"
@@ -128,6 +135,7 @@ def systemd_unit_text(python: str, script: str, workdir: str) -> str:
 
 
 def windows_run_command(python: Optional[str] = None, script: Optional[str] = None) -> str:
+    """Build the Run-key command line: windowless python starting a detached daemon."""
     return f'"{windowless_python(python)}" "{script or main_script_path()}" --daemon-detached'
 
 
@@ -144,6 +152,10 @@ def install_autostart(
     trigger: str = TRIGGER_LOGON,
     uid: Optional[int] = None,
 ) -> AutostartResult:
+    """Make the daemon start at login on this platform (systemd unit, Task Scheduler/Run key, or LaunchAgent).
+
+    Runner, registry, platform and home are parameters so tests never touch the real system.
+    """
     system = _platform(platform)
     if mode not in (MODE_AUTO, MODE_RUNKEY, MODE_TASK) or trigger not in (TRIGGER_LOGON, TRIGGER_MANUAL):
         return AutostartResult(False, f"Unknown autostart mode or trigger ({mode}, {trigger}).")
@@ -171,6 +183,7 @@ def uninstall_autostart(
     home: Optional[str] = None,
     uid: Optional[int] = None,
 ) -> AutostartResult:
+    """Remove the autostart entry or entries of this platform; on Windows both the task and the Run key."""
     system = _platform(platform)
     if system == "win32":
         task = _uninstall_task(runner)
@@ -193,6 +206,7 @@ def autostart_status(
     home: Optional[str] = None,
     uid: Optional[int] = None,
 ) -> AutostartStatus:
+    """Report whether autostart is installed on this platform, without changing anything."""
     system = _platform(platform)
     if system == "win32":
         task, run_key = _status_task(runner), _status_windows(registry)
@@ -209,10 +223,12 @@ def autostart_status(
 
 
 def _systemctl(runner: Runner, *arguments: str) -> "subprocess.CompletedProcess[str]":
+    """Run `systemctl --user ...` through the runner."""
     return runner(["systemctl", "--user", *arguments])
 
 
 def _install_linux(runner: Runner, home: Optional[str], python: Optional[str]) -> AutostartResult:
+    """Write the systemd user unit, then reload systemd and enable it."""
     path = unit_path(home)
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -237,6 +253,7 @@ def _install_linux(runner: Runner, home: Optional[str], python: Optional[str]) -
 
 
 def _uninstall_linux(runner: Runner, home: Optional[str]) -> AutostartResult:
+    """Disable and delete the systemd user unit; problems are collected into one message."""
     path = unit_path(home)
     if not os.path.isfile(path):
         return AutostartResult(True, "Autostart was not installed.")
@@ -260,6 +277,7 @@ def _uninstall_linux(runner: Runner, home: Optional[str]) -> AutostartResult:
 
 
 def _status_linux(runner: Runner, home: Optional[str]) -> AutostartStatus:
+    """Read the unit's enabled/active state from systemd."""
     path = unit_path(home)
     if not os.path.isfile(path):
         return AutostartStatus(True, False, "not installed")
@@ -272,6 +290,7 @@ def _status_linux(runner: Runner, home: Optional[str]) -> AutostartStatus:
 
 
 def _error_text(result: "subprocess.CompletedProcess[str]") -> str:
+    """Return the most useful text of a failed command (stderr, else stdout, else the exit code)."""
     return (result.stderr or result.stdout or f"exit code {result.returncode}").strip()
 
 
@@ -279,6 +298,10 @@ def _error_text(result: "subprocess.CompletedProcess[str]") -> str:
 
 
 def _winreg(registry: Any) -> Any:
+    """Return the winreg module (or the fake one from tests).
+
+    Imported lazily so that other platforms can still import this file.
+    """
     if registry is not None:
         return registry
     import winreg
@@ -287,6 +310,7 @@ def _winreg(registry: Any) -> Any:
 
 
 def _install_windows(registry: Any, python: Optional[str]) -> AutostartResult:
+    """Write the per-user Run-key value that starts a detached daemon at login."""
     command = windows_run_command(python)
     try:
         reg = _winreg(registry)
@@ -302,6 +326,7 @@ def _install_windows(registry: Any, python: Optional[str]) -> AutostartResult:
 
 
 def _uninstall_windows(registry: Any) -> AutostartResult:
+    """Delete the Run-key value; a missing value counts as success."""
     try:
         reg = _winreg(registry)
         with reg.OpenKey(reg.HKEY_CURRENT_USER, WINDOWS_RUN_KEY, 0, reg.KEY_WRITE) as key:
@@ -314,6 +339,7 @@ def _uninstall_windows(registry: Any) -> AutostartResult:
 
 
 def _status_windows(registry: Any) -> AutostartStatus:
+    """Read the Run-key value, if any."""
     try:
         reg = _winreg(registry)
         with reg.OpenKey(reg.HKEY_CURRENT_USER, WINDOWS_RUN_KEY, 0, reg.KEY_READ) as key:
@@ -364,11 +390,13 @@ def task_xml(command: str, arguments: str, workdir: str, user: str, trigger: str
 
 
 def _windows_user() -> str:
+    """Return the Windows account (domain and user name) the task runs as."""
     domain, name = os.environ.get("USERDOMAIN", ""), os.environ.get("USERNAME", "")
     return f"{domain}\\{name}" if domain and name else name
 
 
 def _install_task(runner: Runner, trigger: str, python: Optional[str]) -> AutostartResult:
+    """Create the Task Scheduler task from generated XML (written to a temporary UTF-16 file for schtasks)."""
     xml = task_xml(windowless_python(python), f'"{main_script_path()}" --daemon', _APP_DIR, _windows_user(), trigger)
     handle, path = tempfile.mkstemp(suffix=".xml", prefix="ghaadd_task_")
     try:
@@ -393,6 +421,7 @@ def _install_task(runner: Runner, trigger: str, python: Optional[str]) -> Autost
 
 
 def _uninstall_task(runner: Runner) -> AutostartResult:
+    """Delete the Task Scheduler task; a missing task counts as success."""
     try:
         if runner(["schtasks", "/Query", "/TN", TASK_NAME]).returncode != 0:
             return AutostartResult(True, "Scheduled task not installed.")
@@ -405,6 +434,7 @@ def _uninstall_task(runner: Runner) -> AutostartResult:
 
 
 def _status_task(runner: Runner) -> AutostartStatus:
+    """Ask Task Scheduler whether the task exists."""
     try:
         result = runner(["schtasks", "/Query", "/TN", TASK_NAME])
     except (OSError, subprocess.SubprocessError):
@@ -418,6 +448,7 @@ def _status_task(runner: Runner) -> AutostartStatus:
 
 
 def plist_path(home: Optional[str] = None) -> str:
+    """Return the path of the LaunchAgent plist (macOS)."""
     return os.path.join(home or os.path.expanduser("~"), "Library", "LaunchAgents", f"{LAUNCHD_LABEL}.plist")
 
 
@@ -438,10 +469,12 @@ def launchd_plist_bytes(python: str, script: str, workdir: str) -> bytes:
 
 
 def _launchd_domain(uid: Optional[int]) -> str:
+    """Return launchd's per-user domain, `gui/<uid>`."""
     return f"gui/{uid if uid is not None else getattr(os, 'getuid')()}"
 
 
 def _install_macos(runner: Runner, home: Optional[str], python: Optional[str], uid: Optional[int]) -> AutostartResult:
+    """Write the LaunchAgent plist and load it with launchctl."""
     path = plist_path(home)
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -461,6 +494,7 @@ def _install_macos(runner: Runner, home: Optional[str], python: Optional[str], u
 
 
 def _uninstall_macos(runner: Runner, home: Optional[str], uid: Optional[int]) -> AutostartResult:
+    """Unload the LaunchAgent and delete its plist."""
     path = plist_path(home)
     if not os.path.isfile(path):
         return AutostartResult(True, "Autostart was not installed.")
@@ -476,6 +510,7 @@ def _uninstall_macos(runner: Runner, home: Optional[str], uid: Optional[int]) ->
 
 
 def _status_macos(runner: Runner, home: Optional[str], uid: Optional[int]) -> AutostartStatus:
+    """Check whether the plist exists and launchd has it loaded."""
     path = plist_path(home)
     if not os.path.isfile(path):
         return AutostartStatus(True, False, "not installed")

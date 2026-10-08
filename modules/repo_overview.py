@@ -20,7 +20,7 @@ STATUS_IDLE = "Idle"
 STATUS_INACTIVE = "Inactive"
 STATUS_FAILED = "Failed"
 # "Running" needs a signal that is not in job_queue (the daemon does not record
-# the job in progress); see ToDo step 3 (daemon status publishes the current job).
+# the job in progress); the daemon publishes it in its status file (daemon_lock.publishing_current_job).
 STATUS_RUNNING = "Running"
 
 NO_VALUE = "-"
@@ -28,6 +28,7 @@ NO_VALUE = "-"
 
 @dataclass(frozen=True)
 class RepoRow:
+    """One Mappings table row: the display texts plus the hover notes and flags the table needs."""
     repo: str  # owner/repo, also the row id
     folder: str
     destination: str
@@ -165,11 +166,9 @@ def build_rows(
 ) -> list[RepoRow]:
     """Return table rows, most recently worked-on first, then by folder name.
 
-    `summaries` is keyed by lower-cased owner/repo. `intervals_for(entry)` returns
-    how many recheck steps the repo has (own list or the global default).
-    `running_repo` is the owner/repo the daemon is processing right now, if any.
-    `limit_warned` holds the lower-cased names that have a folder-limit warning on record; `folder_counts`
-    the latest counted folders per lower-cased repo (the Limit column then reads "12 / 15").
+    `summaries` is keyed by lower-cased owner/repo; `intervals_for(entry)` gives the repo's number of recheck steps.
+    `running_repo` is the repo the daemon is processing now. `limit_warned` names repos with a stored limit warning;
+    `folder_counts` holds the latest counted folders (the Limit column then reads "12 / 15").
     """
     running_key = running_repo.lower() if running_repo else None
     rows: list[RepoRow] = []

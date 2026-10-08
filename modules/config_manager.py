@@ -1,3 +1,5 @@
+"""Loads and validates config.json; all writes go through update_config() / set_config_values() (locked, atomic)."""
+
 import copy
 import hashlib
 import json
@@ -46,6 +48,7 @@ _T = TypeVar("_T")
 
 
 class FolderSettings(TypedDict):
+    """Names of the working folders (relative to ghaadd_root) used while downloading, see get_folder_settings()."""
     ghaadd_root: str
     processing: str
     complete: str
@@ -166,6 +169,7 @@ def _serialize_config(config: Dict[str, Any]) -> str:
     text = json.dumps(config, indent=2, ensure_ascii=False)
 
     def _collapse(match: "re.Match[str]") -> str:
+        """Put a short JSON list that json.dumps spread over many lines back on one line."""
         return "[" + re.sub(r",\n\s*", ", ", match.group(1)) + "]"
 
     text = re.sub(r"\[\n\s*(-?\d+(?:,\n\s*-?\d+)*)\n\s*\]", _collapse, text)
@@ -210,15 +214,9 @@ def _write_config_atomically(file_path: str, serialized: str) -> None:
 def update_config(mutator: Callable[[Dict[str, Any]], _T]) -> _T:
     """Apply one change to config.json safely and return the mutator's result.
 
-    The single write path for config.json (GUI/CLI), mirroring
-    mapping_manager.update_mapping: under a cross-process lock it re-reads the
-    file fresh, lets `mutator` change the dict in place, then writes it
-    atomically. The file is not rewritten when nothing changed. The daemon
-    loads config once at startup, so changes apply on its next start.
-
-    Raises ConfigLockTimeout when the lock cannot be taken in time and
-    ConfigUnreadableError when the existing file is not valid JSON. In dry-run
-    mode the mutator runs on the loaded config but nothing is locked or written.
+    The single write path for config.json: under a file lock it re-reads the file, lets `mutator` change the
+    dict, then writes atomically (nothing is written if nothing changed). The daemon reads config once at
+    startup. Raises ConfigLockTimeout / ConfigUnreadableError; in dry-run mode nothing is locked or written.
     """
     file_path = _config_file_path()
     if is_dry_run():
@@ -251,6 +249,7 @@ def set_config_values(changes: Dict[str, Any]) -> bool:
     """
 
     def _apply(config: Dict[str, Any]) -> bool:
+        """Set every dotted key ("a.b") from `changes`, creating missing sections; True when anything changed."""
         before = copy.deepcopy(config)
         for dotted_key, value in changes.items():
             *parents, leaf = dotted_key.split(".")
@@ -292,6 +291,7 @@ def add_missing_defaults() -> bool:
     """
 
     def _apply(config: Dict[str, Any]) -> bool:
+        """Add each hand-edited default that is missing (never touching an existing value); True when any was added."""
         changed = False
         for dotted_key, value in _hand_edited_defaults():
             *parents, leaf = dotted_key.split(".")
@@ -445,7 +445,7 @@ def get_gui_close_to_tray(config=None):
 
 
 def get_gui_notifications_enabled(config=None):
-    """Show tray notifications for new warnings, failed jobs, unmapped repositories and a stopped daemon (gui.notifications, default true)."""
+    """Return gui.notifications (default true): tray notices for new warnings, failed jobs, unmapped repos, a stopped daemon."""
     config = config if config is not None else load_config()
     return _gui_flag(config, "notifications", True)
 
@@ -463,7 +463,7 @@ def get_gui_silenced_warning_types(config=None) -> list[str]:
 
 
 def get_gui_start_minimized(config=None):
-    """Open the GUI minimized (as the minimize button does: in the tray, or on the taskbar) instead of showing the window (gui.start_minimized, default false)."""
+    """Return gui.start_minimized (default false): open the GUI minimized, as the minimize button does, not shown."""
     config = config if config is not None else load_config()
     return _gui_flag(config, "start_minimized", False)
 
@@ -491,6 +491,7 @@ def get_all_download_dirs(config: Optional[Dict[str, Any]] = None) -> list[str]:
     unique_dirs: list[str] = []
 
     def add_path(candidate: Any) -> None:
+        """Normalise a configured path and add it to the result once (non-strings and blanks are ignored)."""
         if not isinstance(candidate, str):
             return
         normalized = _normalize_configured_path(candidate)
@@ -544,6 +545,7 @@ def get_folder_settings(config: Optional[Dict[str, Any]] = None) -> FolderSettin
     folders = folders if isinstance(folders, dict) else {}
 
     def _folder_name(key: str, default_value: str) -> str:
+        """Return the configured folder name made safe (no slashes, no leading dots) or the default."""
         value = folders.get(key)
         if isinstance(value, str):
             candidate = value.strip().strip("\\/")
@@ -565,10 +567,8 @@ def get_folder_settings(config: Optional[Dict[str, Any]] = None) -> FolderSettin
 def get_config_fingerprint(config: Optional[Dict[str, Any]] = None) -> str:
     """Return a short hash of the *effective* settings the daemon uses.
 
-    The daemon publishes it at startup and the GUI compares it with the current
-    config.json to tell whether a restart is needed. It is built from the
-    normalized getters, so unrelated edits (the GUI's window size, formatting,
-    a default written out explicitly) do not change it.
+    The daemon publishes it at startup and the GUI compares it with config.json to decide if a restart is
+    needed. It is built from the normalised getters, so unrelated edits (window size, formatting) do not change it.
     """
     config = config if config is not None else load_config()
     effective = {

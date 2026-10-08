@@ -1,3 +1,5 @@
+"""Download release assets into the destination folders from mapping.json, with duplicate guards and folder limits."""
+
 import datetime
 import os
 import re
@@ -1024,6 +1026,7 @@ def download_all_assets(
     normal_downloaded_count = 0
 
     def refresh_release_state():
+        """Reload the stored state of this release from state.db into the enclosing function's variable."""
         nonlocal release_state
         if state_db is not None:
             release_state = load_release_state(state_db, release_key)

@@ -55,6 +55,7 @@ def run_report() -> DoctorReport:
 
 
 def summary_line(report: Mapping[str, Any]) -> str:
+    """Turn a doctor report into the one-line verdict shown on the Doctor button and dialog."""
     errors, warnings = len(report["errors"]), len(report["warnings"])
     if errors:
         return f"{errors} problem(s) need fixing" + (f", {warnings} warning(s)." if warnings else ".")

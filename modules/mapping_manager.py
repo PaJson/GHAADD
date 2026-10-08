@@ -1,3 +1,5 @@
+"""Owns mapping.json: validated, locked, atomic reads and writes of the per-repository settings."""
+
 import copy
 import json
 import os
@@ -68,6 +70,7 @@ _BACKED_UP_INVALID_MAPPING_SIGNATURES: set[tuple[str, int, int]] = set()
 
 
 class MappingValidationResult(TypedDict):
+    """Result of validate_mapping_schema(): `ok` plus the error and warning texts to show the user."""
     ok: bool
     errors: list[str]
     warnings: list[str]
@@ -223,6 +226,7 @@ def _collapse_recheck_intervals_arrays(serialized_json: str) -> str:
     )
 
     def _replace(match: re.Match[str]) -> str:
+        """Put the lines of one matched JSON list on a single line."""
         body = match.group("body") or ""
         values = [
             line.strip().rstrip(",")
@@ -242,6 +246,7 @@ def _collapse_limit_release_type_folders_arrays(serialized_json: str) -> str:
     )
 
     def _replace(match: re.Match[str]) -> str:
+        """Put the lines of one matched JSON list on a single line."""
         body = match.group("body") or ""
         values = [
             line.strip().rstrip(",")
@@ -261,6 +266,7 @@ def _collapse_skiplist_arrays(serialized_json: str) -> str:
     )
 
     def _replace(match: re.Match[str]) -> str:
+        """Put the lines of one matched JSON list on a single line."""
         body = match.group("body") or ""
         values = [
             line.strip().rstrip(",")
@@ -273,7 +279,7 @@ def _collapse_skiplist_arrays(serialized_json: str) -> str:
 
 
 def load_mapping() -> dict[str, list[dict[str, Any]]]:
-    """Load mapping.json with safe fallback payload (keys of an older version are understood, see _LEGACY_KEY_RENAMES)."""
+    """Load mapping.json with a safe fallback payload; keys of an older version are understood (_LEGACY_KEY_RENAMES)."""
     return _load_mapping(upgrade=True)
 
 
@@ -381,6 +387,7 @@ class MappingValidationError(ValueError):
     """Raised when a requested mapping change would be invalid; nothing was written."""
 
     def __init__(self, errors: list[str]) -> None:
+        """Keep the list of problems; the exception text joins them with "; "."""
         super().__init__("; ".join(errors))
         self.errors = list(errors)
 
@@ -446,19 +453,9 @@ def _write_mapping_atomically(file_path: str, serialized_payload: str) -> None:
 def update_mapping(mutator: Callable[[dict[str, list[dict[str, Any]]]], _T]) -> _T:
     """Apply one change to mapping.json safely and return the mutator's result.
 
-    The single write path for every writer (daemon, CLI, GUI). Under a
-    cross-process lock it re-reads the file fresh, lets `mutator` change the
-    payload in place, then writes the sorted result atomically. Because the
-    payload is always re-read inside the lock, a writer only ever changes what
-    its mutator touches and cannot overwrite another process's updates. The
-    file is not rewritten when the mutator changes nothing.
-
-    The mutator must be quick and must not call update_mapping itself (the
-    lock is not re-entrant across calls). In dry-run mode the mutator still
-    runs on the loaded payload so results are accurate, but nothing is locked
-    or written.
-
-    Raises MappingLockTimeout when the lock cannot be taken in time.
+    The single write path for daemon, CLI and GUI: under a file lock it re-reads the file, lets `mutator` change
+    the payload, then writes the sorted result atomically, so no writer overwrites another's updates. The mutator
+    must be quick and must not call update_mapping itself. Dry-run: nothing is locked or written.
     """
     if is_dry_run():
         return mutator(load_mapping())
@@ -678,6 +675,7 @@ def upsert_repository_mapping(
     )
 
     def _apply(mapping_payload: dict[str, list[dict[str, Any]]]) -> tuple[bool, bool]:
+        """Mutator: store the notification stamp and fill missing daemon-owned fields; returns (changed, found)."""
         repositories = mapping_payload["repositories"]
         for entry in repositories:
             if not _is_same_repository_identity(entry, repo):
@@ -740,6 +738,7 @@ def mark_repository_finalized(
     finalized_value = finalized_stamp or _current_mapping_stamp()
 
     def _apply(mapping_payload: dict[str, list[dict[str, Any]]]) -> bool:
+        """Mutator: store `last_finalized` for the repository; True when the value changed."""
         for entry in mapping_payload["repositories"]:
             if not _is_same_repository_identity(entry, normalized_repo):
                 continue
@@ -785,21 +784,21 @@ def _apply_validated(
 def update_repository_fields(repo: str, changes: dict[str, Any]) -> bool:
     """Change only the given fields of one repository entry (GUI/CLI edit path).
 
-    Re-reads mapping.json under the lock, so the daemon's own updates to other
-    fields are preserved. Returns True when the file changed. Raises ValueError
-    for daemon-owned fields or the entry name, KeyError when the repository is
-    not mapped, and MappingValidationError (nothing written) when the new
-    values would make the entry invalid.
+    Re-reads mapping.json under the lock, so the daemon's updates to other fields survive. Returns True when the
+    file changed. Raises ValueError for daemon-owned fields, KeyError when not mapped, and
+    MappingValidationError (nothing written) when the new values are invalid.
     """
     _reject_non_editable_fields(changes)
     normalized_repo = str(repo or "").strip()
 
     def _apply(mapping_payload: dict[str, list[dict[str, Any]]]) -> bool:
+        """Mutator: apply `changes` to the repository's entry under validation; KeyError when it is not mapped."""
         for entry in mapping_payload["repositories"]:
             if not _is_same_repository_identity(entry, normalized_repo):
                 continue
 
             def _change() -> bool:
+                """Write the changes into the entry; True when any value actually differs."""
                 changed = any(entry.get(key) != value for key, value in changes.items())
                 entry.update(changes)
                 return changed
@@ -814,10 +813,9 @@ def update_repository_fields(repo: str, changes: dict[str, Any]) -> bool:
 def add_repository(repo: str, fields: Optional[dict[str, Any]] = None) -> None:
     """Add a new repository entry with default values plus optional `fields`.
 
-    `repo` must look like 'owner/repo'. Raises MappingValidationError when the
-    name is malformed, already mapped (case-insensitive), or the resulting entry
-    is invalid, and ValueError for daemon-owned fields in `fields`. The entry's
-    last_notification starts empty because no notification was seen yet.
+    `repo` must look like 'owner/repo'. Raises MappingValidationError when the name is malformed, already mapped
+    (case-insensitive) or the entry would be invalid, and ValueError for daemon-owned fields. last_notification
+    starts empty because no notification was seen yet.
     """
     extra_fields = dict(fields or {})
     _reject_non_editable_fields(extra_fields)
@@ -829,6 +827,7 @@ def add_repository(repo: str, fields: Optional[dict[str, Any]] = None) -> None:
         )
 
     def _apply(mapping_payload: dict[str, list[dict[str, Any]]]) -> None:
+        """Mutator: append a new skeleton entry; MappingValidationError when the repository already exists."""
         if any(
             _is_same_repository_identity(entry, normalized_repo)
             for entry in mapping_payload["repositories"]
@@ -838,6 +837,7 @@ def add_repository(repo: str, fields: Optional[dict[str, Any]] = None) -> None:
             )
 
         def _change() -> None:
+            """Create the new entry from the skeleton plus the extra fields and append it."""
             entry = _build_skeleton_entry(normalized_repo, "")
             entry.update(extra_fields)
             mapping_payload["repositories"].append(entry)
@@ -856,6 +856,7 @@ def remove_repository(repo: str) -> bool:
     normalized_repo = str(repo or "").strip()
 
     def _apply(mapping_payload: dict[str, list[dict[str, Any]]]) -> bool:
+        """Mutator: drop the repository's entry; True when one was removed."""
         repositories = mapping_payload["repositories"]
         remaining = [
             entry for entry in repositories

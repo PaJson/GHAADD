@@ -20,6 +20,7 @@ _WINDOWS_DETACH_FLAGS = 0x00000008 | 0x00000200
 
 
 def get_main_script_path() -> str:
+    """Return the path of main.py, which the daemon is started from."""
     return os.path.join(_APP_DIR, "main.py")
 
 

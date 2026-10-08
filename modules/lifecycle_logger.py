@@ -1,3 +1,5 @@
+"""Writes structured lifecycle events and per-cycle summaries to state.db (replaces the old plain-text logs)."""
+
 from datetime import datetime
 from typing import Optional
 

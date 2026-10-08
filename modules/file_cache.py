@@ -43,6 +43,7 @@ class StatCache(Generic[T]):
         max_age: float = 30.0,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
+        """Take a function listing the watched paths, the function computing the value, and the safety-refresh age."""
         self._paths = paths
         self._compute = compute
         self._max_age = max_age
@@ -53,6 +54,7 @@ class StatCache(Generic[T]):
         self._computed_at = 0.0
 
     def get(self) -> T:
+        """Return the cached value, recomputing it when a watched file changed or the safety age has passed."""
         paths = tuple(self._paths())
         key = (paths, file_signature(paths))
         now = self._clock()

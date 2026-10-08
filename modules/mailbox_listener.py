@@ -1,3 +1,5 @@
+"""Reads GitHub release notification e-mails over IMAP and turns them into queue jobs; mails are deleted on ingest."""
+
 import os
 import re
 import time
@@ -71,10 +73,8 @@ def parse_github_subject(subject):
 def get_pending_notifications(limit=None):
     """Fetch unread GitHub release notifications from Gmail.
 
-    Return a list of dicts with keys: repo, tag, release_type, email_id.
-    
-    Args:
-        limit: Maximum number of emails to process. None means all.
+    Returns a list of dicts with the keys repo, tag, release_type and email_id.
+    `limit` is the maximum number of emails to process (None = all).
     """
     # Validate required email credentials.
     if not EMAIL or not PASSWORD:

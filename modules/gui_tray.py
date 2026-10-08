@@ -43,6 +43,7 @@ MAX_NOTIFICATION_NAMES = 3  # repositories listed by name in one notification
 
 @dataclass(frozen=True)
 class Notice:
+    """A tray notification: a title and a message."""
     title: str
     message: str
 
@@ -66,6 +67,7 @@ def _dynamic(check: Callable[[Any], bool]) -> Any:
 
 
 def _names(repos: Iterable[str]) -> str:
+    """Join up to MAX_NOTIFICATION_NAMES repository names, with "(+N more)" for the rest."""
     unique = sorted({repo for repo in repos if repo})
     shown = ", ".join(unique[:MAX_NOTIFICATION_NAMES])
     extra = len(unique) - MAX_NOTIFICATION_NAMES
@@ -73,7 +75,7 @@ def _names(repos: Iterable[str]) -> str:
 
 
 def warnings_notice(rows: Sequence[Any]) -> Optional[Notice]:
-    """One notice for new warning rows (anything with .repo and .message): the text itself for one, a count for several."""
+    """Build one notice for new warning rows (anything with .repo and .message): the text for one, a count for several."""
     if not rows:
         return None
     if len(rows) == 1:
@@ -84,6 +86,7 @@ def warnings_notice(rows: Sequence[Any]) -> Optional[Notice]:
 
 
 def failed_jobs_notice(jobs: Sequence[dict[str, Any]]) -> Optional[Notice]:
+    """Build the notice for jobs that failed (one named job, or a count); None when there are none."""
     if not jobs:
         return None
     if len(jobs) == 1:
@@ -94,6 +97,7 @@ def failed_jobs_notice(jobs: Sequence[dict[str, Any]]) -> Optional[Notice]:
 
 
 def unmapped_notice(repos: Sequence[str]) -> Optional[Notice]:
+    """Build the notice for repositories that have no destination yet; None when there are none."""
     if not repos:
         return None
     if len(repos) == 1:
@@ -102,6 +106,7 @@ def unmapped_notice(repos: Sequence[str]) -> Optional[Notice]:
 
 
 def limit_notice(repos: Sequence[str]) -> Optional[Notice]:
+    """Build the notice for repositories whose folder is over its limit; None when there are none."""
     if not repos:
         return None
     if len(repos) == 1:
@@ -110,6 +115,7 @@ def limit_notice(repos: Sequence[str]) -> Optional[Notice]:
 
 
 def daemon_stopped_notice() -> Notice:
+    """Build the notice shown when the daemon stopped without Stop/Restart from the GUI."""
     return Notice("GHAADD daemon stopped", "The polling daemon is no longer running. Nothing is downloaded until it is started.")
 
 
@@ -117,9 +123,11 @@ class NewItemTracker:
     """Reports the items that are new since the last call; the first call only records what is already there."""
 
     def __init__(self) -> None:
+        """Start with no baseline: the first look only records what exists, so there is no notice flood at startup."""
         self._known: Optional[set[str]] = None
 
     def new(self, items: Iterable[str]) -> list[str]:
+        """Return the items not seen in the previous call (empty on the very first call, which sets the baseline)."""
         current = set(items)
         if self._known is None:
             self._known = current
@@ -133,6 +141,7 @@ class NewItemTracker:
 
 
 def icon_state(running: bool, paused: bool) -> str:
+    """Pick the icon state: stopped, paused or running."""
     if not running:
         return STATE_STOPPED
     return STATE_PAUSED if paused else STATE_RUNNING
@@ -152,6 +161,7 @@ def tooltip_text(app_name: str, state: str, unread_warnings: int, unmapped: int,
 
 
 def needs_attention(unread_warnings: int, unmapped: int, failed_unseen: int = 0) -> bool:
+    """True when the icon should show its attention dot (unread warnings, unmapped or failed jobs)."""
     return unread_warnings > 0 or unmapped > 0 or failed_unseen > 0
 
 
@@ -196,11 +206,10 @@ WINDOWS_ID_KEY = r"Software\Classes\AppUserModelId"
 
 
 def register_windows_identity(app_id: str, display_name: str, icon_path: str, registry: Any = None) -> bool:
-    """Tell Windows what to call the app in notifications and the notification settings (otherwise "Python").
+    """Tell Windows what to call the app in notifications and their settings (otherwise "Python").
 
-    Writes the per-user (no admin rights) registry key AppUserModelId/<app_id> under HKEY_CURRENT_USER/Software/Classes
-    with a display name and icon, only when they differ. `app_id` is the identity the GUI process already declares. Does nothing and
-    returns False off Windows or when the registry cannot be written.
+    Writes the per-user registry key AppUserModelId/<app_id> (no admin rights) with a display name and icon, only
+    when they differ. Does nothing and returns False off Windows or when the registry cannot be written.
     """
     if registry is None:
         try:
@@ -230,6 +239,7 @@ _CREATE_NO_WINDOW = 0x08000000
 
 
 def _ps_quote(text: str) -> str:
+    """Quote text as a single-quoted PowerShell string."""
     return "'" + text.replace("'", "''") + "'"
 
 
@@ -277,18 +287,22 @@ class MenuState:
 
     @property
     def can_start(self) -> bool:
+        """Start daemon is offered only while no daemon runs."""
         return not self.daemon_running
 
     @property
     def can_poll(self) -> bool:
+        """Poll now is offered while a daemon runs."""
         return self.daemon_running  # also while paused: it polls once and stays paused
 
     @property
     def can_pause(self) -> bool:
+        """Pause/Resume is offered while a daemon runs."""
         return self.daemon_running  # also while paused: the entry then reads "Resume polling"
 
 
 def toggle_label(app_name: str, window_visible: bool) -> str:
+    """Return the first tray menu entry: "Hide <app>" while the window is visible, else "Show <app>"."""
     return f"Hide {app_name}" if window_visible else f"Show {app_name}"
 
 
@@ -305,6 +319,7 @@ class TrayIcon:
         base_image_path: Optional[str] = None,
         toast_app_id: Optional[str] = None,
     ) -> None:
+        """Remember the app name, the label callback for Pause/Resume and the optional icon image and toast id."""
         self._toast_app_id = toast_app_id  # Windows: show notifications as toasts under this app id
         self._app_name = app_name
         self._paused_label = paused_label
@@ -354,9 +369,11 @@ class TrayIcon:
 
     @property
     def active(self) -> bool:
+        """True once the tray icon is running."""
         return self._icon is not None
 
     def pending_actions(self) -> list[str]:
+        """Return and clear the menu actions queued by the tray thread (the GUI thread then handles them)."""
         actions: list[str] = []
         while True:
             try:
@@ -388,6 +405,7 @@ class TrayIcon:
         self._shown = (state, attention, tooltip)
 
     def notify(self, notice: Notice) -> None:
+        """Show a notice: a Windows toast when possible (in a thread), else a tray balloon."""
         if self._icon is None:
             return
         if self._toast_app_id and sys.platform == "win32":
@@ -397,10 +415,12 @@ class TrayIcon:
         self._balloon(notice)
 
     def _toast_or_balloon(self, notice: Notice) -> None:
+        """Try the Windows toast and fall back to the tray balloon if it fails."""
         if not send_windows_toast(self._toast_app_id or "", notice):
             self._balloon(notice)
 
     def _balloon(self, notice: Notice) -> None:
+        """Show the notice as a tray balloon; some Linux trays cannot, which is ignored."""
         icon = self._icon
         if icon is None:
             return
@@ -410,6 +430,7 @@ class TrayIcon:
             pass
 
     def stop(self) -> None:
+        """Remove the tray icon (safe to call twice)."""
         icon, self._icon = self._icon, None
         if icon is not None:
             try:

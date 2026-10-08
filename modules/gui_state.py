@@ -23,6 +23,7 @@ _GEOMETRY_PATTERN = re.compile(r"^(\d+)x(\d+)\+(-?\d+)\+(-?\d+)$")
 
 @dataclass(frozen=True)
 class WindowState:
+    """Remembered window geometry: size, position (None = let the OS place it) and maximized flag."""
     width: int
     height: int
     x: Optional[int] = None
@@ -41,6 +42,7 @@ def parse_geometry(geometry: str) -> Optional[WindowState]:
 
 
 def _as_int(value: Any) -> Optional[int]:
+    """Return the value if it is a real int (not a bool), else None."""
     return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 

@@ -1,3 +1,5 @@
+"""GHAADD command-line entry point: one-shot CLI commands and the polling daemon (see CLAUDE.md)."""
+
 import os
 import random
 import sys
@@ -58,10 +60,8 @@ _ORIGINAL_STDERR = sys.stderr
 def _configure_output_encoding():
     """Make console output UTF-8 and unable to crash on a character the stream cannot encode.
 
-    The console handles emoji, but a redirected stream (the GUI's Start button, a service, a
-    scheduled task, "> file") falls back to the Windows locale encoding (cp1252), where the
-    first emoji print raised UnicodeEncodeError and killed the daemon. Output is mirrored to
-    UTF-8 log files anyway, so UTF-8 here changes nothing for the console and fixes the rest.
+    A redirected stream (GUI Start button, service, "> file") falls back to cp1252 on Windows, where the
+    first emoji print raised UnicodeEncodeError and killed the daemon. The log files are UTF-8 anyway.
     """
     for stream in (sys.stdout, sys.stderr):
         reconfigure = getattr(stream, "reconfigure", None)  # absent on exotic streams and under pythonw
@@ -77,10 +77,15 @@ class TeeStream:
     """Mirror writes to terminal and a log file stream."""
 
     def __init__(self, primary_stream, secondary_stream):
+        """Remember the real stream (primary) and the optional log file stream (secondary)."""
         self.primary_stream = primary_stream
         self.secondary_stream = secondary_stream
 
     def _disable_secondary_stream(self, exc):
+        """Drop the log file after a write error so logging trouble never stops the daemon.
+
+        The failure is reported once on the original stderr; the console keeps working.
+        """
         if self.secondary_stream is None:
             return
 
@@ -97,6 +102,7 @@ class TeeStream:
         )
 
     def write(self, data):
+        """Write to the console, and to the log file while one is attached."""
         self.primary_stream.write(data)
         if self.secondary_stream is not None:
             try:
@@ -107,6 +113,7 @@ class TeeStream:
         return len(data)
 
     def flush(self):
+        """Flush the console and the log file (if any)."""
         self.primary_stream.flush()
         if self.secondary_stream is not None:
             try:
@@ -115,10 +122,12 @@ class TeeStream:
                 self._disable_secondary_stream(exc)
 
     def isatty(self):
+        """Report whether the console is a terminal (the log file does not count)."""
         return self.primary_stream.isatty()
 
     @property
     def encoding(self):
+        """Report the console's encoding, UTF-8 when the stream has none."""
         return getattr(self.primary_stream, "encoding", "utf-8")
 
 
@@ -131,12 +140,14 @@ class TerminalLog:
     """
 
     def __init__(self, settings, tees):
+        """Keep the log settings and the two TeeStreams (stdout, stderr) whose file side this class switches."""
         self.settings = settings
         self._tees = tees
         self._log_file = None
 
     @property
     def active(self):
+        """Return True while a log file is open and attached to both streams."""
         return self._log_file is not None and all(tee.secondary_stream is not None for tee in self._tees)
 
     def start(self):
@@ -194,8 +205,11 @@ class TerminalLog:
 
 
 def setup_terminal_logging(config):
-    """Route console output through TeeStream. The log file itself starts later, once main() knows
-    it is entering a run mode (so --help and the read-only commands do not leave log files behind)."""
+    """Route console output through TeeStream and return the (still closed) TerminalLog.
+
+    The log file itself starts later, once main() knows it is entering a run mode, so --help and the
+    read-only commands do not leave log files behind.
+    """
     tees = (TeeStream(_ORIGINAL_STDOUT, None), TeeStream(_ORIGINAL_STDERR, None))
     sys.stdout, sys.stderr = tees
     return TerminalLog(get_terminal_log_settings(config), tees)
@@ -252,6 +266,7 @@ def run_polling_loop(
     announced_paused = False
 
     def log_is_active():
+        """Return whether the terminal log file is open right now (published for the GUI)."""
         return bool(terminal_log is not None and terminal_log.active)
 
     def apply_log_override(override):
@@ -263,6 +278,7 @@ def run_polling_loop(
             update_daemon_status(log_active=log_is_active())
 
     def publish_wait_state(paused, next_poll_at):
+        """Publish pause state and next poll time to the status file, and announce pause/resume once."""
         nonlocal announced_paused
         if control_enabled:
             update_daemon_status(paused=paused, next_poll_at=next_poll_at, log_active=log_is_active())
@@ -409,7 +425,11 @@ def run_drain_queue_loop(github_token):
 
 
 def main():
-    """Run the main orchestration flow for ingest and queue processing."""
+    """Entry point: parse the CLI, then run one of the modes (one-shot command, single, drain, once, polling).
+
+    Only mutating run modes take the daemon lock and start the terminal log; dry-run and the read-only
+    commands neither block on nor are blocked by a running daemon.
+    """
     _configure_output_encoding()
     if "--json" not in sys.argv[1:]:  # keep stdout pure JSON for --doctor/--queue-status/--perf-report --json
         print(f"GHAADD {__version__} is starting...")

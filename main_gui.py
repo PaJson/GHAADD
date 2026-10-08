@@ -1,11 +1,8 @@
-"""GHAADD GUI (Tkinter).
+"""GHAADD GUI (Tkinter): monitor and control window for the polling daemon.
 
-Phase 4, step 2: the Mappings tab and the Settings dialog work on real data
-(mapping.json via mapping_manager, config.json via config_manager, queue state
-via gui_data/db_manager). The control bar, Terminal log and status tabs are still
-static placeholders (steps 3-5). The widgets here are a thin view: parsing,
-validation, ordering and data loading live in the toolkit-independent modules
-(gui_forms, gui_data, repo_overview).
+Tabs: Mappings (edit mapping.json), Terminal log, and the status tabs (Warnings, Completed, Folder limits,
+Unmapped); dialogs: Settings, Gmail & GitHub, Doctor, Stats. The widgets here are a thin view: parsing,
+validation, ordering and data loading live in the toolkit-independent modules (gui_forms, gui_data, ...).
 """
 
 from __future__ import annotations
@@ -149,15 +146,18 @@ class Tooltip:
     WRAP_PIXELS = 640  # longer text wraps instead of running off the screen
 
     def __init__(self, widget: tk.Misc) -> None:
+        """Attach a hover-tooltip helper to `widget`."""
         self._widget = widget
         self._window: Optional[tk.Toplevel] = None
         self._job: Optional[str] = None
 
     def schedule(self, text: str, x_root: int, y_root: int) -> None:
+        """Show the tooltip after a short delay at the mouse position (restarting any pending one)."""
         self.hide()
         self._job = self._widget.after(self.DELAY_MS, lambda: self._show(text, x_root, y_root))
 
     def hide(self) -> None:
+        """Cancel a pending tooltip and close a visible one."""
         if self._job is not None:
             self._widget.after_cancel(self._job)
             self._job = None
@@ -166,6 +166,7 @@ class Tooltip:
             self._window = None
 
     def _show(self, text: str, x_root: int, y_root: int) -> None:
+        """Create the tooltip window with the wrapped text, kept on screen."""
         self._job = None
         window = tk.Toplevel(self._widget)
         window.wm_overrideredirect(True)
@@ -191,6 +192,7 @@ class FilterEntry(ttk.Frame):
     """
 
     def __init__(self, master: tk.Misc, textvariable: tk.StringVar, width: int = 20) -> None:
+        """Build the entry with its clear (x) button, bound to `textvariable`."""
         super().__init__(master)
         self._variable = textvariable
         self.columnconfigure(0, weight=1)
@@ -204,10 +206,12 @@ class FilterEntry(ttk.Frame):
         self._sync()
 
     def clear(self) -> None:
+        """Empty the field and put the cursor back in it."""
         self._variable.set("")
         self.entry.focus_set()
 
     def _sync(self) -> None:
+        """Enable the clear button only while the field has text."""
         self.clear_button.state(["!disabled"] if str(self._variable.get()) else ["disabled"])
 
 
@@ -235,6 +239,7 @@ class ControlBar(ttk.Frame):
     }
 
     def __init__(self, master: tk.Misc, status_parent: Optional[tk.Misc] = None) -> None:
+        """Build the three button groups; the daemon status goes into `status_parent` (the footer) when given."""
         super().__init__(master, padding=(10, 8))
 
         # The daemon's status (dot, text, countdown) lives in the window's footer, at the right, when one is given.
@@ -310,6 +315,7 @@ class ControlBar(ttk.Frame):
             self._doctor_tip_text = gui_tooltips.CONTROL_HELP["doctor"]
 
     def _show_restart_tip(self, event: tk.Event) -> None:  # type: ignore[type-arg]
+        """Show the Restart button's hover help."""
         self._restart_tip.schedule(gui_tooltips.CONTROL_HELP["restart"], event.x_root, event.y_root)
 
     def apply_view(self, view: gui_daemon.ControlBarView) -> None:
@@ -341,6 +347,7 @@ class AddRepositoryDialog(tk.Toplevel):
     """Ask for owner/repo and a destination, then add the entry to mapping.json."""
 
     def __init__(self, master: tk.Misc, on_added: Callable[[str], None]) -> None:
+        """Build the dialog asking for a repository name (owner/repo) and its destination."""
         super().__init__(master)
         self.title("Add repository")
         self.resizable(False, False)
@@ -381,6 +388,7 @@ class AddRepositoryDialog(tk.Toplevel):
         self.grab_set()
 
     def _add(self) -> None:
+        """Validate the input, add the repository through mapping_manager and tell the caller."""
         result = gui_forms.build_new_repo(self.name_var.get(), self.dest_var.get())
         if not result.ok:
             self.message.configure(text=" ".join(result.errors))
@@ -445,6 +453,7 @@ class MappingsTab(ttk.Frame):
     CHECK_KEYS = ("active", "shared_destination")  # yes/no fields (a check box instead of text)
 
     def __init__(self, master: tk.Misc, set_status: Callable[[str], None]) -> None:
+        """Build the Mappings tab: filter bar, table and the editor form."""
         super().__init__(master, padding=10)
         self._set_status = set_status
         self._table = gui_data.RepoTable()
@@ -475,6 +484,7 @@ class MappingsTab(ttk.Frame):
     # ----- construction -----
 
     def _build_filter_bar(self) -> None:
+        """Create the filter field and the Active/Inactive selector above the table."""
         bar = ttk.Frame(self)
         bar.grid(row=0, column=0, sticky="ew", pady=(0, 6))
         bar.columnconfigure(1, weight=1)
@@ -492,6 +502,7 @@ class MappingsTab(ttk.Frame):
         self.remove_button.grid(row=0, column=4)
 
     def _build_table(self) -> None:
+        """Create the repository table with its scrollbars, column headings and hover help."""
         self.table_frame = ttk.Frame(self)
         self.table_frame.columnconfigure(0, weight=1)
         self.table_frame.rowconfigure(0, weight=1)
@@ -526,6 +537,7 @@ class MappingsTab(ttk.Frame):
             self._open_folder()
 
     def _build_form(self) -> None:
+        """Create the editor form from FORM_LAYOUT, plus the message row and the Save/Revert/Add/Remove buttons."""
         self.form_frame = ttk.LabelFrame(self, text="Selected repository", padding=10)
         for column in range(len(self.FORM_LAYOUT)):
             self.form_frame.columnconfigure(column, weight=1, uniform="form")
@@ -710,6 +722,7 @@ class MappingsTab(ttk.Frame):
         return {key: max(listed[key], width) for key, width in wanted.items()}
 
     def _tree_font(self) -> tkfont.Font:
+        """Return the font the table uses, for measuring text widths."""
         spec = ttk.Style(self).lookup("Treeview", "font") or "TkDefaultFont"
         try:
             return tkfont.Font(root=self, font=spec)
@@ -718,6 +731,7 @@ class MappingsTab(ttk.Frame):
 
     @staticmethod
     def _cell_text(row: Any, key: str) -> str:
+        """Return the text of one table cell (status icon, limit with warning mark, or the row value)."""
         if key == "icon":
             return STATUS_ICONS.get(row.status, "")
         if key == "limit" and row.limit_warning:
@@ -742,6 +756,7 @@ class MappingsTab(ttk.Frame):
         return width
 
     def _current_widths(self) -> tuple[int, ...]:
+        """Return the current width of every table column."""
         return tuple(int(self.tree.column(key, "width")) for key, *_ in self.TABLE_COLUMNS)
 
     def _schedule_refit(self) -> None:
@@ -751,11 +766,13 @@ class MappingsTab(ttk.Frame):
         self._fit_job = self.after(200, self._refit)
 
     def _refit(self) -> None:
+        """Re-render the rows when the column widths changed (so cut-off text is redone)."""
         self._fit_job = None
         if self._current_widths() != self._column_widths:
             self._render_rows()
 
     def _on_motion(self, event: tk.Event) -> None:  # type: ignore[type-arg]
+        """Show hover help for the heading, status icon or cut-off cell under the mouse."""
         region = self.tree.identify_region(event.x, event.y)
         iid = self.tree.identify_row(event.y)
         column = self.tree.identify_column(event.x)  # "#1" is the first column (the status icon)
@@ -810,10 +827,12 @@ class MappingsTab(ttk.Frame):
         self._hide_tip()
 
     def _hide_tip(self) -> None:
+        """Hide the cell tooltip."""
         self._tip_cell = None
         self._tooltip.hide()
 
     def _matches(self, row: Any) -> bool:
+        """True when the row passes the text filter and the Active/Inactive selector."""
         needle = self.filter_var.get().strip().casefold()
         if needle and needle not in f"{row.folder} {row.repo} {row.destination}".casefold():
             return False
@@ -860,6 +879,7 @@ class MappingsTab(ttk.Frame):
     # ----- editor -----
 
     def _entry_to_form(self, repo: str) -> dict[str, Any]:
+        """Convert a mapping.json entry into the editor's field values."""
         entry = self._table.entries[repo]
         return {
             "name": repo,
@@ -895,16 +915,20 @@ class MappingsTab(ttk.Frame):
         self._update_buttons()
 
     def _form_values(self) -> dict[str, Any]:
+        """Return the editable values currently in the form."""
         return {key: self.vars[key].get() for key in self.EDITABLE_KEYS}
 
     def _is_dirty(self) -> bool:
+        """True when the form differs from what was loaded (unsaved changes)."""
         return self._current_repo is not None and self._form_values() != self._loaded
 
     def _on_form_edited(self) -> None:
+        """React to an edit in the form by updating the buttons."""
         if not self._loading:
             self._update_buttons()
 
     def _update_buttons(self) -> None:
+        """Enable Save/Revert only with unsaved changes, and Remove only with a selected repository."""
         has_repo = self._current_repo is not None
         dirty = self._is_dirty()
         self.save_button.state(["!disabled"] if dirty else ["disabled"])
@@ -914,6 +938,7 @@ class MappingsTab(ttk.Frame):
             widget.state(["!disabled"] if has_repo else ["disabled"])
 
     def _show_message(self, text: str, kind: str = "error") -> None:
+        """Show a validation message (or hide the message row when the text is empty)."""
         color = {"error": COLOR_ERROR, "warning": COLOR_WARNING, "info": COLOR_MUTED}[kind]
         self.message_label.configure(text=text, foreground=color)
         if text:
@@ -922,6 +947,7 @@ class MappingsTab(ttk.Frame):
             self.message_label.grid_remove()
 
     def _on_select(self, _event: object = None) -> None:
+        """Load the selected repository into the editor, asking first if there are unsaved changes."""
         if self._rendering:
             return
         selection = self.tree.selection()
@@ -941,6 +967,7 @@ class MappingsTab(ttk.Frame):
         self._load_form(repo)
 
     def _sync_form_after_refresh(self) -> None:
+        """After a table refresh, keep the editor on its repository or clear it if that repository is gone."""
         repo = self._current_repo
         if repo is None:
             return
@@ -955,9 +982,11 @@ class MappingsTab(ttk.Frame):
                 self.message_label.grid()
 
     def _revert(self) -> None:
+        """Throw away the edits and reload the form from the saved entry."""
         self._load_form(self._current_repo)
 
     def _save(self) -> None:
+        """Validate the form and save the changes through mapping_manager."""
         repo = self._current_repo
         if repo is None or not self._is_dirty():
             return
@@ -980,6 +1009,7 @@ class MappingsTab(ttk.Frame):
     # ----- add / remove -----
 
     def _add_repository(self) -> None:
+        """Open the Add repository dialog (after confirming that unsaved edits may be discarded)."""
         if self._is_dirty() and not messagebox.askyesno(
             "Unsaved changes", f"Discard the unsaved changes to {self._current_repo}?", parent=self
         ):
@@ -987,6 +1017,7 @@ class MappingsTab(ttk.Frame):
         AddRepositoryDialog(self, self._after_added)
 
     def _after_added(self, repo: str) -> None:
+        """Refresh the table and select the repository that was just added."""
         self.filter_var.set("")
         self.show_var.set(self.SHOW_FILTERS[0])
         self.refresh()
@@ -997,6 +1028,7 @@ class MappingsTab(ttk.Frame):
         self._set_status(f"Added {repo}.")
 
     def _remove_repository(self) -> None:
+        """After a confirmation, remove the selected repository from mapping.json."""
         repo = self._current_repo
         if repo is None:
             return
@@ -1033,6 +1065,10 @@ class TerminalLogTab(ttk.Frame):
         on_enable_log: Callable[[], None],
         set_status: Callable[[str], None],
     ) -> None:
+        """Build the Terminal log tab.
+
+        The callbacks tell whether the log is active, switch it on, and set the footer status text.
+        """
         super().__init__(master, padding=10)
         self._is_active = is_active
         self._on_enable_log = on_enable_log
@@ -1059,6 +1095,7 @@ class TerminalLogTab(ttk.Frame):
     # ----- construction -----
 
     def _build_notice(self) -> None:
+        """Create the notice row (e.g. "turn on the terminal log") with its action button."""
         self.notice = ttk.Frame(self)
         self.notice.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 6))
         self.notice.columnconfigure(0, weight=1)
@@ -1068,6 +1105,7 @@ class TerminalLogTab(ttk.Frame):
         self.enable_button.grid(row=0, column=1, padx=(10, 0))
 
     def _build_toolbar(self) -> None:
+        """Create the filter field, the follow checkbox and the copy/open-folder buttons."""
         toolbar = ttk.Frame(self)
         toolbar.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 6))
         toolbar.columnconfigure(3, weight=1)
@@ -1089,6 +1127,7 @@ class TerminalLogTab(ttk.Frame):
         ttk.Button(toolbar, text="Open folder", command=self._open_folder).grid(row=0, column=6)
 
     def _build_text(self) -> None:
+        """Create the read-only log text with its scrollbars and the warning/error colours."""
         self.text = tk.Text(self, wrap="none", height=10, font=("Consolas", 10), state="disabled", undo=False)
         self.text.tag_configure(log_tail.LEVEL_ERROR, foreground="#b3261e")
         self.text.tag_configure(log_tail.LEVEL_WARNING, foreground="#9a6700")
@@ -1108,6 +1147,7 @@ class TerminalLogTab(ttk.Frame):
     # ----- scrolling -----
 
     def _set_xscroll(self, first: float | str, last: float | str) -> None:
+        """Show the horizontal scrollbar only when the text is wider than the view."""
         needed = float(first) > 0.0 or float(last) < 1.0
         if needed and not self._xscroll.winfo_ismapped():
             self._xscroll.grid()
@@ -1116,6 +1156,7 @@ class TerminalLogTab(ttk.Frame):
         self._xscroll.set(first, last)
 
     def _note_user_input(self, _event: object = None) -> None:
+        """Remember when the user last scrolled or clicked, so auto-scroll does not fight them."""
         self._user_input_at = time.monotonic()
 
     def _on_yview(self, scrollbar: ttk.Scrollbar, first: float | str, last: float | str) -> None:
@@ -1135,10 +1176,12 @@ class TerminalLogTab(ttk.Frame):
             self.after_idle(self._follow_end)
 
     def _follow_end(self) -> None:
+        """Scroll to the newest line while "follow" is on."""
         if self.follow_var.get():
             self.text.see("end")
 
     def _on_follow_toggle(self) -> None:
+        """Jump to the end when "follow" is switched on."""
         if self.follow_var.get():
             self.text.see("end")
 
@@ -1160,6 +1203,7 @@ class TerminalLogTab(ttk.Frame):
         self._poll()
 
     def _poll(self) -> None:
+        """Read new log lines (fast while the log is active, slowly otherwise) and schedule the next read."""
         interval = self.IDLE_INTERVAL_MS
         try:
             if self._is_active():
@@ -1173,6 +1217,7 @@ class TerminalLogTab(ttk.Frame):
             self._poll_job = self.after(interval, self._poll)
 
     def _apply(self, update: log_tail.TailUpdate) -> None:
+        """Show one tail update: new file name, reset or appended lines."""
         if update.changed_file or update.reset:
             self._has_log_file = update.file_name is not None
             self.file_label.configure(text=update.file_name or "")
@@ -1189,18 +1234,22 @@ class TerminalLogTab(ttk.Frame):
     # ----- rendering -----
 
     def _filter_text(self) -> str:
+        """Return the filter text, lower-cased for comparison."""
         return self.filter_var.get().strip().casefold()
 
     def _matching(self, lines: Iterable[str]) -> list[str]:
+        """Return the lines that contain the filter text (all of them when it is empty)."""
         needle = self._filter_text()
         return [line for line in lines if needle in line.casefold()] if needle else list(lines)
 
     def _insert(self, lines: list[str]) -> None:
+        """Append lines to the text, coloured by level."""
         for line in lines:
             level = log_tail.line_level(line)
             self.text.insert("end", line + "\n", (level,) if level else ())
 
     def _render_all(self) -> None:
+        """Redraw the whole text from the stored lines (after a filter change)."""
         self._updating = True
         try:
             self.text.configure(state="normal")
@@ -1230,11 +1279,13 @@ class TerminalLogTab(ttk.Frame):
     # ----- notice about the detailed log -----
 
     def set_daemon_state(self, running: bool, log_on: bool) -> None:
+        """Tell the tab whether the daemon runs and its log is on, so it can show the right notice."""
         if (running, log_on) != (self._daemon_running, self._daemon_log_on):
             self._daemon_running, self._daemon_log_on = running, log_on
             self._update_notice()
 
     def _update_notice(self) -> None:
+        """Choose the notice text and whether the "turn on" button is offered."""
         if not self._daemon_running:
             if self._has_log_file:
                 text, can_enable = "The daemon is not running; showing the last log.", False
@@ -1262,6 +1313,7 @@ class TerminalLogTab(ttk.Frame):
     # ----- buttons -----
 
     def _copy(self) -> None:
+        """Copy the selected text, or everything shown when nothing is selected."""
         try:
             content = self.text.get("sel.first", "sel.last")
         except tk.TclError:  # no selection: copy everything shown
@@ -1271,6 +1323,7 @@ class TerminalLogTab(ttk.Frame):
         self._set_status("Copied the selection." if self.text.tag_ranges("sel") else "Copied the shown log lines.")
 
     def _open_folder(self) -> None:
+        """Open the terminal log folder in the file manager."""
         directory = self._log_directory()
         if not os.path.isdir(directory):
             self._set_status(f"The log folder does not exist yet: {directory}")
@@ -1292,6 +1345,7 @@ class TerminalLogTab(ttk.Frame):
             self._set_status(f"Could not open the log: {exc}")
 
     def shutdown(self) -> None:
+        """Cancel the polling timer (called when the window closes)."""
         if self._poll_job is not None:
             self.after_cancel(self._poll_job)
             self._poll_job = None
@@ -1300,9 +1354,8 @@ class TerminalLogTab(ttk.Frame):
 class StatusTab(ttk.Frame):
     """A read-only list for one status tab: events from state.db or the unmapped repositories.
 
-    Rows arrive through set_rows(); the tab never queries anything itself. Cells that do not fit
-    end in an ellipsis and show their full text on hover, rows the user has not seen yet are bold
-    while the tab is shown, and double-clicking a row that names a repository opens it in the
+    Rows arrive through set_rows(); the tab never queries anything itself. Cut-off cells show their full text on
+    hover, unseen rows are bold while the tab is shown, and a double-click opens the row's repository in the
     Mappings tab.
     """
 
@@ -1323,6 +1376,7 @@ class StatusTab(ttk.Frame):
         filterable: bool = False,
         on_open_folder: Optional[Callable[[str], None]] = None,
     ) -> None:
+        """Build a status tab: the table with the given columns plus the optional filter, detail pane and buttons."""
         super().__init__(master, padding=10)
         self._has_detail = detail
         self._empty_text = empty_text
@@ -1423,6 +1477,7 @@ class StatusTab(ttk.Frame):
     DETAIL_PLACEHOLDER = "Select a row to read its full text here."
 
     def _build_detail(self) -> None:
+        """Create the detail pane that shows the full text of the selected row."""
         frame = ttk.Frame(self)
         frame.grid(row=self._base + 1, column=0, columnspan=2, sticky="ew", pady=(8, 0))
         frame.columnconfigure(0, weight=1)
@@ -1437,6 +1492,7 @@ class StatusTab(ttk.Frame):
         self._set_detail("", "")
 
     def _set_detail(self, head: str, body: str) -> None:
+        """Replace the detail pane's text (bold heading line, then the body)."""
         self.detail.configure(state="normal")
         self.detail.delete("1.0", "end")
         if head or body:
@@ -1447,6 +1503,7 @@ class StatusTab(ttk.Frame):
         self.detail.configure(state="disabled")
 
     def _selected_index(self) -> Optional[int]:
+        """Return the index of the selected row, or None."""
         selection = self.tree.selection()
         return int(selection[0]) if selection else None
 
@@ -1459,10 +1516,12 @@ class StatusTab(ttk.Frame):
         return "   \u00b7   ".join(cell for cell in row[:-1] if cell), row[-1]
 
     def _show_detail(self, _event: object = None) -> None:
+        """Show the selected row's full text in the detail pane."""
         if self._has_detail:
             self._set_detail(*self._selected_text())
 
     def _copy_selected(self) -> None:
+        """Copy the selected row's full text to the clipboard."""
         head, body = self._selected_text()
         if head or body:
             self.clipboard_clear()
@@ -1498,17 +1557,20 @@ class StatusTab(ttk.Frame):
         self._render()
 
     def set_highlight_after(self, highlight_after: Optional[int]) -> None:
+        """Set the id above which rows count as unread (shown bold); None highlights nothing."""
         if highlight_after != self._highlight_after:
             self._highlight_after = highlight_after
             self._render()
 
     def _tags(self, index: int) -> tuple[str, ...]:
+        """Return the row's style tags: zebra stripe and unread."""
         tags = ["odd"] if index % 2 else []
         if self._highlight_after is not None and self._ids[index] > self._highlight_after:
             tags.append("unread")
         return tuple(tags)
 
     def _render(self) -> None:
+        """Redraw the table from the current rows, keeping the selection."""
         self._column_widths = self._current_widths()
         self._hide_tip()
         selected = self._selected_index()
@@ -1531,6 +1593,7 @@ class StatusTab(ttk.Frame):
     # ----- ellipsis and hover text -----
 
     def _measure(self, text: str, bold: bool = False) -> int:
+        """Return the pixel width of a text in the table font (cached)."""
         cache_key = ("b" if bold else "n") + text
         width = self._measure_cache.get(cache_key)
         if width is None:
@@ -1541,6 +1604,7 @@ class StatusTab(ttk.Frame):
         return width
 
     def _is_unread(self, index: int) -> bool:
+        """True when the row's id is above the highlight mark."""
         return self._highlight_after is not None and self._ids[index] > self._highlight_after
 
     def _display(self, row: tuple[str, ...], bold: bool = False) -> list[str]:
@@ -1552,19 +1616,23 @@ class StatusTab(ttk.Frame):
         return shown
 
     def _current_widths(self) -> tuple[int, ...]:
+        """Return the current width of every table column."""
         return tuple(int(self.tree.column(column[0], "width")) for column in self._columns)
 
     def _schedule_refit(self) -> None:
+        """Re-render once the user stopped dragging a column (debounced 200 ms)."""
         if self._fit_job is not None:
             self.after_cancel(self._fit_job)
         self._fit_job = self.after(200, self._refit)
 
     def _refit(self) -> None:
+        """Re-render the rows when the column widths changed, so cut-off cells are redone."""
         self._fit_job = None
         if self._rows and self._current_widths() != self._column_widths:
             self._render()
 
     def _on_motion(self, event: tk.Event) -> None:  # type: ignore[type-arg]
+        """Show hover help for the cut-off cell under the mouse."""
         if self.tree.identify_region(event.x, event.y) != "cell":
             self._hide_tip()
             return
@@ -1579,10 +1647,12 @@ class StatusTab(ttk.Frame):
             self._tooltip.schedule(full, event.x_root, event.y_root)
 
     def _hide_tip(self) -> None:
+        """Hide the cell tooltip."""
         self._tip_cell = None
         self._tooltip.hide()
 
     def shutdown(self) -> None:
+        """Cancel pending timers and hide the tooltip (called when the window closes)."""
         if self._fit_job is not None:
             self.after_cancel(self._fit_job)
             self._fit_job = None
@@ -1591,28 +1661,34 @@ class StatusTab(ttk.Frame):
     # ----- actions -----
 
     def _update_clear_repo_button(self) -> None:
+        """Enable "Clear selected" only while a row with a repository is selected."""
         if self.clear_repo_button is not None:
             self.clear_repo_button.state(["!disabled"] if self.selected_repo() else ["disabled"])
 
     def _on_clear_repo(self) -> None:
+        """Clear the selected repository's rows (after the caller's confirmation)."""
         repo = self.selected_repo()
         if repo:
             self._clear_repo(repo)
 
     def selected_repo(self) -> str:
+        """Return the repository of the selected row, or ""."""
         selection = self.tree.selection()
         return self._repos[int(selection[0])] if selection else ""
 
     def _update_open_folder_button(self) -> None:
+        """Enable "Open folder" only while a row with a repository is selected."""
         if self.open_folder_button is not None:
             self.open_folder_button.state(["!disabled"] if self.selected_repo() else ["disabled"])
 
     def _on_open_folder(self) -> None:
+        """Open the selected row's folder."""
         repo = self.selected_repo()
         if repo:
             self._open_folder(repo)
 
     def _on_double_click(self, _event: object = None) -> None:
+        """Jump to the double-clicked row's repository in the Mappings tab."""
         selection = self.tree.selection()
         if selection:
             repo = self._repos[int(selection[0])]
@@ -1630,6 +1706,7 @@ class SettingsDialog(tk.Toplevel):
         on_warnings_saved: Optional[Callable[[], None]] = None,
         on_credentials_saved: Optional[Callable[[str], None]] = None,
     ) -> None:
+        """Build the Settings dialog from gui_forms.SETTINGS_KEYS; the callbacks report saves to the main window."""
         super().__init__(master)
         self.title("Settings")
         self.resizable(False, False)
@@ -1661,10 +1738,12 @@ class SettingsDialog(tk.Toplevel):
         }
 
         def row(frame: ttk.LabelFrame, index: int, label: str, widget: tk.Widget) -> None:
+            """Add a labelled widget to a settings group."""
             ttk.Label(frame, text=label).grid(row=index, column=0, sticky="w", pady=4, padx=(0, 12))
             widget.grid(row=index, column=1, sticky="ew", pady=4)
 
         def spin(frame: ttk.LabelFrame, key: str, low: int, high: int) -> ttk.Spinbox:
+            """Create a number box for a settings key with the given range."""
             return ttk.Spinbox(frame, from_=low, to=high, width=8, textvariable=self.vars[key])
 
         processing = ttk.LabelFrame(left, text="Processing", padding=10)
@@ -1860,7 +1939,10 @@ class SettingsDialog(tk.Toplevel):
         return self._autostart_before is not None and bool(self.autostart_var.get()) != self._autostart_before
 
     def _open_config(self) -> None:
-        """Open config.json in the default editor (after adding the optional settings it lacks) and close this window."""
+        """Open config.json in the default editor and close this window.
+
+        The optional settings it lacks are added first, so they are there to edit.
+        """
         if self._form_changed() and not messagebox.askyesno(
             "Open config.json",
             "Changes you made in this window are not saved and will be lost when the file opens.\n\nOpen config.json anyway?",
@@ -1906,12 +1988,14 @@ class SettingsDialog(tk.Toplevel):
         self.after(100, self._apply_shortcuts_answer)
 
     def _make_shortcuts(self, folder: str, options: tuple[str, ...]) -> None:
+        """Create the shortcuts in a thread and keep the answer for the polling timer."""
         try:
             self._shortcuts_answer.append(shortcuts.create_shortcuts(folder, options=options))
         except Exception as exc:  # report it instead of losing it in the thread
             self._shortcuts_answer.append(autostart.AutostartResult(False, f"Could not create the shortcuts: {exc}"))
 
     def _apply_shortcuts_answer(self) -> None:
+        """Show the shortcut result once the thread has answered (polls every 100 ms)."""
         try:
             if not self._shortcuts_answer:
                 self.after(100, self._apply_shortcuts_answer)
@@ -1928,6 +2012,7 @@ class SettingsDialog(tk.Toplevel):
             pass
 
     def _probe_autostart(self) -> None:
+        """Ask the system whether start-at-login is installed (in a thread; failure disables the box)."""
         try:
             status = autostart.autostart_status()
         except Exception:  # a probe that fails leaves the box disabled
@@ -1949,6 +2034,7 @@ class SettingsDialog(tk.Toplevel):
             pass
 
     def _save(self) -> None:
+        """Validate the form, write config.json (and the autostart choice) and close on success."""
         result = gui_forms.build_settings_changes({key: var.get() for key, var in self.vars.items()})
         if not result.ok:
             self.message.configure(text="\n".join(result.errors))
@@ -1977,6 +2063,7 @@ class WarningTypesDialog(tk.Toplevel):
     """
 
     def __init__(self, master: tk.Misc, silenced: set[str], on_saved: Callable[[set[str]], None]) -> None:
+        """Build the list of warning types with one checkbox each (checked = notify)."""
         super().__init__(master)
         self.title("Warning notifications")
         self.resizable(False, False)
@@ -2023,6 +2110,7 @@ class WarningTypesDialog(tk.Toplevel):
         self.grab_set()
 
     def _chosen_silenced(self) -> set[str]:
+        """Return the codes left unchecked, plus unknown codes that were already in the config."""
         return {code for code, var in self.vars.items() if not var.get()} | self._unknown
 
     def _close_request(self) -> None:
@@ -2036,10 +2124,12 @@ class WarningTypesDialog(tk.Toplevel):
         self.destroy()
 
     def _set_all(self, value: bool) -> None:
+        """Tick or untick every box."""
         for var in self.vars.values():
             var.set(value)
 
     def _set_defaults(self) -> None:
+        """Set the boxes to the built-in default (API and LIMIT silent)."""
         for code, var in self.vars.items():
             var.set(code not in warning_types.DEFAULT_SILENCED)
 
@@ -2064,6 +2154,7 @@ class CredentialsDialog(tk.Toplevel):
     """
 
     def __init__(self, master: tk.Misc, on_saved: Callable[[str], None]) -> None:
+        """Build the Gmail & GitHub window: login fields, test buttons and its own Save/Cancel."""
         super().__init__(master)
         self.title("Gmail & GitHub")
         self.resizable(False, False)
@@ -2088,6 +2179,7 @@ class CredentialsDialog(tk.Toplevel):
         body.columnconfigure(0, weight=1)
 
         def field(frame: tk.Misc, row: int, label: str, widget: tk.Widget) -> None:
+            """Add a labelled widget to the form."""
             ttk.Label(frame, text=label).grid(row=row, column=0, sticky="w", pady=4, padx=(0, 12))
             widget.grid(row=row, column=1, sticky="ew", pady=4)
 
@@ -2176,13 +2268,16 @@ class CredentialsDialog(tk.Toplevel):
         }
 
     def _changed(self) -> bool:
+        """True when the fields differ from what was loaded."""
         return self._values() != self._baseline
 
     def _update_filter_hint(self) -> None:
+        """Show the Gmail search that finds the notification mails in the chosen folder."""
         folder = self.vars["folder"].get().strip() or config_manager.DEFAULT_GMAIL_FOLDER
         self.filter_hint.configure(text=gui_forms.gmail_filter_hint(folder))
 
     def _open_link(self, url: str) -> None:
+        """Open a help link in the browser; show a message when that fails."""
         try:
             opened = webbrowser.open(url)
         except webbrowser.Error:
@@ -2192,11 +2287,13 @@ class CredentialsDialog(tk.Toplevel):
         )
 
     def _toggle_show(self) -> None:
+        """Show or hide the password and token characters."""
         shown = "" if self.show_var.get() else "•"
         self.password_entry.configure(show=shown)
         self.token_entry.configure(show=shown)
 
     def _close_request(self) -> None:
+        """Close the window, asking first when there are unsaved changes."""
         if self._changed() and not messagebox.askyesno(
             "Gmail & GitHub",
             "You have changes that are not saved.\n\nClose the window and discard them?",
@@ -2208,6 +2305,7 @@ class CredentialsDialog(tk.Toplevel):
     # ----- the Test buttons (network in a thread, the answer is picked up by _poll) -----
 
     def _start_test(self, name: str, button: ttk.Button, label: ttk.Label, work: Callable[[], connection_tests.ConnectionResult]) -> None:
+        """Run a connection test in a thread, with the button disabled and a "Testing..." label meanwhile."""
         if name in self._busy:
             return
         self._busy.add(name)
@@ -2215,6 +2313,7 @@ class CredentialsDialog(tk.Toplevel):
         label.configure(text="Testing…", foreground=COLOR_MUTED)
 
         def run() -> None:
+            """Thread body: run the test and queue its result (an exception becomes a failed result)."""
             try:
                 result = work()
             except Exception as exc:  # shown in the window instead of vanishing
@@ -2225,6 +2324,7 @@ class CredentialsDialog(tk.Toplevel):
         self.after(100, self._poll)
 
     def _test_gmail(self) -> None:
+        """Test the Gmail login and folder with the values typed in (nothing is saved)."""
         values = self._values()
         self._start_test(
             "gmail", self.test_gmail_button, self.gmail_result,
@@ -2232,10 +2332,12 @@ class CredentialsDialog(tk.Toplevel):
         )
 
     def _test_token(self) -> None:
+        """Test the GitHub token with the value typed in (nothing is saved)."""
         token = self._values()["token"]
         self._start_test("token", self.test_token_button, self.token_result, lambda: connection_tests.check_github_token(token))
 
     def _poll(self) -> None:
+        """Show finished test results from the thread queue (polls while the window exists)."""
         if not self.winfo_exists():
             return
         while self._results:
@@ -2256,6 +2358,7 @@ class CredentialsDialog(tk.Toplevel):
     # ----- Save -----
 
     def _save(self) -> None:
+        """Validate and write the credentials to .env and the mailbox folder to config.json, then close."""
         values = self._values()
         problems = env_manager.validate(values["user"], values["password"], values["token"])
         if not values["folder"]:
@@ -2333,6 +2436,7 @@ class DoctorDialog(tk.Toplevel):
             pass
 
     def _start(self) -> None:
+        """Start the checks in a thread so a slow disk or network drive cannot freeze the window."""
         self.summary.configure(text="Checking\u2026")
         self.run_button.state(["disabled"])
         self._result, self._error = None, None
@@ -2340,12 +2444,14 @@ class DoctorDialog(tk.Toplevel):
         self.after(100, self._poll)
 
     def _work(self) -> None:
+        """Thread body: run the doctor report, or keep the error text."""
         try:
             self._result = dict(gui_doctor.run_report())
         except Exception as exc:  # shown in the dialog instead of vanishing
             self._error = describe_error(exc)
 
     def _poll(self) -> None:
+        """Wait (polling every 100 ms) for the thread, then show its result."""
         if not self.winfo_exists():
             return
         if self._result is None and self._error is None:
@@ -2355,9 +2461,11 @@ class DoctorDialog(tk.Toplevel):
         self._show(self._result)
 
     def _write(self, text: str, tag: str = "") -> None:
+        """Append text to the report area with an optional style tag."""
         self.text.insert("end", text, tag)
 
     def _show(self, report: Optional[dict]) -> None:
+        """Draw the doctor report (or the first-run help and errors) into the text area."""
         reasons = gui_doctor.first_run_reasons()
         self.text.configure(state="normal")
         self.text.delete("1.0", "end")
@@ -2392,6 +2500,7 @@ class StatsDialog(tk.Toplevel):
     DAILY_BAR = "#0078d4"
 
     def __init__(self, master: tk.Misc) -> None:
+        """Build the Stats window (tabs Overview, Busiest, Biggest, Per day) and start collecting."""
         super().__init__(master)
         self.title("Statistics")
         self.transient(master)  # type: ignore[arg-type]
@@ -2471,6 +2580,7 @@ class StatsDialog(tk.Toplevel):
         self._start()
 
     def _make_table(self, parent: tk.Misc, headers: tuple[str, ...], row: int) -> ttk.Treeview:
+        """Create a table with the given headings in a grid row and return it."""
         frame = ttk.Frame(parent)
         frame.grid(row=row, column=0, sticky="nsew")
         frame.columnconfigure(0, weight=1)
@@ -2488,11 +2598,13 @@ class StatsDialog(tk.Toplevel):
 
     @staticmethod
     def _fill(tree: ttk.Treeview, rows: list[tuple[str, ...]]) -> None:
+        """Replace a table's rows, with zebra striping."""
         tree.delete(*tree.get_children())
         for index, row in enumerate(rows):
             tree.insert("", "end", values=row, tags=("odd",) if index % 2 else ())
 
     def _start(self) -> None:
+        """Collect the statistics in a thread so a big history on a slow disk cannot freeze the window."""
         self.summary.configure(text="Counting…")
         self.refresh_button.state(["disabled"])
         self._result, self._error = None, None
@@ -2500,12 +2612,14 @@ class StatsDialog(tk.Toplevel):
         self.after(100, self._poll)
 
     def _work(self) -> None:
+        """Thread body: collect the figures, or keep the error text."""
         try:
             self._result = stats.collect()
         except Exception as exc:  # shown in the dialog instead of vanishing
             self._error = describe_error(exc)
 
     def _poll(self) -> None:
+        """Wait (polling every 100 ms) for the thread, then show its result."""
         if not self.winfo_exists():
             return
         if self._result is None and self._error is None:
@@ -2519,6 +2633,7 @@ class StatsDialog(tk.Toplevel):
         self._show(self._result or {})
 
     def _show(self, report: dict) -> None:
+        """Fill the summary line, the overview and the tables from the report."""
         self._report = report
         mapping, history = report["mapping"], report["history"]
         days = f", {history['days']} days of history" if history["days"] else ""
@@ -2559,6 +2674,7 @@ class StatsDialog(tk.Toplevel):
             pass
 
     def _fit_overview_now(self) -> None:
+        """Size the overview text to its content so no inner scrollbar is needed."""
         text = self.overview_text
         text.update_idletasks()
         pixels = text.count("1.0", "end-1c", "ypixels")  # headings add spacing, so count pixels, not lines
@@ -2576,6 +2692,7 @@ class StatsDialog(tk.Toplevel):
             text.configure(height=current)
 
     def _draw_chart(self) -> None:
+        """Draw the jobs-per-day bar chart on the canvas."""
         canvas = self.chart
         canvas.delete("all")
         if not self._report:
@@ -2604,6 +2721,7 @@ class StatsDialog(tk.Toplevel):
                                    fill=COLOR_MUTED, font=("TkDefaultFont", 8))
 
     def _copy(self) -> None:
+        """Copy the plain-text report to the clipboard."""
         if not self._report:
             return
         self.clipboard_clear()
@@ -2612,10 +2730,16 @@ class StatsDialog(tk.Toplevel):
 
 
 class MainWindow(tk.Tk):
+    """The application window: tabs, control bar, footer and the timers that keep them current.
+
+    It only reads state.db, mapping.json and config.json and talks to the daemon through daemon_control; the
+    logic lives in the toolkit-independent gui_* modules. The daemon is never stopped by closing this window.
+    """
     DEFAULT_SIZE = "1280x720"
     MIN_SIZE = (1080, 520)  # narrower and the editor's last column (Active / Shared folder / buttons) is cut off
 
     def __init__(self, theme: Optional[str] = None, start_minimized: bool = False, start_daemon: bool = False) -> None:
+        """Build the main window: theme, tabs, control bar, footer, timers, tray and the single-instance poll."""
         super().__init__()
         self.title(APP_TITLE)
         # gui.refresh_seconds / gui.status_message_seconds in config.json (read once; a restart of the GUI applies changes)
@@ -2734,7 +2858,10 @@ class MainWindow(tk.Tk):
             self.after_idle(self._start_hidden)
 
     def _start_hidden(self) -> None:
-        """Do what the minimize button does: hide in the tray (tray active and minimize_to_tray on), else minimize to the taskbar."""
+        """Do what the minimize button does.
+
+        Hide in the tray (tray active and minimize_to_tray on), else minimize to the taskbar.
+        """
         try:
             if self._tray_active() and self._minimize_to_tray:
                 self.withdraw()
@@ -2751,6 +2878,7 @@ class MainWindow(tk.Tk):
         self._status_reset_job = self.after(self._status_message_ms, self._reset_status)
 
     def _reset_status(self) -> None:
+        """Restore the footer's default text once a status message has been shown long enough."""
         self._status_reset_job = None
         self.status_bar.configure(text=DEFAULT_STATUS_TEXT)
 
@@ -2784,6 +2912,7 @@ class MainWindow(tk.Tk):
     }
 
     def _build_status_tab(self, definition: status_tabs.TabDef) -> StatusTab:
+        """Create the StatusTab for one tab definition (events or the unmapped list)."""
         if definition.kind == status_tabs.KIND_UNMAPPED:
             return StatusTab(
                 self.notebook, self.UNMAPPED_COLUMNS, self.EMPTY_TEXTS[definition.key], self._show_repo,
@@ -2804,12 +2933,14 @@ class MainWindow(tk.Tk):
         )
 
     def _show_repo(self, repo: str) -> None:
+        """Select a repository in the Mappings tab and switch to it."""
         if self.mappings_tab.select_repo(repo):
             self.notebook.select(self.mappings_tab)
         else:
             self.set_status(f"{repo} is not in mapping.json.")
 
     def _selected_status_key(self) -> Optional[str]:
+        """Return the key of the status tab that is shown, or None for the other tabs."""
         selected = self.notebook.select()
         for key, tab in self._status_tabs.items():
             if selected == str(tab):
@@ -2817,6 +2948,7 @@ class MainWindow(tk.Tk):
         return None
 
     def _set_status_title(self, key: str, title: str) -> None:
+        """Update a status tab's title (with its unread count) only when it changed."""
         if self._status_titles.get(key) != title:
             self._status_titles[key] = title
             self.notebook.tab(self._status_tabs[key], text=title)
@@ -2839,6 +2971,7 @@ class MainWindow(tk.Tk):
         self.set_status(f"Opened {folder}")
 
     def _show_event_rows(self, key: str, highlight_after: Optional[int]) -> None:
+        """Fill an event tab with its rows (the Completed tab also gets folder names and tags)."""
         rows = self.status_feed.model.rows(key)
         if key == "completed":
             entries = {
@@ -2892,10 +3025,12 @@ class MainWindow(tk.Tk):
             self._set_status_title(key, model.title(key))
 
     def _leave_status_tab(self, key: str) -> None:
+        """Stop highlighting new rows when the user leaves a tab."""
         if key in self.status_feed.model.event_tab_keys:
             self._status_tabs[key].set_highlight_after(None)
 
     def _mark_status_read(self, key: str) -> None:
+        """Mark every row of a tab as read and refresh its title."""
         model = self.status_feed.model
         model.mark_read(key)
         self._status_tabs[key].set_highlight_after(None)
@@ -2960,6 +3095,7 @@ class MainWindow(tk.Tk):
         return not self._window_hidden() and self.notebook.select() == str(self.log_tab)
 
     def _on_enable_log(self) -> None:
+        """Switch the terminal log on (the Terminal log tab's button)."""
         self._report(gui_daemon.do_set_log(True), "Terminal log switched on (a new .log file).")
 
     def _mappings_visible(self) -> bool:
@@ -2967,10 +3103,12 @@ class MainWindow(tk.Tk):
         return not self._window_hidden() and self.notebook.select() == str(self.mappings_tab)
 
     def _refresh_mappings_if_visible(self) -> None:
+        """Reload the Mappings table, but only while that tab is shown."""
         if self._mappings_visible():
             self.mappings_tab.refresh()
 
     def _on_tab_changed(self, _event: object = None) -> None:
+        """Handle a tab switch: leave the previous status tab and enter the new one (marks it read)."""
         previous, self._current_status_key = self._current_status_key, self._selected_status_key()
         if previous is not None and previous != self._current_status_key:
             self._leave_status_tab(previous)
@@ -2992,6 +3130,7 @@ class MainWindow(tk.Tk):
             self._update_daemon_view()
 
     def _tick(self) -> None:
+        """The periodic refresh: Mappings, status tabs and the daemon view; reschedules itself."""
         try:
             self._refresh_mappings_if_visible()
             if self.state() != "iconic" or self._tray_active():  # a tray icon still has news to deliver
@@ -3002,6 +3141,7 @@ class MainWindow(tk.Tk):
     # ----- daemon status and control -----
 
     def _daemon_action_pending(self) -> bool:
+        """True while a restart, start or stop is still in progress."""
         return bool(self._restart_pending or self._starting_since or self._stopping_since)
 
     def _update_daemon_view(self, force_control: bool = False) -> None:
@@ -3082,6 +3222,7 @@ class MainWindow(tk.Tk):
             )
 
     def _is_stopping(self, now: float) -> bool:
+        """True during the short time after Stop was clicked while the daemon is still shutting down."""
         return self._stopping_since is not None and now - self._stopping_since < gui_daemon.STOPPING_TIMEOUT_SECONDS
 
     def _report(self, error: Optional[str], success_text: str) -> bool:
@@ -3091,11 +3232,13 @@ class MainWindow(tk.Tk):
         return error is None
 
     def _on_start(self) -> None:
+        """Start button: launch the daemon detached."""
         if self._report(gui_daemon.do_start(), "Starting the daemon\u2026"):
             self._starting_since = self._gui_started_at = time.time()
             self._update_daemon_view()
 
     def _on_stop(self) -> None:
+        """Stop button: after a confirmation, request a graceful stop."""
         if not messagebox.askyesno(
             "Stop daemon",
             "Stop the polling daemon?\n\nThe job in progress finishes first, then the daemon exits. "
@@ -3109,6 +3252,7 @@ class MainWindow(tk.Tk):
             self._update_daemon_view()
 
     def _on_restart(self) -> None:
+        """Restart button: after a confirmation, stop the daemon and start it again."""
         if not messagebox.askyesno(
             "Restart daemon",
             "Restart the polling daemon to apply the changed settings?\n\n"
@@ -3122,6 +3266,7 @@ class MainWindow(tk.Tk):
             self._update_daemon_view()
 
     def _on_pause(self) -> None:
+        """Pause/Resume button: toggle the global pause."""
         pausing = not self._snapshot.paused
         self._report(
             gui_daemon.do_set_paused(pausing),
@@ -3129,21 +3274,25 @@ class MainWindow(tk.Tk):
         )
 
     def _on_poll_now(self) -> None:
+        """Poll now button: ask the daemon for an immediate poll."""
         self._report(gui_daemon.do_poll_now(), "Poll requested; it runs within a second.")
 
     def _on_single_poll(self) -> None:
+        """Poll one button: ask for one notification and one queue item."""
         self._report(
             gui_daemon.do_single_poll(),
             "Single poll requested: one notification and one queue item, within a second.",
         )
 
     def _on_check_folders(self) -> None:
+        """Check folders button: ask the daemon to check destinations and folder limits."""
         self._report(
             gui_daemon.do_check_folders(),
             "Folder check requested; the counts in the Limit column update within a few seconds.",
         )
 
     def _on_log_toggle(self) -> None:
+        """Terminal log checkbox: switch the daemon's log file on or off (undone if the request fails)."""
         wanted = bool(self.control_bar.detailed_log.get())  # the click has already flipped the box
         if not self._report(
             gui_daemon.do_set_log(wanted),
@@ -3170,6 +3319,7 @@ class MainWindow(tk.Tk):
             )
 
     def _open_settings(self) -> None:
+        """Open the Settings dialog."""
         SettingsDialog(self, self._after_settings_saved, self._reload_silenced_warnings, self._after_credentials_saved)
 
     def _after_credentials_saved(self, message: str) -> None:
@@ -3187,9 +3337,11 @@ class MainWindow(tk.Tk):
         self.set_status("Warning notifications saved.")
 
     def _open_doctor(self) -> None:
+        """Open the Doctor dialog."""
         DoctorDialog(self, self._refresh_doctor_attention)
 
     def _open_stats(self) -> None:
+        """Open the Stats window."""
         StatsDialog(self)
 
     def _refresh_doctor_attention(self, report: Optional[dict] = None) -> None:
@@ -3201,6 +3353,7 @@ class MainWindow(tk.Tk):
         self.control_bar.set_doctor_attention(reasons, gui_doctor.needs_attention(reasons, report))
 
     def _after_settings_saved(self, message: str) -> None:
+        """Refresh what depends on the settings after the Settings dialog saved."""
         self._refresh_doctor_attention()  # saving the Settings creates config.json
         self.set_status(message)
         self.mappings_tab.refresh()  # the default recheck shown in the editor may have changed
@@ -3232,6 +3385,7 @@ class MainWindow(tk.Tk):
     # ----- system tray -----
 
     def _tray_active(self) -> bool:
+        """True when the tray icon is running."""
         return self._tray is not None and self._tray.active
 
     def _window_hidden(self) -> bool:
@@ -3239,6 +3393,7 @@ class MainWindow(tk.Tk):
         return self.state() in ("iconic", "withdrawn")
 
     def _start_tray(self, config: dict) -> None:
+        """Create the tray icon when it is enabled and the optional packages are installed."""
         if not (config_manager.get_gui_tray_enabled(config) and gui_tray.tray_available()):
             return
         png_path = os.path.join(ICON_DIR, "ghaadd.png")
@@ -3259,10 +3414,12 @@ class MainWindow(tk.Tk):
         self._update_tray_icon()
 
     def _on_unmap(self, event: tk.Event) -> None:  # type: ignore[type-arg]
+        """React to the window being minimized (hide it when the tray is active)."""
         if event.widget is self:
             self.after_idle(self._hide_if_minimized)
 
     def _hide_if_minimized(self) -> None:
+        """Hide a minimized window from the taskbar; the tray icon brings it back."""
         try:
             if self._tray_active() and self.state() == "iconic":
                 self.withdraw()  # gone from the taskbar; the tray icon brings it back
@@ -3270,6 +3427,7 @@ class MainWindow(tk.Tk):
             pass
 
     def _show_from_tray(self) -> None:
+        """Bring the window back to the front (tray menu, second start of the GUI)."""
         self.deiconify()
         self.lift()
         self.focus_force()
@@ -3315,6 +3473,7 @@ class MainWindow(tk.Tk):
             )
 
     def _update_tray_icon(self) -> None:
+        """Update the tray icon's state, dot and hover text."""
         if not self._tray_active():
             return
         model = self.status_feed.model
@@ -3433,6 +3592,7 @@ class MainWindow(tk.Tk):
             pass  # a broken icon file must never stop the GUI from starting
 
     def _apply_theme(self, preferred: Optional[str] = None) -> None:
+        """Pick the ttk theme: the requested one, else the native Windows theme, else clam."""
         style = ttk.Style(self)
         for theme in ((preferred,) if preferred else ()) + ("vista", "winnative", "clam"):
             if theme in style.theme_names():
@@ -3461,6 +3621,10 @@ class MainWindow(tk.Tk):
 
 
 def main() -> None:
+    """Parse the GUI options and run the window.
+
+    If another window already holds the single-instance lock, ask that one to show itself instead.
+    """
     parser = argparse.ArgumentParser(description="GHAADD GUI")
     parser.add_argument("--theme", help="ttk theme to use (default: native Windows theme; try 'clam')")
     parser.add_argument("--minimized", action="store_true", help="Start minimized (like the minimize button: in the tray, or on the taskbar), whatever the Settings say.")

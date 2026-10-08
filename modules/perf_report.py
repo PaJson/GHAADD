@@ -41,9 +41,11 @@ class _MemoryStore:
     """Read marks that live and die inside the measurement (the real config.json is never written)."""
 
     def load(self) -> dict[str, int]:
+        """Stand-in read-mark store: nothing remembered."""
         return {}
 
     def save(self, seen: dict[str, int]) -> None:
+        """Stand-in read-mark store: nothing saved (the report must not write)."""
         pass
 
 
@@ -76,6 +78,7 @@ def _lazy(keep: dict[str, Any], key: str, factory: Callable[[], Any]) -> Any:
 
 
 def _file_size(path: str) -> Optional[int]:
+    """Return a file's size in bytes, or None when it cannot be read."""
     try:
         return os.path.getsize(path)
     except OSError:
@@ -83,6 +86,7 @@ def _file_size(path: str) -> Optional[int]:
 
 
 def _collect_sizes() -> dict[str, Any]:
+    """Measure state.db, its -wal and the terminal log files."""
     state_db = db_manager.get_state_db_path()
     log_directory = config_manager.get_terminal_log_settings()["directory"]
     log_paths = log_files.list_log_files(os.path.expandvars(os.path.expanduser(log_directory or "")))
@@ -120,6 +124,7 @@ def collect(repeat: int = DEFAULT_REPEAT) -> dict[str, Any]:
     stats: dict[str, Any] = {}
 
     def add(group: str, name: str, work: Callable[[], Any]) -> None:
+        """Time one probe and add the result to the list."""
         timings.append(_time_it(name, work, repeat, group))
 
     with closing(db_manager.open_database()) as connection:
@@ -154,6 +159,7 @@ def collect(repeat: int = DEFAULT_REPEAT) -> dict[str, Any]:
         lambda: _lazy(keep, "reader", gui_daemon.SnapshotReader).read())
 
     def table_cold() -> Any:
+        """Load the Mappings table with all caches emptied (the worst case)."""
         gui_data._summaries_cache.invalidate()
         gui_data._limit_cache.invalidate()
         gui_data._counts_cache.invalidate()
@@ -167,6 +173,7 @@ def collect(repeat: int = DEFAULT_REPEAT) -> dict[str, Any]:
         lambda: _lazy(keep, "feed", lambda: gui_data.StatusFeed(store=_MemoryStore())).refresh())
 
     def tabs_after_change() -> Any:
+        """Refresh the status tabs as if state.db had just changed (forces the full re-query)."""
         feed = _lazy(keep, "changed_feed", lambda: gui_data.StatusFeed(store=_MemoryStore()))
         feed._signature = None  # as if state.db had just been written to: the full re-check runs
         return feed.refresh()
@@ -176,6 +183,7 @@ def collect(repeat: int = DEFAULT_REPEAT) -> dict[str, Any]:
         lambda: _lazy(keep, "feed", lambda: gui_data.StatusFeed(store=_MemoryStore())).unmapped())
 
     def log_directory() -> str:
+        """Return the terminal log directory with ~ and variables expanded."""
         return os.path.expandvars(os.path.expanduser(config_manager.get_terminal_log_settings()["directory"] or ""))
 
     add("log tail", f"open the terminal log (last {LOG_TAIL_LINES} lines)",
@@ -222,6 +230,7 @@ def _notes(report: dict[str, Any]) -> list[str]:
 
 
 def _mb(size: Optional[int]) -> str:
+    """Format a byte count as MB, or "n/a"."""
     return "n/a" if size is None else f"{size / (1024 * 1024):,.1f} MB"
 
 

@@ -50,6 +50,7 @@ WaitResult = Literal["elapsed", "forced", "single", "stop"]
 
 
 class ControlState(TypedDict):
+    """The single control row: pause flag plus the timestamp or flag of each pending request (None = none)."""
     paused: bool
     poll_now_request: Optional[float]
     log_override: Optional[bool]
@@ -59,6 +60,7 @@ class ControlState(TypedDict):
 
 
 def _default_state() -> ControlState:
+    """Return the neutral state used when there is no database (dry-run) or it cannot be read."""
     return {
         "paused": False, "poll_now_request": None, "log_override": None, "stop_request": None,
         "check_folders_request": None, "single_request": None,
@@ -147,6 +149,10 @@ class ControlWatcher:
         on_log_override: Optional[Callable[[Optional[bool]], None]] = None,
         on_check_folders: Optional[Callable[[], None]] = None,
     ) -> None:
+        """Set up the watcher; `read_state`, `clock` and `sleep` are injectable so tests need no database or real time.
+
+        With enabled=False (dry-run) it never reacts to the real daemon's control state.
+        """
         if not enabled:
             # Disabled (dry-run): never react to the real daemon's control state.
             read_state = _default_state
@@ -182,6 +188,7 @@ class ControlWatcher:
         self._sync_log_override(self._read_state())
 
     def _check_stop(self, state: ControlState) -> bool:
+        """Latch stop_requested once the stop stamp differs from the one seen at startup."""
         if state.get("stop_request") != self._initial_stop_request:
             self.stop_requested = True
         return self.stop_requested
@@ -195,6 +202,7 @@ class ControlWatcher:
                 self._on_check_folders()
 
     def _sync_log_override(self, state: ControlState) -> None:
+        """Call the log-switch callback when the stored override changed since the last look."""
         override = state.get("log_override")
         if override != self._last_log_override:
             self._last_log_override = override
@@ -216,9 +224,11 @@ class ControlWatcher:
 
     @staticmethod
     def _make_database_reader(connection: sqlite3.Connection) -> Callable[[], ControlState]:
+        """Build a state reader on `connection` that keeps the last known state when the database is busy."""
         last_known = _default_state()
 
         def read() -> ControlState:
+            """Read the control row; on a sqlite error (e.g. locked) return the last known state for this tick."""
             nonlocal last_known
             try:
                 last_known = read_control_state(connection)
@@ -234,15 +244,11 @@ class ControlWatcher:
         on_change: Optional[Callable[[bool, Optional[float]], None]] = None,
         idle: bool = False,
     ) -> WaitResult:
-        """Block until the interval has run down or a poll is forced.
+        """Block until the interval has run down or a poll is forced; returns why it ended (e.g. "stop", "forced").
 
-        The countdown freezes while paused. A forced poll (Poll now) is honoured even
-        during a pause: that one cycle runs (`forced_while_paused`), then the pause goes on.
-        on_change(paused, next_poll_at) fires at the start and whenever the
-        paused state flips; next_poll_at is epoch seconds, or None while paused.
-        A stop request ends the wait at once ("stop"), paused or not.
-        With `idle` there is no countdown at all (`seconds` is ignored, next_poll_at stays None): the wait
-        ends only with a forced poll or a stop.
+        The countdown freezes while paused, but a forced poll still runs one cycle (`forced_while_paused`). A stop ends
+        the wait at once. `on_change(paused, next_poll_at)` fires at the start and whenever the pause flips. With `idle`
+        there is no countdown: the wait ends only on a forced poll or a stop.
         """
         remaining = math.inf if idle else float(seconds)
         last_tick = self._clock()

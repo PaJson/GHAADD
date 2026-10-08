@@ -1,3 +1,5 @@
+"""Process-wide dry-run flag (--dry-run): code checks is_dry_run() before every write, delete or download."""
+
 _dry_run_enabled = False
 
 

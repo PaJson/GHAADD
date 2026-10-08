@@ -65,6 +65,7 @@ def parse_progress(raw: object) -> Optional[QueueProgress]:
 
 
 def _shorten(text: str, limit: int) -> str:
+    """Cut text to `limit` characters, ending with an ellipsis when it was longer."""
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
@@ -96,6 +97,7 @@ def progress_detail(progress: Optional[QueueProgress], now: Optional[float] = No
 
 @dataclass(frozen=True)
 class DaemonSnapshot:
+    """What the GUI knows about the daemon right now (running, pid, pause, countdown, job in progress, log state...)."""
     running: bool = False
     pid: Optional[int] = None
     paused: bool = False
@@ -109,6 +111,7 @@ class DaemonSnapshot:
 
 @dataclass(frozen=True)
 class ControlBarView:
+    """Ready-to-show texts and enabled flags of the control bar, built by build_view() from a snapshot."""
     dot: str
     status_text: str
     countdown_text: str
@@ -142,11 +145,9 @@ def _compute_settings() -> tuple[Optional[str], Optional[bool]]:
 class SnapshotReader:
     """Reads the daemon's published state cheaply enough to call every second.
 
-    - config.json is re-read only when its size/mtime changed (StatCache).
-    - The control table (pause, log override) lives in state.db, so it is read
-      only every `control_interval` seconds, plus on demand right after the GUI
-      itself changed something (`force_control=True`). In between, pause comes
-      from the status file, which the daemon refreshes within about a second.
+    config.json is re-read only when its size/mtime changed. The control table (pause, log override) is read
+    every `control_interval` seconds or on demand (`force_control=True`); in between, pause comes from the
+    status file, which the daemon refreshes within about a second.
     """
 
     def __init__(
@@ -154,6 +155,7 @@ class SnapshotReader:
         control_interval: float = CONTROL_READ_INTERVAL_SECONDS,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
+        """Set up the config cache and the control-table throttle; `clock` is injectable for tests."""
         self._clock = clock
         self._control_interval = control_interval
         self._settings: StatCache[tuple[Optional[str], Optional[bool]]] = StatCache(
@@ -165,6 +167,10 @@ class SnapshotReader:
         self._intent_until = 0.0
 
     def read(self, force_control: bool = False) -> DaemonSnapshot:
+        """Return a DaemonSnapshot from the lock probe, the status file and (throttled) the control table.
+
+        `force_control=True` re-reads the control table now, e.g. right after the GUI changed something.
+        """
         status = daemon_lock.get_daemon_status()
         fingerprint, config_log_enabled = self._settings.get()
         if not status["running"]:
@@ -225,6 +231,7 @@ def read_snapshot() -> DaemonSnapshot:
 
 
 def format_countdown(seconds: float) -> str:
+    """Format seconds as M:SS, or H:MM:SS from one hour on."""
     seconds = max(0, int(seconds))
     hours, remainder = divmod(seconds, 3600)
     minutes, secs = divmod(remainder, 60)
@@ -326,26 +333,32 @@ def _guarded(action: Callable[[], object]) -> Optional[str]:
 
 
 def do_set_paused(paused: bool) -> Optional[str]:
+    """Pause or resume polling; returns an error text, or None on success."""
     return _guarded(lambda: daemon_control.set_paused(paused))
 
 
 def do_poll_now() -> Optional[str]:
+    """Ask the daemon for an immediate poll; returns an error text, or None on success."""
     return _guarded(daemon_control.request_poll_now)
 
 
 def do_single_poll() -> Optional[str]:
+    """Ask for one notification and one queue item; returns an error text, or None on success."""
     return _guarded(daemon_control.request_single_poll)
 
 
 def do_check_folders() -> Optional[str]:
+    """Ask the daemon to check destinations and folder limits; returns an error text, or None."""
     return _guarded(daemon_control.request_check_folders)
 
 
 def do_set_log(on: bool) -> Optional[str]:
+    """Switch the daemon's terminal log on or off for this session; returns an error text, or None."""
     return _guarded(lambda: daemon_control.set_log_override(on))
 
 
 def do_stop() -> Optional[str]:
+    """Ask the daemon to stop gracefully (the job in progress finishes); returns an error text, or None."""
     return _guarded(daemon_control.request_stop)
 
 

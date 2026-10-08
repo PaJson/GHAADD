@@ -1,3 +1,5 @@
+"""Queue status, report and CSV output for the CLI (--queue-status, --queue-report, --queue-report-csv)."""
+
 import csv
 import json
 import sys

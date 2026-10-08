@@ -92,6 +92,7 @@ class LogTailer:
     """Follows the newest log file in a directory; see the module docstring."""
 
     def __init__(self, directory: Callable[[], str], max_lines: int = DEFAULT_MAX_LINES) -> None:
+        """Follow the newest log file in the directory that `directory()` returns, keeping at most `max_lines` lines."""
         self._directory = directory
         self._max_lines = max_lines
         self._path: Optional[str] = None
@@ -100,6 +101,7 @@ class LogTailer:
 
     @property
     def path(self) -> Optional[str]:
+        """Return the log file currently followed, or None."""
         return self._path
 
     def poll(self) -> Optional[TailUpdate]:

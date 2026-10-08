@@ -1,3 +1,5 @@
+"""The processing engine: ingests notifications into jobs and runs due jobs (PENDING -> COMPLETED/FAILED/SUPERSEDED)."""
+
 import requests
 import sys
 import time
@@ -97,10 +99,8 @@ def _handle_working_dir_relocation(
 ) -> None:
     """Warn about and quarantine a Processing folder abandoned by a mid-flight rename.
 
-    Re-check attempts recompute the staging folder name from live release metadata
-    (title, prerelease flag). If that metadata changes upstream between attempts,
-    a new folder is used and the previous attempt's folder is no longer referenced
-    by the job - left alone, it would silently linger in Processing forever.
+    Re-check attempts recompute the staging folder name from live release metadata (title, prerelease flag). If
+    that changes upstream between attempts, a new folder is used and the old one would linger in Processing forever.
     """
     if not previous_working_dir or not new_working_dir:
         return
@@ -148,19 +148,12 @@ def _preserve_best_known_counters(
 ) -> Tuple[int, int, int, Optional[str]]:
     """Avoid clobbering previously recorded progress with a worse-result attempt.
 
-    An attempt that errors out or is skipped before reaching the asset list has no
-    real counts of its own (0/0/0). Persisting those zeros would overwrite the
-    genuine counts/working_dir left behind by an earlier successful attempt on the
-    same job, which later makes a fully-staged release look incomplete.
-
-    The same problem happens mid-run: if a prior attempt already accounted for
-    every expected item (e.g. 16/16 downloaded+skipped), but this attempt gets
-    interrupted partway through re-verification (a GitHub 404 because the release
-    was replaced/deleted upstream mid-recheck), it reports fewer accounted-for
-    items than before (e.g. 10/16). That regression is never true data loss -
-    the previously downloaded files are still on disk - so it must not overwrite
-    the last known-good, fully-accounted-for counters either.
+    An attempt that errors out or is skipped early reports 0/0/0 and no working_dir, and a partly interrupted
+    re-verification reports fewer items than an earlier attempt. Neither is real data loss, so the last known-good
+    counters are kept (see the comment in the body).
     """
+    # Persisting zeros from an errored or early-skipped attempt would overwrite the genuine counts and working_dir
+    # of an earlier successful attempt, which later makes a fully staged release look incomplete.
     previous_total_items = int(row["total_items"] or 0)
     if previous_total_items <= 0:
         return downloaded_count, skipped_count, total_items, working_dir
@@ -179,6 +172,9 @@ def _preserve_best_known_counters(
             working_dir or previous_working_dir,
         )
 
+    # Mid-run regression: an earlier attempt accounted for every item (e.g. 16/16) but this one was interrupted
+    # during re-verification (e.g. a GitHub 404 because the release was replaced) and reports fewer (10/16).
+    # The files are still on disk, so the last known-good counters win.
     current_accounted = downloaded_count + skipped_count
     regressed_from_complete = (
         previously_fully_accounted
@@ -321,11 +317,9 @@ def _finalize_terminal_skip_job(
 ) -> Tuple[int, int, int]:
     """Finalize a job whose release/tag disappeared, moving any real staged files.
 
-    A terminal SKIP (release_not_found) attempt never reaches the asset list, so it
-    always reports 0/0/0 and no working_dir. The job's persisted counters and
-    working_dir from earlier attempts are the only real record of what was staged,
-    so those are used for the file-count checks and the actual folder move.
-    Returns the (downloaded_count, skipped_count, total_items) to record for the job.
+    A terminal SKIP (release_not_found) attempt reports 0/0/0 and no working_dir, so the counters and working_dir
+    stored by earlier attempts are the only record of what was staged. Returns the (downloaded, skipped, total)
+    counts to record for the job.
     """
     if current_total_items > 0:
         downloaded_count = current_downloaded_count
@@ -481,15 +475,11 @@ def ingest_notifications_once(
     notification_limit: Optional[int] = None,
     should_pause: Optional[Callable[[], bool]] = None,
 ) -> Tuple[IngestCycleStats, Optional[QueuedItemInfo]]:
-    """Ingest unseen notifications into job_queue and delete emails immediately.
+    """Ingest unseen notifications into job_queue and delete the emails immediately.
 
-    notification_limit, when given, overrides processing.max_emails_to_process
-    for this call only (used by --single to fetch at most one notification).
-    should_pause is checked before each notification; when it returns True the
-    remaining notifications are left untouched in the mailbox for the next poll
-    (the ones already handled are still cleaned up normally).
-    Returns cycle stats plus the identity of the one item just queued, if any
-    (used by --single to immediately process that same item).
+    `notification_limit` overrides processing.max_emails_to_process for this call (--single uses 1).
+    `should_pause` is checked before each notification; the rest stay in the mailbox for the next poll.
+    Returns the cycle stats plus the one item just queued, if any (--single processes that same item).
     """
     max_emails_to_process = notification_limit if notification_limit is not None else get_max_emails_to_process()
 
@@ -1079,16 +1069,11 @@ def _process_queue_once(
     job_filter_ids: Optional[list[int]] = None,
     should_pause: Optional[Callable[[], bool]] = None,
 ) -> QueueCycleStats:
-    """Process due queue rows and re-check each job using configured intervals.
+    """Process due queue rows and re-check each job using the configured intervals.
 
-    should_pause is checked before each job; when it returns True the cycle
-    stops there. A job already running always finishes, and the unprocessed
-    jobs stay PENDING and due, so the next poll picks them up.
-
-    limit caps how many due jobs are fetched this call (ignored when
-    job_filter_ids is given). job_filter_ids, when given, processes exactly
-    those job rows regardless of due time (used by --single to run a job
-    that was just queued in the same cycle).
+    `should_pause` is checked before each job; a running job always finishes, the rest stay PENDING for the next
+    poll. `limit` caps how many due jobs are fetched; `job_filter_ids` processes exactly those rows regardless of
+    due time (--single uses it for the job it just queued).
     """
     if is_dry_run():
         print("   🧪 [DRY-RUN] Skipping duplicate-pending-job cleanup (no writes in dry-run).")
@@ -1454,11 +1439,8 @@ def run_ingest_and_queue_cycle(
 def run_single_cycle(connection, github_token: Optional[str]) -> None:
     """Ingest at most one new notification and process at most one queue item.
 
-    Prefers the just-ingested notification's job when one was queued; falls
-    back to the oldest due job already in the queue otherwise. Fully honors
-    dry-run mode (is_dry_run()) throughout the call chain: when dry-run and a
-    notification was found, nothing was actually enqueued, so the would-be
-    download is previewed directly instead of looking up a real job id.
+    Prefers the job just queued from the notification, else the oldest due job already in the queue. In dry-run
+    mode nothing is enqueued, so the would-be download is previewed directly.
     """
     ingest_stats, queued_item = ingest_notifications_once(connection, github_token, notification_limit=1)
 

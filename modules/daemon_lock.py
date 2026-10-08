@@ -1,3 +1,5 @@
+"""Single-instance daemon lock and the status file (ghaadd.daemon.status.json) that the GUI and CLI read."""
+
 import json
 import os
 import sys
@@ -17,6 +19,7 @@ _STATUS_FILE_NAME = "ghaadd.daemon.status.json"
 
 
 class DaemonStatus(TypedDict):
+    """Shape of the daemon status dict returned by get_daemon_status() (all fields None/False when no daemon runs)."""
     running: bool
     pid: Optional[int]
     started_at: Optional[float]

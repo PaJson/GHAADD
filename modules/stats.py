@@ -52,14 +52,17 @@ def format_bytes(size: Optional[float]) -> str:
 
 
 def _day(timestamp: float) -> date:
+    """Convert an epoch timestamp to a local date."""
     return datetime.fromtimestamp(timestamp).date()
 
 
 def _stamp(timestamp: Optional[float]) -> Optional[str]:
+    """Format an epoch timestamp as "YYYY-MM-DD HH:MM", or None."""
     return None if timestamp is None else datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M")
 
 
 def _split_release_key(release_key: str) -> tuple[str, str]:
+    """Split a "repo|tag" release key into (repo, tag)."""
     repo, _, tag = release_key.partition("|")
     return repo, tag
 
@@ -94,6 +97,7 @@ def _period_rows(
     now: float,
     history_start: Optional[float],
 ) -> list[dict[str, Any]]:
+    """Build the per-period figures (24 h, 7/30/365 days, lifetime): jobs by outcome, polls, files and data."""
     rows = []
     history_days = 1.0 if history_start is None else max(1.0, (now - history_start) / DAY_SECONDS)
     for key, label, days in PERIODS:
@@ -128,6 +132,7 @@ def _period_rows(
 
 
 def _daily(jobs: Sequence[tuple[str, str, str, float]], today: date) -> list[dict[str, Any]]:
+    """Count jobs per day for the last DAILY_DAYS days (days without jobs count 0)."""
     per_day = Counter(_day(job[3]) for job in jobs)
     days = [today - timedelta(days=offset) for offset in range(DAILY_DAYS - 1, -1, -1)]
     return [{"date": day.isoformat(), "jobs": per_day.get(day, 0)} for day in days]
@@ -139,6 +144,7 @@ def _busiest_repositories(
     now: float,
     limit: int,
 ) -> list[dict[str, Any]]:
+    """Rank repositories by number of jobs and return the top `limit` with their recent activity."""
     grouped: dict[str, dict[str, Any]] = {}
     month_ago = now - 30 * DAY_SECONDS
     for repo, _tag, status, created in jobs:
@@ -285,6 +291,7 @@ RELEASE_HEADERS = ("Release", "Size", "Files")
 
 
 def period_rows(report: Mapping[str, Any]) -> list[tuple[str, ...]]:
+    """Turn the period figures into table rows of display strings (CLI and GUI share them)."""
     return [
         (
             row["label"], f"{row['jobs']:,}", f"{row['completed']:,}", f"{row['failed']:,}", f"{row['superseded']:,}",
@@ -295,6 +302,7 @@ def period_rows(report: Mapping[str, Any]) -> list[tuple[str, ...]]:
 
 
 def busiest_rows(report: Mapping[str, Any]) -> list[tuple[str, ...]]:
+    """Turn the busiest repositories into table rows of display strings."""
     return [
         (r["repo"], f"{r['jobs']:,}", f"{r['jobs_30d']:,}", f"{r['failed']:,}", format_bytes(r["bytes"]), r["last_job"])
         for r in report["busiest_repositories"]
@@ -302,6 +310,7 @@ def busiest_rows(report: Mapping[str, Any]) -> list[tuple[str, ...]]:
 
 
 def biggest_rows(report: Mapping[str, Any]) -> list[tuple[str, ...]]:
+    """Turn the biggest repositories into table rows of display strings."""
     return [
         (r["repo"], format_bytes(r["bytes"]), f"{r['releases']:,}", f"{r['files']:,}",
          format_bytes(r["average_release_bytes"]), format_bytes(r["largest"]))
@@ -310,6 +319,7 @@ def biggest_rows(report: Mapping[str, Any]) -> list[tuple[str, ...]]:
 
 
 def release_rows(report: Mapping[str, Any]) -> list[tuple[str, ...]]:
+    """Turn the biggest releases into table rows of display strings."""
     return [
         (f"{r['repo']} {r['tag']}", format_bytes(r["bytes"]), f"{r['files']:,}") for r in report["biggest_releases"]
     ]
@@ -355,6 +365,7 @@ def summary_lines(report: Mapping[str, Any]) -> list[str]:
 
 
 def storage_lines(report: Mapping[str, Any]) -> list[str]:
+    """Return the text lines about state.db's size and row counts (empty when unknown)."""
     storage = report["storage"]
     if not storage:
         return []
@@ -370,6 +381,7 @@ def _table(headers: Sequence[str], rows: Sequence[Sequence[str]], left: int = 1)
     widths = [max(len(str(cell)) for cell in column) for column in zip(headers, *rows)] if rows else [len(h) for h in headers]
 
     def line(cells: Sequence[str]) -> str:
+        """Format one table row: first column(s) left-aligned, the rest right-aligned."""
         return "  " + "  ".join(
             str(cell).ljust(width) if index < left else str(cell).rjust(width)
             for index, (cell, width) in enumerate(zip(cells, widths))

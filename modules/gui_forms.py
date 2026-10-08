@@ -51,6 +51,7 @@ class FormResult:
 
     @property
     def ok(self) -> bool:
+        """True when the form has no errors."""
         return not self.errors
 
 
@@ -193,6 +194,7 @@ def github_url(repo: str) -> Optional[str]:
 
 
 def _directory_warning(label: str, path: str) -> Optional[str]:
+    """Return a warning when a typed directory does not exist (yet), else None; it is not an error."""
     if path and not os.path.isdir(path):
         return f"{label} '{path}' does not exist (yet)."
     return None
@@ -201,10 +203,8 @@ def _directory_warning(label: str, path: str) -> Optional[str]:
 def build_repo_changes(form: Mapping[str, Any]) -> FormResult:
     """Validate the Mappings editor and return the fields for update_repository_fields.
 
-    Only editable fields are produced; `name` and the daemon-owned
-    last_notification / last_finalized are never included. Duplicate
-    detection and other cross-entry rules are left to mapping_manager, which
-    raises MappingValidationError on save.
+    Only editable fields are produced (never `name` or the daemon-owned last_notification/last_finalized).
+    Cross-entry rules such as duplicates are left to mapping_manager, which raises MappingValidationError on save.
     """
     result = FormResult()
     destination = str(form.get("destination", "")).strip()

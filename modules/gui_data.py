@@ -17,6 +17,7 @@ from modules.file_cache import StatCache, file_signature
 
 @dataclass
 class RepoTable:
+    """Everything the Mappings table needs: display rows, the raw mapping entries, default recheck and any db error."""
     rows: list[repo_overview.RepoRow] = field(default_factory=list)
     entries: dict[str, dict[str, Any]] = field(default_factory=dict)  # keyed by owner/repo as stored
     default_recheck: list[int] = field(default_factory=list)
@@ -34,6 +35,7 @@ def _recheck_step_count(entry: Mapping[str, Any], default_count: int) -> int:
 
 
 def _load_summaries() -> dict[str, Any]:
+    """Read the per-repository job summaries from state.db (own short-lived connection)."""
     connection = db_manager.open_database()
     try:
         return db_manager.get_repo_job_summaries(connection)
@@ -42,6 +44,7 @@ def _load_summaries() -> dict[str, Any]:
 
 
 def _load_limit_warned() -> frozenset[str]:
+    """Read the set of repositories that have a stored folder-limit warning."""
     connection = db_manager.open_database()
     try:
         return frozenset(db_manager.get_repos_with_limit_warnings(connection))
@@ -50,6 +53,7 @@ def _load_limit_warned() -> frozenset[str]:
 
 
 def _load_folder_counts() -> dict[str, dict[str, Any]]:
+    """Read the folder counts the daemon stored for each repository."""
     connection = db_manager.open_database()
     try:
         return db_manager.get_folder_counts(connection)
@@ -58,6 +62,7 @@ def _load_folder_counts() -> dict[str, dict[str, Any]]:
 
 
 def _state_db_files() -> list[str]:
+    """List state.db and its -wal file: the files whose change means new data."""
     path = db_manager.get_state_db_path()
     return [path, f"{path}-wal"]  # in WAL mode the daemon's commits land in the -wal file first
 
@@ -73,6 +78,7 @@ _counts_cache: StatCache[dict[str, dict[str, Any]]] = StatCache(_state_db_files,
 
 @dataclass(frozen=True)
 class _PendingJob:
+    """A pending job's due time plus the due times of its later re-check steps (for the queue figures)."""
     next_check: float  # when this job is due
     later_steps: tuple[float, ...]  # when the re-check steps AFTER this poll's step are due (created_at + interval)
 
@@ -107,6 +113,7 @@ _pending_cache: StatCache[list[_PendingJob]] = StatCache(_state_db_files, _load_
 
 @dataclass(frozen=True)
 class QueueCounts:
+    """Queue figures for the footer: pending, due, behind and the polls needed to catch up."""
     pending: int  # jobs waiting in the queue
     due: int  # of those, the ones whose check time has come (the next poll processes every one of them, once)
     behind: int = 0  # of the due ones: after this poll's step the next step is already past too, so they are due again
@@ -114,7 +121,7 @@ class QueueCounts:
 
 
 def load_queue_counts(now: Optional[float] = None) -> QueueCounts:
-    """How many jobs are pending, how many are due now (what "Processing N due queue job(s)" reports) and how many lag."""
+    """Count the pending jobs, those due now (what "Processing N due queue job(s)" reports) and those lagging behind."""
     now = time.time() if now is None else now
     jobs = _pending_cache.get()
     due = [job for job in jobs if job.next_check <= now]
@@ -239,6 +246,7 @@ class ConfigSeenStore:
     """Per-tab last-seen event ids, kept in config.json under gui.status_tabs (GUI-side only)."""
 
     def load(self) -> dict[str, int]:
+        """Return the remembered last-seen event id per tab from config.json (empty when none)."""
         gui = config_manager.load_config().get("gui")
         tabs = gui.get("status_tabs") if isinstance(gui, dict) else None
         if not isinstance(tabs, dict):
@@ -246,6 +254,7 @@ class ConfigSeenStore:
         return {str(key): value for key, value in tabs.items() if isinstance(value, int) and not isinstance(value, bool)}
 
     def save(self, seen: dict[str, int]) -> None:
+        """Store the last-seen ids in config.json; a failure only means the read marks are forgotten."""
         try:
             config_manager.set_config_values({f"{STATUS_SEEN_SECTION}.{key}": value for key, value in seen.items()})
         except (config_manager.ConfigLockTimeout, config_manager.ConfigUnreadableError, OSError):
@@ -265,6 +274,7 @@ class StatusFeed:
         store: Optional[status_tabs.SeenStore] = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
+        """Set up the status tabs feed: tab definitions, the read-mark store and the mapping cache."""
         self._clock = clock
         self._mapping_cache: StatCache[dict[str, list[dict[str, Any]]]] = StatCache(
             lambda: [mapping_manager._mapping_file_path()], mapping_manager.load_mapping, clock=clock
@@ -303,6 +313,7 @@ class StatusFeed:
         return changed
 
     def _collect_failed_jobs(self) -> None:
+        """Remember jobs that failed since the last look, once each, for the tray notices."""
         try:
             failed = db_manager.get_failed_jobs_since(self._connection, self._failed_cursor)
         except Exception:  # an old database layout or a hiccup: notifications are optional
@@ -319,6 +330,7 @@ class StatusFeed:
         return failed
 
     def count_repo_limit_warnings(self, repo: str) -> int:
+        """Count the stored limit warnings of one repository without deleting them."""
         return self._purge_repo(repo, dry_run=True)
 
     def clear_repo_limit_warnings(self, repo: str) -> int:
@@ -329,6 +341,7 @@ class StatusFeed:
         return removed
 
     def _purge_repo(self, repo: str, dry_run: bool) -> int:
+        """Delete (or with dry_run only count) the limit warnings of one repository."""
         connection = db_manager.open_database()
         try:
             return db_manager.purge_limit_warnings_for_repo(connection, repo, dry_run=dry_run)
@@ -347,6 +360,7 @@ class StatusFeed:
         return removed
 
     def _purge(self, key: str, dry_run: bool) -> int:
+        """Delete (or with dry_run only count) the events a tab lists."""
         tab = next(definition for definition in self.defs if definition.key == key)
         connection = db_manager.open_database()
         try:
@@ -357,21 +371,26 @@ class StatusFeed:
             connection.close()
 
     def unmapped(self) -> list[status_tabs.UnmappedRow]:
+        """Return the repositories that still have no destination (mapping.json only)."""
         return status_tabs.unmapped_rows(self._mapping_cache.get()["repositories"])
 
     # ----- callbacks for the model -----
 
     def _fetch(self, tab: status_tabs.TabDef, after_id: Optional[int], limit: int) -> list[dict[str, Any]]:
+        """Query the events of one tab newer than `after_id`, at most `limit`."""
         return db_manager.get_events_for_tab(
             self._connection, tab.event_types, tab.categories, tab.exclude_categories, after_id, limit
         )
 
     def _existing_ids(self, ids: list[int]) -> set[int]:
+        """Return which of the given event ids still exist (rows may have been purged)."""
         return db_manager.get_existing_event_ids(self._connection, ids)
 
     def _max_id(self) -> int:
+        """Return the highest event id in the database."""
         return db_manager.get_max_event_id(self._connection)
 
     def _known_repos(self) -> dict[str, str]:
+        """Return {lower-case name: name as mapped} for the repositories in mapping.json."""
         entries = self._mapping_cache.get()["repositories"]
         return {str(e["repository"]).strip().lower(): str(e["repository"]).strip() for e in entries if e.get("repository")}

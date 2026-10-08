@@ -24,10 +24,12 @@ _held: Optional[FileLock] = None  # kept for the life of the process
 
 
 def lock_path(directory: Optional[str] = None) -> str:
+    """Return the path of the GUI lock file."""
     return os.path.join(directory or _APP_DIR, LOCK_FILE_NAME)
 
 
 def show_path(directory: Optional[str] = None) -> str:
+    """Return the path of the "show yourself" note a second start leaves behind."""
     return os.path.join(directory or _APP_DIR, SHOW_FILE_NAME)
 
 
@@ -47,6 +49,7 @@ def acquire(directory: Optional[str] = None) -> bool:
 
 
 def release() -> None:
+    """Release the GUI lock (the OS also frees it when the process ends)."""
     global _held
     lock, _held = _held, None
     if lock is not None:
@@ -76,6 +79,7 @@ def request_show(directory: Optional[str] = None) -> bool:
 
 
 def clear_show_request(directory: Optional[str] = None) -> None:
+    """Delete the "show yourself" note, if present."""
     try:
         os.remove(show_path(directory))
     except OSError:
