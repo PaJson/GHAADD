@@ -128,23 +128,18 @@ def center_dialog(dialog: tk.Toplevel, parent: tk.Misc, focus: Optional[tk.Widge
 
 
 def reveal_window(window: tk.Toplevel, place: Callable[[], None]) -> None:
-    """Show a window that was built withdrawn: lay it out while it is invisible, call `place`, then make it visible.
+    """Show a window that was built withdrawn without anyone seeing it settle: map it off screen, lay it out, move it.
 
-    Without it a window opens at some default size and then re-lays itself out in plain sight. The transparency needs
-    a compositor on Linux; without one the window is simply shown during the layout pass, as before.
+    A window's first appearance lands at the screen's corner and re-lays itself out in plain sight. So the first map
+    happens beyond the right edge of the desktop, `place` then moves the finished window to where it belongs in one
+    step. Transparency is not used: Windows 11 still draws the frame of a transparent window (seen as an empty
+    outline in the corner). A window manager that refuses off-screen positions shows it where it clamps it.
     """
-    try:
-        window.attributes("-alpha", 0.0)
-    except tk.TclError:
-        pass
+    window.geometry(f"+{window.winfo_vrootx() + window.winfo_vrootwidth() + 100}+{window.winfo_vrooty()}")
     window.deiconify()
-    window.update()  # sizes, wrapping and the widgets' own Configure handling settle here, unseen
+    window.update()  # sizes, wrapping and the widgets' own Configure handling settle here, out of sight
     place()
-    window.update_idletasks()  # the move has happened before the window becomes visible
-    try:
-        window.attributes("-alpha", 1.0)
-    except tk.TclError:
-        pass
+    window.update()
 
 
 def format_status_title(title: str, count: int) -> str:
@@ -2734,18 +2729,16 @@ def calendar_module() -> Any:
     return tkcalendar
 
 
-class DatePicker(tk.Toplevel):
-    """A small pop-up calendar (needs tkcalendar): clicking a day hands it to `on_pick` and closes the pop-up."""
+class DatePicker(ttk.Frame):
+    """A calendar panel (needs tkcalendar) drawn inside the dialog below a date field, like a drop-down list.
 
-    def __init__(self, master: tk.Misc, anchor: tk.Misc, initial: Optional[date], on_pick: Callable[[date], None]) -> None:
-        """Open the calendar just below `anchor`, showing `initial` (or today)."""
-        super().__init__(master)
-        self.withdraw()  # shown by reveal_window once the calendar has found its size
-        # The corner is known before the size is (the pop-up hangs below the field), so it opens in the right place.
-        self.geometry(f"+{anchor.winfo_rootx()}+{anchor.winfo_rooty() + anchor.winfo_height() + 2}")
-        self.transient(master.winfo_toplevel())  # type: ignore[arg-type]
-        self.title("Pick a date")
-        self.resizable(False, False)
+    It is a widget, not a window: a separate pop-up window is first placed by the window manager (at the screen's
+    corner) and re-sized in plain sight, which showed as a flicker. Clicking a day hands it to `on_pick`.
+    """
+
+    def __init__(self, dialog: tk.Toplevel, anchor: tk.Misc, initial: Optional[date], on_pick: Callable[[date], None]) -> None:
+        """Open the calendar just below `anchor` (above it when there is no room), showing `initial` or today."""
+        super().__init__(dialog, relief="solid", borderwidth=1)
         start = initial or date.today()
         calendar = calendar_module().Calendar(
             self, selectmode="day", year=start.year, month=start.month, day=start.day, date_pattern="yyyy-mm-dd",
@@ -2755,12 +2748,25 @@ class DatePicker(tk.Toplevel):
         self._on_pick = on_pick
         self._calendar = calendar
         calendar.bind("<<CalendarSelected>>", self._picked)
-        self.bind("<Escape>", lambda _event: self.destroy())
+        self.update_idletasks()
+        width, height = self.winfo_reqwidth(), self.winfo_reqheight()
+        field_x = anchor.winfo_rootx() - dialog.winfo_rootx()
+        field_y = anchor.winfo_rooty() - dialog.winfo_rooty()
+        x = max(4, min(field_x, dialog.winfo_width() - width - 4))
+        y = field_y + anchor.winfo_height() + 2
+        if y + height > dialog.winfo_height() - 4:  # no room below the field: open above it
+            y = max(4, field_y - height - 2)
+        self.place(x=x, y=y)
+        self.lift()
+        calendar.focus_set()
 
-        reveal_window(self, self.focus_set)
+    def contains(self, widget: object) -> bool:
+        """True when a widget (or its path name) is this panel or one of its parts."""
+        path, own = str(widget), str(self)
+        return path == own or path.startswith(own + ".")
 
     def _picked(self, _event: tk.Event) -> None:  # type: ignore[type-arg]
-        """Pass the clicked day on and close."""
+        """Pass the clicked day on and close the panel."""
         chosen = self._calendar.selection_get()
         self.destroy()
         if chosen:
@@ -2789,6 +2795,9 @@ class StatsDialog(tk.Toplevel):
         self._result: Optional[dict] = None
         self._range: Optional[stats.DateRange] = None
         self._applied_dates = ("", "")
+        self._picker: Optional[DatePicker] = None
+        self._picker_field = ""
+        self._calendar_buttons: list[tk.Misc] = []
         self._error: Optional[str] = None
         self._bold = tkfont.nametofont("TkDefaultFont").copy()
         self._bold.configure(weight="bold")
@@ -2860,7 +2869,8 @@ class StatsDialog(tk.Toplevel):
         self.copy_button.grid(row=0, column=1, padx=(0, 6))
         ttk.Button(buttons, text="Close", command=self.destroy).grid(row=0, column=2)
 
-        self.bind("<Escape>", lambda _event: self.destroy())
+        self.bind("<Escape>", self._on_escape)
+        self.bind("<Button-1>", self._on_click, add="+")  # a click anywhere else closes an open calendar
         self._start()
 
     def _reveal(self) -> None:
@@ -2895,7 +2905,9 @@ class StatsDialog(tk.Toplevel):
             entry.bind("<FocusOut>", lambda _event: self._on_dates_typed())
             self.date_entries[name] = entry
             if calendar_module() is not None:  # without tkcalendar the typed YYYY-MM-DD field is all there is
-                ttk.Button(bar, text="\u25be", width=2, command=lambda n=name: self._open_calendar(n)).pack(side="left")
+                button = ttk.Button(bar, text="\u25be", width=2, command=lambda n=name: self._open_calendar(n))
+                button.pack(side="left")
+                self._calendar_buttons.append(button)
             ttk.Frame(bar, width=10).pack(side="left")
         self.period_message = ttk.Label(bar, text="", foreground=COLOR_ERROR)
         self.period_message.pack(side="left")
@@ -2903,8 +2915,34 @@ class StatsDialog(tk.Toplevel):
         ttk.Label(bar, text=hint, foreground=COLOR_MUTED).pack(side="right")
         return bar
 
+    def _close_picker(self) -> None:
+        """Close the calendar panel if one is open."""
+        if self._picker is not None and self._picker.winfo_exists():
+            self._picker.destroy()
+        self._picker = None
+        self._picker_field = ""
+
+    def _on_escape(self, _event: tk.Event) -> None:  # type: ignore[type-arg]
+        """Escape closes an open calendar first, and the window when there is none."""
+        if self._picker is not None and self._picker.winfo_exists():
+            self._close_picker()
+        else:
+            self.destroy()
+
+    def _on_click(self, event: tk.Event) -> None:  # type: ignore[type-arg]
+        """Close the calendar on a click outside it (the ▾ buttons toggle it themselves)."""
+        picker = self._picker
+        if picker is None or not picker.winfo_exists():
+            return
+        if not picker.contains(event.widget) and event.widget not in self._calendar_buttons:
+            self._close_picker()
+
     def _open_calendar(self, name: str) -> None:
-        """Pop up the calendar for the From or To field and put the clicked day into it."""
+        """Open the calendar for the From or To field (a second click on its ▾ closes it) and fill the clicked day in."""
+        reopen = self._picker_field != name
+        self._close_picker()
+        if not reopen:
+            return
         entry = self.date_entries[name]
         try:
             initial = stats.parse_date(entry.get())
@@ -2915,9 +2953,10 @@ class StatsDialog(tk.Toplevel):
             """Write the chosen day into the field and apply the window."""
             entry.delete(0, "end")
             entry.insert(0, day.isoformat())
+            self._picker, self._picker_field = None, ""
             self._on_dates_typed()
 
-        DatePicker(self, entry, initial, picked)
+        self._picker, self._picker_field = DatePicker(self, entry, initial, picked), name
 
     def _on_preset(self) -> None:
         """A preset was chosen: fill the date fields with what it means and apply it ("Custom range" leaves them)."""
