@@ -287,6 +287,7 @@ class DoctorTests(unittest.TestCase):
         self.assertEqual([family(p) for p in ("win32", "cygwin", "linux", "linux2", "darwin", "freebsd14")],
                          ["windows", "windows", "linux", "linux", "darwin", "freebsd14"])
 
+    @unittest.skipUnless(os.name == "nt", "drive-root shorthand only exists on Windows")
     def test_a_bare_drive_letter_in_config_is_fine_because_the_app_reads_it_as_the_drive_root(self) -> None:
         self.write(self.config_path, {"paths": {"default_download_dir": "D:"}})
         self.write(self.mapping_path, {"repositories": []})
