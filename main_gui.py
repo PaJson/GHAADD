@@ -127,6 +127,26 @@ def center_dialog(dialog: tk.Toplevel, parent: tk.Misc, focus: Optional[tk.Widge
         focus.focus_set()
 
 
+def reveal_window(window: tk.Toplevel, place: Callable[[], None]) -> None:
+    """Show a window that was built withdrawn: lay it out while it is invisible, call `place`, then make it visible.
+
+    Without it a window opens at some default size and then re-lays itself out in plain sight. The transparency needs
+    a compositor on Linux; without one the window is simply shown during the layout pass, as before.
+    """
+    try:
+        window.attributes("-alpha", 0.0)
+    except tk.TclError:
+        pass
+    window.deiconify()
+    window.update()  # sizes, wrapping and the widgets' own Configure handling settle here, unseen
+    place()
+    window.update_idletasks()  # the move has happened before the window becomes visible
+    try:
+        window.attributes("-alpha", 1.0)
+    except tk.TclError:
+        pass
+
+
 def format_status_title(title: str, count: int) -> str:
     """"Unmapped (2)": the number of repositories that still need a destination (not an unread count)."""
     return status_tabs.format_title(title, count)
@@ -2720,6 +2740,9 @@ class DatePicker(tk.Toplevel):
     def __init__(self, master: tk.Misc, anchor: tk.Misc, initial: Optional[date], on_pick: Callable[[date], None]) -> None:
         """Open the calendar just below `anchor`, showing `initial` (or today)."""
         super().__init__(master)
+        self.withdraw()  # shown by reveal_window once the calendar has found its size
+        # The corner is known before the size is (the pop-up hangs below the field), so it opens in the right place.
+        self.geometry(f"+{anchor.winfo_rootx()}+{anchor.winfo_rooty() + anchor.winfo_height() + 2}")
         self.transient(master.winfo_toplevel())  # type: ignore[arg-type]
         self.title("Pick a date")
         self.resizable(False, False)
@@ -2733,8 +2756,8 @@ class DatePicker(tk.Toplevel):
         self._calendar = calendar
         calendar.bind("<<CalendarSelected>>", self._picked)
         self.bind("<Escape>", lambda _event: self.destroy())
-        self.geometry(f"+{anchor.winfo_rootx()}+{anchor.winfo_rooty() + anchor.winfo_height() + 2}")
-        self.focus_set()
+
+        reveal_window(self, self.focus_set)
 
     def _picked(self, _event: tk.Event) -> None:  # type: ignore[type-arg]
         """Pass the clicked day on and close."""
@@ -2751,8 +2774,13 @@ class StatsDialog(tk.Toplevel):
     CUSTOM = "Custom range"
 
     def __init__(self, master: tk.Misc) -> None:
-        """Build the Stats window (tabs Overview, Busiest, Biggest, Per day) and start collecting."""
+        """Build the Stats window (tabs Overview, Busiest, Biggest, Per day) and start collecting.
+
+        The window stays hidden until the figures are in (`_reveal`), so it opens once, filled and fitted.
+        """
         super().__init__(master)
+        self.withdraw()
+        self._revealed = False
         self.title("Statistics")
         self.transient(master)  # type: ignore[arg-type]
         self.minsize(760, 480)
@@ -2833,8 +2861,21 @@ class StatsDialog(tk.Toplevel):
         ttk.Button(buttons, text="Close", command=self.destroy).grid(row=0, column=2)
 
         self.bind("<Escape>", lambda _event: self.destroy())
-        center_dialog(self, master)
         self._start()
+
+    def _reveal(self) -> None:
+        """Show the finished window once: lay it out while it is invisible, centre it, then make it visible."""
+        if self._revealed:
+            return
+        self._revealed = True
+
+        def place() -> None:
+            """Fit the overview and the chart to the final size, then centre over the main window."""
+            self._fit_overview()
+            self._draw_chart()
+            center_dialog(self, self.master)  # type: ignore[arg-type]
+
+        reveal_window(self, place)
 
     def _build_period_bar(self, parent: tk.Misc) -> ttk.Frame:
         """Create the "Period: preset, From, To" bar that narrows Busiest, Biggest and Per day to a window."""
@@ -2980,9 +3021,11 @@ class StatsDialog(tk.Toplevel):
         if self._error:
             self.summary.configure(text="The statistics could not be counted.")
             self.footer.configure(text=self._error)
+            self._reveal()
             return
         self._data = self._result
         self._rebuild()
+        self._reveal()
 
     def _rebuild(self) -> None:
         """Build the report for the chosen window from the loaded data and show it."""
