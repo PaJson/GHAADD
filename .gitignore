@@ -31,54 +31,13 @@ perf_baseline*.json
 # --- 4. Environment Variables & Credentials ---
 .env
 
-# --- 5. AI Workspace Exclusions ---
-CLAUDE.md
-
-# --- 6. Local and personal config files ---
+# --- 5. Local and personal config files ---
 config.json
 mapping.json
 
-# --- 7. Misc files ---
-ToDo.txt
+# --- 6. Backups made by the Backup window / --backup ---
+backups/
 
-# ==============================================================================
-# NOTES (about AI):
-#
-# Claude commands:
-# /usage
-# /clear.
-# /compact
-#
-# Reset (/clear):
-# This wipes the conversation history entirely while keeping your project
-# structure and your local CLAUDE.md instructions perfectly intact. When your
-# limits reset, you start at zero tokens, completely bypassing the threat of an
-# expired cache.
-#
-# Auto-Compacting Trigger (/compact):
-# As you approach your context threshold, Claude Code will automatically run an
-# background compression routine (/compact) on your chat log. It tries to shrink
-# the chat history into a dense summary so the agent doesn't crash from a memory
-# overflow.
-#
-# The Side Effect:
-# While the underlying AI logic isn't trying to wrap up early, the loss of
-# fine-grained history from that automated compression can cause Claude to lose
-# track of minor details from 20 prompts ago. It might feel like it's rushing or
-# missing instructions, but it is a byproduct of memory management, not a
-# deliberate throttling of quality.
-#
-# The "Token Trap":
-# While auto-resume sounds incredibly useful, the developer community has
-# identified a significant financial/token penalty to leaving it on:
-# Because the system sits idle for hours waiting for the limit to clear, your
-# prompt cache will expire. When the session auto-resumes, Claude has to re-read
-# your entire codebase context and session history completely from scratch.
-# Users have reported that the very first "auto-resume" message can instantly
-# eat up a massive portion of the newly refreshed 5-hour token budget right off
-# the bat.
-# ==============================================================================
-
-# Coverage output
+# --- 7. Coverage output ---
 .coverage
 htmlcov/
