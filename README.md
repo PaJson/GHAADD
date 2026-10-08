@@ -2,6 +2,14 @@
 
 Automated Python utility that reads GitHub release notification emails from Gmail, extracts release metadata, and downloads release assets, source archives, and release attestations.
 
+## Why it works this way
+
+- **Triggered by email, not by polling the API.** GitHub's own Watch setting decides which repositories you follow, so there is no list of repositories to poll and no API rate limit to worry about. The daemon only works when GitHub says something happened.
+- **Rechecks after a release.** Assets, source archives and attestations often appear some time after the notification. Each release is rechecked on a schedule (per repository if you like), so the files that arrive late are picked up too.
+- **Built to run unattended.** A SQLite job queue with retries, duplicate guards, a file-count sanity check and per-repository folder limits keeps it running for weeks and keeps the disk from filling up.
+- **Your folders, your rules.** Each repository has its own destination, release types and skiplist, set in `mapping.json` or in the GUI.
+- **Easy to live with.** A Tkinter GUI, tray notifications, a Doctor check, scheduled backups and autostart on Windows, Linux and macOS.
+
 ## Screenshots
 
 ![The main window, light theme](docs/screenshots/Main-Light.png)
