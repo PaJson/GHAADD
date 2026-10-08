@@ -24,6 +24,19 @@ def purge_state_database():
     return True
 
 
+def backup_database(destination_path):
+    """Write a consistent copy of state.db to `destination_path` (SQLite online backup, safe while the daemon runs)."""
+    source = open_database()
+    try:
+        target = sqlite3.connect(destination_path)
+        try:
+            source.backup(target)
+        finally:
+            target.close()
+    finally:
+        source.close()
+
+
 def open_database():
     """Open the SQLite database, enable WAL mode, and ensure the schema exists."""
     connection = sqlite3.connect(get_state_db_path())

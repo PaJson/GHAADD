@@ -34,6 +34,9 @@ DEFAULT_GMAIL_FOLDER = "GitHubNotifications"
 DEFAULT_ENABLE_TERMINAL_LOG = False
 DEFAULT_TERMINAL_LOG_MAX_FILE_MB = 10
 DEFAULT_TERMINAL_LOG_KEEP_FILES = 30
+DEFAULT_BACKUP_ENABLED = True  # a safety net users would otherwise overlook; switch off in the Backup window
+DEFAULT_BACKUP_EVERY_HOURS = 24
+DEFAULT_BACKUP_KEEP_FILES = 14
 DEFAULT_GHAADD_ROOT_FOLDER = "GHAADD"
 DEFAULT_PROCESSING_FOLDER = "Processing"
 DEFAULT_COMPLETE_FOLDER = "Complete"
@@ -56,7 +59,17 @@ class FolderSettings(TypedDict):
     logs: str
 
 
+class BackupSettings(TypedDict):
+    """The backup section of config.json after normalising (see get_backup_settings())."""
+    enabled: bool
+    every_hours: int
+    keep_files: int
+    directory: str
+    include_env: bool
+
+
 class TerminalLogSettings(TypedDict):
+    """The terminal_log section of config.json after normalising (see get_terminal_log_settings())."""
     enabled: bool
     directory: str
     max_file_mb: int
@@ -534,6 +547,22 @@ def get_terminal_log_settings(config: Optional[Dict[str, Any]] = None) -> Termin
         "keep_files": max(
             0, _as_int(_get_nested(config, "terminal_log", "keep_files"), DEFAULT_TERMINAL_LOG_KEEP_FILES)
         ),
+    }
+
+
+def get_backup_settings(config: Optional[Dict[str, Any]] = None) -> BackupSettings:
+    """Return the normalised backup settings; an empty directory means a `backups` folder beside the app files."""
+    config = config if config is not None else load_config()
+    configured = _get_nested(config, "backup", "directory")
+    directory = _normalize_configured_path(configured) if isinstance(configured, str) else ""
+    if not directory:
+        directory = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "backups")
+    return {
+        "enabled": _as_bool(_get_nested(config, "backup", "enabled"), DEFAULT_BACKUP_ENABLED),
+        "every_hours": max(1, _as_int(_get_nested(config, "backup", "every_hours"), DEFAULT_BACKUP_EVERY_HOURS)),
+        "keep_files": max(0, _as_int(_get_nested(config, "backup", "keep_files"), DEFAULT_BACKUP_KEEP_FILES)),
+        "directory": directory,
+        "include_env": _as_bool(_get_nested(config, "backup", "include_env"), False),
     }
 
 

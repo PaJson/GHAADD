@@ -27,6 +27,7 @@ class PollingLoopStopTests(unittest.TestCase):
             (main, mock.patch.object(main, "update_daemon_status")),
             (main, mock.patch.object(main, "is_dry_run", lambda: False)),
             (main, mock.patch.object(main, "get_destination_check_every_n_polls", lambda: 0)),
+            (main, mock.patch.object(main, "run_scheduled_backup", lambda: None)),  # never write a real backup
         ):
             replacement.start()
             self.addCleanup(replacement.stop)

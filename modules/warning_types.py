@@ -26,6 +26,7 @@ WARNING_TYPES: tuple[tuple[str, str], ...] = (
     ("MAPPING", "A mapped destination folder no longer exists, or mapping.json was upgraded to the 2.0 key names."),
     ("MAILBOX", "Emails could not be marked as read or moved to the Trash."),
     ("LIMIT", "A repository has more release folders than its limit (this also has its own notification)."),
+    ("BACKUP", "A scheduled backup of state.db and the settings files could not be made."),
     ("PARTIAL_MOVE", "A superseded release was moved to the Partial folder (shown as \"Partial move\" in the Warnings tab)."),
 )
 

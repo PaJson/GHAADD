@@ -149,6 +149,12 @@ def parse_cli_args(args: list[str], version: str) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--backup",
+        action="store_true",
+        help="Make a backup now (state.db, config.json, mapping.json; .env only if backup.include_env is true) "
+             "into the backup folder, whether or not scheduled backups are switched on. Safe while the daemon runs.",
+    )
+    parser.add_argument(
         "--run-pending",
         nargs="+",
         type=int,
@@ -357,6 +363,15 @@ def handle_cli_command(parsed_args: argparse.Namespace, run_smoke_tests: Callabl
 
         report = perf_report.collect()
         print(json.dumps(report, indent=2) if parsed_args.json else perf_report.format_report(report))
+        return True
+
+    if parsed_args.backup:
+        from modules import backup_manager  # imported here: no other command needs it
+
+        result = backup_manager.create_backup()
+        print(result.message)
+        if not result.ok:
+            sys.exit(1)
         return True
 
     if parsed_args.stats:

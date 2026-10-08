@@ -94,6 +94,8 @@ STATUS_LEGEND_TITLE = "Status"
 
 # --- Buttons and small controls.
 CONTROL_HELP = {
+    "backup": "Back up state.db, config.json and mapping.json (and .env if you tick it) into a zip file, now or on a "
+              "schedule the daemon keeps. Opens its own window.",
     "queue_counts": "Jobs waiting in the queue.\n"
                     "Due now: their check time has come, so the next poll (or Poll now) processes them. This is the "
                     "number the daemon prints as \"Processing N due queue job(s)\".\n"

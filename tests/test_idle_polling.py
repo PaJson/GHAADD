@@ -53,6 +53,7 @@ class IdleLoopTests(unittest.TestCase):
                 ("get_destination_check_every_n_polls", lambda: 0),
                 ("clear_all_resolved_limit_warnings", lambda: 0),
                 ("is_dry_run", lambda: False),
+                ("run_scheduled_backup", lambda: None),  # backups are on by default: never write into the real app folder
             ):
                 stack.enter_context(mock.patch.object(main, name, value))
             stack.enter_context(contextlib.redirect_stdout(open(__import__("os").devnull, "w", encoding="utf-8")))

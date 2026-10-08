@@ -38,6 +38,14 @@ SETTINGS_KEYS = {
     "close_to_tray": "gui.close_to_tray",
 }
 
+BACKUP_KEYS = {
+    "enabled": "backup.enabled",
+    "every_hours": "backup.every_hours",
+    "keep_files": "backup.keep_files",
+    "directory": "backup.directory",
+    "include_env": "backup.include_env",
+}
+
 MIN_POLL_INTERVAL_SECONDS = 10
 
 
@@ -248,6 +256,27 @@ def build_new_repo(name: str, destination: str) -> FormResult:
         if warning:
             result.warnings.append(warning)
     result.changes = {"repository": repo, "destination": dest}
+    return result
+
+
+def build_backup_changes(form: Mapping[str, Any]) -> FormResult:
+    """Validate the Backup window; `changes` maps dotted config.json keys to values."""
+    result = FormResult()
+    every_hours = parse_int(form.get("every_hours"), "Back up every N hours", result.errors, minimum=1)
+    keep_files = parse_int(form.get("keep_files"), "Keep backups", result.errors)
+    directory = str(form.get("directory", "")).strip()
+    if directory and os.path.exists(directory) and not os.path.isdir(directory):
+        result.errors.append(f"Backup folder '{directory}' is a file, not a folder.")
+    if result.errors:
+        return result
+    values = {
+        "enabled": bool(form.get("enabled", False)),
+        "every_hours": every_hours,
+        "keep_files": keep_files,
+        "directory": directory,
+        "include_env": bool(form.get("include_env", False)),
+    }
+    result.changes = {BACKUP_KEYS[key]: value for key, value in values.items()}
     return result
 
 

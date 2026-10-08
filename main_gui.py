@@ -15,6 +15,7 @@ import sys
 import threading
 import time
 import webbrowser
+from datetime import datetime
 import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import filedialog, messagebox, ttk
@@ -22,6 +23,7 @@ from typing import Any, Callable, Iterable, Literal, Optional
 
 from modules import (
     autostart,
+    backup_manager,
     config_manager,
     connection_tests,
     daemon_launcher,
@@ -1885,8 +1887,11 @@ class SettingsDialog(tk.Toplevel):
         open_config_button.grid(row=0, column=0, padx=(0, 6))
         attach_tooltip(open_config_button, gui_tooltips.CONTROL_HELP["open_config"])
         accounts_button = ttk.Button(file_buttons, text="Gmail & GitHub…", command=self._open_credentials)
-        accounts_button.grid(row=0, column=1)
+        accounts_button.grid(row=0, column=1, padx=(0, 6))
         attach_tooltip(accounts_button, gui_tooltips.CONTROL_HELP["credentials"])
+        backup_button = ttk.Button(file_buttons, text="Backup…", command=self._open_backup)
+        backup_button.grid(row=0, column=2)
+        attach_tooltip(backup_button, gui_tooltips.CONTROL_HELP["backup"])
         ttk.Button(buttons, text="Cancel", command=self._close_request).grid(row=0, column=2, padx=(0, 6))
         ttk.Button(buttons, text="Save", command=self._save).grid(row=0, column=3)
 
@@ -1922,11 +1927,17 @@ class SettingsDialog(tk.Toplevel):
         """Open the Gmail & GitHub window. It saves by itself (its own Save button), whatever this window does."""
         CredentialsDialog(self, self._credentials_saved)
 
+    def _open_backup(self) -> None:
+        """Open the Backup window. It saves by itself (its own Save button), whatever this window does."""
+        BackupDialog(self, self._credentials_saved)  # the callback just passes the message on to the main window
+
     def _credentials_saved(self, message: str) -> None:
+        """Pass the "credentials saved" message on to the main window."""
         if self._on_credentials_saved is not None:
             self._on_credentials_saved(message)
 
     def _warning_types_saved(self, silenced: set[str]) -> None:
+        """Remember the saved list of silenced warning types and tell the main window to reload it."""
         self._silenced = set(silenced)
         self._warnings_summary.configure(text=warning_types.summary(self._silenced))
         if self._on_warnings_saved is not None:
@@ -2380,10 +2391,210 @@ class CredentialsDialog(tk.Toplevel):
         self._on_saved("Gmail & GitHub settings saved. A running daemon uses them after a restart.")
 
 
+class BackupDialog(tk.Toplevel):
+    """Back up state.db and the settings files now, and set the schedule the daemon keeps.
+
+    It has its own Save and Cancel (the Settings window's Save neither writes nor undoes it). Save writes the
+    `backup` section of config.json; "Back up now" uses the values as typed, without saving, in a thread so the
+    window never freezes. The daemon reads the schedule afresh, so no restart is needed.
+    """
+
+    def __init__(self, master: tk.Misc, on_saved: Callable[[str], None]) -> None:
+        """Build the Backup window: schedule, folder, what to include, and the Back up now button."""
+        super().__init__(master)
+        self.title("Backup")
+        self.resizable(False, False)
+        self.transient(master)  # type: ignore[arg-type]
+        self._on_saved = on_saved
+        self._answer: list[backup_manager.BackupResult] = []
+
+        saved = config_manager.get_backup_settings()
+        configured = config_manager.load_config().get("backup")
+        shown_directory = str(configured.get("directory", "")) if isinstance(configured, dict) else ""
+        self.vars: dict[str, tk.Variable] = {
+            "enabled": tk.BooleanVar(value=saved["enabled"]),
+            "every_hours": tk.StringVar(value=str(saved["every_hours"])),
+            "keep_files": tk.StringVar(value=str(saved["keep_files"])),
+            "directory": tk.StringVar(value=shown_directory),
+            "include_env": tk.BooleanVar(value=saved["include_env"]),
+        }
+        self._baseline = self._values()
+
+        body = ttk.Frame(self, padding=14)
+        body.pack(fill="both", expand=True)
+        body.columnconfigure(0, weight=1)
+
+        schedule = ttk.LabelFrame(body, text="Schedule (kept by the daemon)", padding=10)
+        schedule.grid(row=0, column=0, sticky="ew")
+        schedule.columnconfigure(1, weight=1)
+        ttk.Checkbutton(
+            schedule, text="Back up automatically (the daemon checks after every poll)", variable=self.vars["enabled"]
+        ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 4))
+        ttk.Label(schedule, text="Back up every (hours)").grid(row=1, column=0, sticky="w", pady=4, padx=(0, 12))
+        ttk.Spinbox(schedule, from_=1, to=8760, width=8, textvariable=self.vars["every_hours"]).grid(row=1, column=1, sticky="w")
+        ttk.Label(schedule, text="Keep the newest (0 = all)").grid(row=2, column=0, sticky="w", pady=4, padx=(0, 12))
+        ttk.Spinbox(schedule, from_=0, to=9999, width=8, textvariable=self.vars["keep_files"]).grid(row=2, column=1, sticky="w")
+
+        where = ttk.LabelFrame(body, text="Where and what", padding=10)
+        where.grid(row=1, column=0, sticky="ew", pady=(10, 0))
+        where.columnconfigure(0, weight=1)
+        ttk.Label(where, text="Folder (empty = a 'backups' folder in the app folder)", foreground=COLOR_MUTED).grid(
+            row=0, column=0, columnspan=3, sticky="w"
+        )
+        self.directory_entry = ttk.Entry(where, textvariable=self.vars["directory"], width=52)
+        self.directory_entry.grid(row=1, column=0, sticky="ew", pady=(2, 6))
+        ttk.Button(where, text="Browse…", command=lambda: pick_directory(self, self.vars["directory"])).grid(
+            row=1, column=1, padx=(6, 0)
+        )
+        ttk.Button(where, text="Open folder", command=self._open_folder).grid(row=1, column=2, padx=(6, 0))
+        ttk.Label(
+            where,
+            text="Every backup holds state.db (a consistent copy, safe while the daemon runs), config.json and mapping.json.",
+            foreground=COLOR_MUTED, wraplength=560, justify="left",
+        ).grid(row=2, column=0, columnspan=3, sticky="w")
+        ttk.Checkbutton(
+            where, text="Also include .env (contains your Gmail app password and GitHub token in plain text)",
+            variable=self.vars["include_env"],
+        ).grid(row=3, column=0, columnspan=3, sticky="w", pady=(6, 0))
+
+        self.last_label = ttk.Label(body, text="", foreground=COLOR_MUTED, wraplength=580, justify="left")
+        self.last_label.grid(row=2, column=0, sticky="w", pady=(10, 0))
+        ttk.Label(
+            body,
+            text="To restore: stop the daemon, close the GUI, and unzip the files over the originals in the app folder.",
+            foreground=COLOR_MUTED, wraplength=580, justify="left",
+        ).grid(row=3, column=0, sticky="w", pady=(4, 0))
+        self.message = ttk.Label(body, text="", foreground=COLOR_ERROR, wraplength=580, justify="left")
+        self.message.grid(row=4, column=0, sticky="w", pady=(6, 0))
+
+        buttons = ttk.Frame(body)
+        buttons.grid(row=5, column=0, sticky="ew", pady=(10, 0))
+        buttons.columnconfigure(1, weight=1)
+        self.now_button = ttk.Button(buttons, text="Back up now", command=self._backup_now)
+        self.now_button.grid(row=0, column=0)
+        ttk.Button(buttons, text="Cancel", command=self._close_request).grid(row=0, column=2, padx=(0, 6))
+        ttk.Button(buttons, text="Save", command=self._save).grid(row=0, column=3)
+
+        self._update_last()
+        self.bind("<Escape>", lambda _event: self._close_request())
+        self.protocol("WM_DELETE_WINDOW", self._close_request)
+        center_dialog(self, master, focus=self.directory_entry)
+        self.grab_set()
+
+    def _values(self) -> dict[str, Any]:
+        """The form as typed."""
+        return {
+            "enabled": bool(self.vars["enabled"].get()),
+            "every_hours": str(self.vars["every_hours"].get()).strip(),
+            "keep_files": str(self.vars["keep_files"].get()).strip(),
+            "directory": str(self.vars["directory"].get()).strip(),
+            "include_env": bool(self.vars["include_env"].get()),
+        }
+
+    def _folder(self) -> str:
+        """The backup folder as typed, with ~ and variables expanded (the default folder when empty)."""
+        typed = str(self.vars["directory"].get()).strip()
+        if not typed:
+            return config_manager.get_backup_settings({})["directory"]
+        return os.path.expandvars(os.path.expanduser(typed))
+
+    def _typed_settings(self) -> Optional[config_manager.BackupSettings]:
+        """The form as backup settings, or None (with the reason shown) when it is not valid."""
+        result = gui_forms.build_backup_changes(self._values())
+        if not result.ok:
+            self.message.configure(text="\n".join(result.errors), foreground=COLOR_ERROR)
+            return None
+        changes = result.changes
+        return {
+            "enabled": bool(changes["backup.enabled"]),
+            "every_hours": int(changes["backup.every_hours"]),
+            "keep_files": int(changes["backup.keep_files"]),
+            "directory": self._folder(),
+            "include_env": bool(changes["backup.include_env"]),
+        }
+
+    def _update_last(self) -> None:
+        """Show the newest backup in the folder as typed (or that there is none)."""
+        backups = backup_manager.list_backups(self._folder())
+        if not backups:
+            self.last_label.configure(text="No backup in this folder yet.")
+            return
+        newest = backups[0]
+        when = datetime.fromtimestamp(newest.created).strftime("%Y-%m-%d %H:%M")
+        size_mb = newest.size / (1024 * 1024)
+        self.last_label.configure(text=f"Newest backup: {when} ({size_mb:.1f} MB); {len(backups)} in this folder.")
+
+    def _open_folder(self) -> None:
+        """Open the backup folder in the file manager (it is created first if needed)."""
+        folder = self._folder()
+        try:
+            os.makedirs(folder, exist_ok=True)
+        except OSError as exc:
+            self.message.configure(text=f"Could not create the folder: {exc}", foreground=COLOR_ERROR)
+            return
+        try:
+            open_in_file_manager(folder)
+        except OSError as exc:
+            self.message.configure(text=f"Could not open the folder: {exc}", foreground=COLOR_ERROR)
+
+    def _backup_now(self) -> None:
+        """Make a backup with the values as typed, in a thread (a big database takes a moment)."""
+        settings = self._typed_settings()
+        if settings is None:
+            return
+        self.message.configure(text="Backing up…", foreground=COLOR_MUTED)
+        self.now_button.state(["disabled"])
+        self._answer.clear()
+
+        def run() -> None:
+            """Thread body: make the backup and queue its result."""
+            self._answer.append(backup_manager.create_backup(settings))
+
+        threading.Thread(target=run, daemon=True).start()
+        self.after(100, self._poll)
+
+    def _poll(self) -> None:
+        """Wait (polling every 100 ms) for the backup thread, then show the result."""
+        if not self.winfo_exists():
+            return
+        if not self._answer:
+            self.after(100, self._poll)
+            return
+        result = self._answer[0]
+        self.now_button.state(["!disabled"])
+        self.message.configure(text=result.message, foreground="#2e7d32" if result.ok else COLOR_ERROR)
+        self._update_last()
+
+    def _close_request(self) -> None:
+        """Close the window, asking first when there are unsaved changes."""
+        if self._values() != self._baseline and not messagebox.askyesno(
+            "Backup",
+            "You have changes that are not saved.\n\nClose the window and discard them?",
+            icon="warning", default="no", parent=self,
+        ):
+            return
+        self.destroy()
+
+    def _save(self) -> None:
+        """Validate the form and write the `backup` section of config.json, then close."""
+        result = gui_forms.build_backup_changes(self._values())
+        if not result.ok:
+            self.message.configure(text="\n".join(result.errors), foreground=COLOR_ERROR)
+            return
+        try:
+            config_manager.set_config_values(result.changes)
+        except (config_manager.ConfigLockTimeout, config_manager.ConfigUnreadableError, OSError) as exc:
+            self.message.configure(text=describe_error(exc), foreground=COLOR_ERROR)
+            return
+        self.destroy()
+        self._on_saved("Backup settings saved. The daemon applies them at its next check.")
+
+
 class DoctorDialog(tk.Toplevel):
     """Runs the --doctor checks and shows the result; the first-run notes (if any) come first."""
 
     def __init__(self, master: tk.Misc, on_report: Callable[[Optional[dict]], None]) -> None:
+        """Build the Doctor window and start the checks."""
         super().__init__(master)
         self.title("Doctor")
         self.transient(master)  # type: ignore[arg-type]

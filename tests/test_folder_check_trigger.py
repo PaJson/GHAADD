@@ -29,6 +29,7 @@ class FolderCheckTriggerTests(unittest.TestCase):
             mock.patch.object(main, "warn_about_missing_mapped_destinations", self.destinations),
             mock.patch.object(main, "check_folder_limits", self.limits),
             mock.patch.object(main, "clear_all_resolved_limit_warnings"),
+            mock.patch.object(main, "run_scheduled_backup", lambda: None),  # never write a real backup
         ):
             patcher.start()
             self.addCleanup(patcher.stop)

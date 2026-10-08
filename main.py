@@ -28,7 +28,8 @@ from modules.daemon_lock import acquire_daemon_lock, update_daemon_status
 from modules.db_manager import get_next_pending_job, open_database
 from modules.asset_downloader import check_folder_limits, clear_all_resolved_limit_warnings, download_release
 from modules.dry_run_mode import is_dry_run, set_dry_run
-from modules.lifecycle_logger import log_cycle_summary
+from modules.backup_manager import run_scheduled_backup
+from modules.lifecycle_logger import log_cycle_summary, log_warning
 from modules.log_files import RollingLogFile
 from modules.mapping_manager import ensure_mapping_file, warn_about_missing_mapped_destinations
 from modules.queue_worker import process_queue_once, run_ingest_and_queue_cycle, run_single_cycle
@@ -320,6 +321,7 @@ def run_polling_loop(
         )
         if destination_check_every_n_polls > 0:
             run_folder_checks("at start")  # counts and warnings are there right away, not after N polls
+        run_backup_check()  # a daemon that was off for a while catches up at once
 
         def announce_requested_poll(wait_result):
             """Say which poll was asked for; and note that a pause goes on afterwards."""
@@ -366,6 +368,8 @@ def run_polling_loop(
             if destination_check_every_n_polls > 0 and cycle % destination_check_every_n_polls == 0:
                 run_folder_checks(f"every {destination_check_every_n_polls} polls")
 
+            run_backup_check()  # checked after every cycle (in idle mode: after every Poll now)
+
             if idle and not watcher.cycle_interrupted:
                 print("Poll finished. Idle until the next Poll now.\n")
                 requested = wait_for_poll_now()
@@ -393,6 +397,27 @@ def run_polling_loop(
                 announce_requested_poll(wait_result)
                 single_next = wait_result == "single"
             cycle += 1
+
+
+def run_backup_check():
+    """Make a backup when the schedule in config.json says one is due (never stops the daemon).
+
+    The settings are read afresh each time, so a change in the Backup window applies without a restart.
+    """
+    if is_dry_run():
+        return
+    try:
+        result = run_scheduled_backup()
+    except Exception as exc:  # housekeeping must never stop the daemon
+        print(f"   ⚠️ Could not run the scheduled backup: {exc}")
+        return
+    if result is None:
+        return
+    if result.ok:
+        print(f"💾 {result.message}")
+    else:
+        print(f"⚠️ {result.message}")
+        log_warning("BACKUP", result.message)
 
 
 def run_drain_queue_loop(github_token):
