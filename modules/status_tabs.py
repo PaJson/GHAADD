@@ -20,7 +20,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field, replace
 from datetime import datetime
-from typing import Any, Callable, Iterable, Mapping, Optional, Protocol
+from typing import Any, Callable, Iterable, Mapping, Optional, Protocol, Sequence
 
 from modules.repo_overview import format_tag
 
@@ -98,7 +98,7 @@ class SeenStore(Protocol):
 
 
 # fetch(tab, after_id, limit) -> raw event dicts, newest first, only those with id > after_id
-FetchEvents = Callable[[TabDef, Optional[int], int], list[Mapping[str, Any]]]
+FetchEvents = Callable[[TabDef, Optional[int], int], Sequence[Mapping[str, Any]]]
 
 _REPO_IN_TEXT = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 

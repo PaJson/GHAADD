@@ -55,6 +55,7 @@ class PollingLoopStopTests(unittest.TestCase):
         def cycle(connection, token, should_pause=None):
             calls.append(1)
             daemon_control.request_stop()
+            assert should_pause is not None
             self.assertTrue(should_pause())  # the next safe boundary sees the stop
 
         with mock.patch.object(main, "run_ingest_and_queue_cycle", cycle):
@@ -120,7 +121,7 @@ class CurrentJobTests(unittest.TestCase):
         with mock.patch.object(daemon_lock, "is_daemon_running", lambda: False):
             self.assertIsNone(daemon_lock.get_daemon_status()["current_job"])
         with mock.patch.object(daemon_lock, "is_daemon_running", lambda: True):
-            self.assertEqual(daemon_lock.get_daemon_status()["current_job"]["repo"], "o/r")
+            self.assertEqual((daemon_lock.get_daemon_status()["current_job"] or {})["repo"], "o/r")
 
 
 if __name__ == "__main__":

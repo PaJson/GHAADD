@@ -72,6 +72,8 @@ def format_timestamp(epoch: Optional[float]) -> str:
 def format_limit(limit: Any, counted: Optional[Mapping[str, Any]]) -> tuple[str, bool, str]:
     """(cell text, over the limit, hover note): "12 / 15" once the daemon has counted the folders, else just "15"."""
     text = "" if limit is None else str(limit)
+    if limit is None:
+        return text, False, ""
     try:
         allowed = int(limit)
     except (TypeError, ValueError):
@@ -153,7 +155,7 @@ def derive_status(
 
 
 def build_rows(
-    mapping_entries: list[Mapping[str, Any]],
+    mapping_entries: Sequence[Mapping[str, Any]],
     summaries: Mapping[str, Mapping[str, Any]],
     now: float,
     intervals_for: Callable[[Mapping[str, Any]], int],

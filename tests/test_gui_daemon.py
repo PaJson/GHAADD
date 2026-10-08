@@ -7,6 +7,7 @@ import sqlite3
 import subprocess
 import tempfile
 import unittest
+from typing import Any
 from unittest import mock
 
 from modules import config_manager, daemon_launcher, gui_daemon
@@ -16,7 +17,7 @@ NOW = 1_000_000.0
 
 
 def running(**overrides) -> DaemonSnapshot:
-    fields = dict(running=True, pid=42, paused=False, next_poll_at=NOW + 125, current_repo=None, log_on=False)
+    fields: dict[str, Any] = dict(running=True, pid=42, paused=False, next_poll_at=NOW + 125, current_repo=None, log_on=False)
     fields.update(overrides)
     return DaemonSnapshot(**fields)
 
@@ -211,7 +212,7 @@ class ActionTests(unittest.TestCase):
             self.assertIsNone(gui_daemon.do_set_paused(True))
             set_paused.assert_called_once_with(True)
         with mock.patch.object(gui_daemon.daemon_control, "request_stop", side_effect=sqlite3.OperationalError("locked")):
-            self.assertIn("locked", gui_daemon.do_stop())
+            self.assertIn("locked", str(gui_daemon.do_stop()))
         with mock.patch.object(gui_daemon.daemon_control, "set_log_override") as set_log:
             self.assertIsNone(gui_daemon.do_set_log(False))
             set_log.assert_called_once_with(False)
@@ -222,7 +223,7 @@ class ActionTests(unittest.TestCase):
     def test_start_refuses_when_a_daemon_is_already_running(self) -> None:
         with mock.patch.object(gui_daemon.daemon_lock, "is_daemon_running", return_value=True):
             with mock.patch.object(gui_daemon.daemon_launcher, "start_daemon") as start:
-                self.assertIn("already running", gui_daemon.do_start())
+                self.assertIn("already running", str(gui_daemon.do_start()))
                 start.assert_not_called()
 
     def test_start_launches_and_reports_launch_failures(self) -> None:

@@ -8,10 +8,11 @@ import os
 import sqlite3
 import tempfile
 import unittest
+from typing import Optional
 from unittest import mock
 
 from modules import daemon_control, db_manager, queue_worker
-from modules.daemon_control import ControlWatcher
+from modules.daemon_control import ControlState, ControlWatcher
 
 
 class FakeTime:
@@ -27,7 +28,14 @@ class FakeTime:
         self.now += seconds
 
 
-def _state(paused=False, request=None, log_override=None, stop=None, check=None, single=None):
+def _state(
+    paused: bool = False,
+    request: Optional[float] = None,
+    log_override: Optional[bool] = None,
+    stop: Optional[float] = None,
+    check: Optional[float] = None,
+    single: Optional[float] = None,
+) -> ControlState:
     return {
         "paused": paused, "poll_now_request": request, "log_override": log_override, "stop_request": stop,
         "check_folders_request": check, "single_request": single,
@@ -121,7 +129,7 @@ class ControlStateTests(unittest.TestCase):
         first = daemon_control.request_single_poll()
         second = daemon_control.request_single_poll()
         self.assertNotEqual(first, second)
-        self.assertEqual(self.read()["single_request"], second)
+        self.assertEqual(dict(self.read())["single_request"], second)
         self.assertIsNone(self.read()["poll_now_request"])  # the other requests are not touched
 
     def test_pause_writes_keep_log_override(self) -> None:
@@ -286,7 +294,7 @@ class ControlWatcherTests(unittest.TestCase):
         self.assertTrue(watcher.cycle_interrupted)
 
     def test_a_poll_made_while_paused_still_obeys_stop(self) -> None:
-        state = {"stop": None}
+        state: dict[str, Optional[float]] = {"stop": None}
         watcher, _ = self.make_watcher(lambda t: _state(paused=True, request=5.0 if t >= 1 else None, stop=state["stop"]))
         self.assertEqual(watcher.wait(600), "forced")
         watcher.begin_cycle()
@@ -325,7 +333,7 @@ class ControlWatcherTests(unittest.TestCase):
         self.assertEqual(watcher.wait(600), "stop")
 
     def test_checkpoint_interrupts_work_when_stop_requested(self) -> None:
-        fake_state = {"stop": None}
+        fake_state: dict[str, Optional[float]] = {"stop": None}
         watcher, _ = self.make_watcher(lambda t: _state(stop=fake_state["stop"]))
         self.assertFalse(watcher.checkpoint())
         fake_state["stop"] = 9.0
@@ -384,11 +392,11 @@ class CheckFoldersRequestTests(unittest.TestCase):
     def test_round_trip_through_the_database(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as folder:
             with mock.patch.object(db_manager, "get_state_db_path", lambda: os.path.join(folder, "state.db")):
-                self.assertIsNone(daemon_control.get_control_state()["check_folders_request"])
+                self.assertIsNone(dict(daemon_control.get_control_state())["check_folders_request"])
                 first = daemon_control.request_check_folders()
                 second = daemon_control.request_check_folders()
                 self.assertNotEqual(first, second)
-                self.assertEqual(daemon_control.get_control_state()["check_folders_request"], second)
+                self.assertEqual(dict(daemon_control.get_control_state())["check_folders_request"], second)
                 self.assertFalse(daemon_control.get_control_state()["paused"])
 
 
@@ -412,7 +420,7 @@ class LogOverrideWatcherTests(unittest.TestCase):
         self.assertEqual(seen, [True, False])
 
     def test_checkpoint_and_begin_cycle_report_changes(self) -> None:
-        value = {"v": None}
+        value: dict[str, Optional[bool]] = {"v": None}
         seen = []
         watcher = ControlWatcher(read_state=lambda: _state(log_override=value["v"]), on_log_override=seen.append)
         watcher.begin_cycle()

@@ -1,0 +1,4 @@
+{
+  "include": ["main.py", "main_gui.py", "modules", "tests"],
+  "typeCheckingMode": "standard"
+}

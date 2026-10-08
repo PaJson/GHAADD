@@ -8,6 +8,7 @@ import sys
 import tempfile
 import unittest
 from types import SimpleNamespace
+from typing import Optional
 from unittest import mock
 
 from modules import config_manager, db_manager, gui_data, gui_tray
@@ -17,6 +18,12 @@ def row(repo: str, message: str) -> SimpleNamespace:
     return SimpleNamespace(repo=repo, message=message)
 
 
+def text_of(notice: Optional[gui_tray.Notice]) -> str:
+    """The notice's message; a missing notice fails the test right here instead of at an attribute access."""
+    assert notice is not None, "a notice was expected"
+    return notice.message
+
+
 class NoticeTests(unittest.TestCase):
     def test_nothing_new_gives_no_notice(self) -> None:
         for make in (gui_tray.warnings_notice, gui_tray.failed_jobs_notice, gui_tray.unmapped_notice, gui_tray.limit_notice):
@@ -24,28 +31,28 @@ class NoticeTests(unittest.TestCase):
 
     def test_one_warning_shows_its_text(self) -> None:
         notice = gui_tray.warnings_notice([row("o/app", "Sanity check: 3 files, was 5")])
-        self.assertIn("o/app", notice.message)
-        self.assertIn("Sanity check", notice.message)
+        self.assertIn("o/app", text_of(notice))
+        self.assertIn("Sanity check", text_of(notice))
 
     def test_several_warnings_are_counted_and_name_a_few_repositories(self) -> None:
         rows = [row(f"o/app{i}", "x") for i in range(5)]
         notice = gui_tray.warnings_notice(rows)
-        self.assertIn("5 new warnings", notice.message)
-        self.assertIn("(+2 more)", notice.message)  # three are named, two are not
+        self.assertIn("5 new warnings", text_of(notice))
+        self.assertIn("(+2 more)", text_of(notice))  # three are named, two are not
 
     def test_a_failed_job_names_repository_and_tag(self) -> None:
         notice = gui_tray.failed_jobs_notice([{"repo": "o/app", "tag": "v2"}])
-        self.assertIn("o/app v2", notice.message)
-        self.assertIn("2 jobs failed", gui_tray.failed_jobs_notice([{"repo": "a/x"}, {"repo": "b/y"}]).message)
+        self.assertIn("o/app v2", text_of(notice))
+        self.assertIn("2 jobs failed", text_of(gui_tray.failed_jobs_notice([{"repo": "a/x"}, {"repo": "b/y"}])))
 
     def test_unmapped_and_limit_notices(self) -> None:
-        self.assertIn("o/new", gui_tray.unmapped_notice(["o/new"]).message)
-        self.assertIn("2 repositories", gui_tray.unmapped_notice(["a/x", "b/y"]).message)
-        self.assertIn("o/app", gui_tray.limit_notice(["o/app"]).message)
-        self.assertIn("2 repositories", gui_tray.limit_notice(["a/x", "b/y"]).message)
+        self.assertIn("o/new", text_of(gui_tray.unmapped_notice(["o/new"])))
+        self.assertIn("2 repositories", text_of(gui_tray.unmapped_notice(["a/x", "b/y"])))
+        self.assertIn("o/app", text_of(gui_tray.limit_notice(["o/app"])))
+        self.assertIn("2 repositories", text_of(gui_tray.limit_notice(["a/x", "b/y"])))
 
     def test_a_stopped_daemon_notice_says_nothing_is_downloaded(self) -> None:
-        self.assertIn("Nothing is downloaded", gui_tray.daemon_stopped_notice().message)
+        self.assertIn("Nothing is downloaded", text_of(gui_tray.daemon_stopped_notice()))
 
 
 class NewItemTrackerTests(unittest.TestCase):
@@ -156,7 +163,7 @@ class WindowsIdentityTests(unittest.TestCase):
         icon = os.path.abspath(__file__)  # any file that exists
         self.assertTrue(gui_tray.register_windows_identity("GHAADD.GUI", "GHAADD", icon, registry))
         (path, values), = registry.keys.items()
-        self.assertTrue(path.endswith("AppUserModelId\GHAADD.GUI"))
+        self.assertTrue(path.endswith("AppUserModelId\\GHAADD.GUI"))
         self.assertEqual(values, {"DisplayName": "GHAADD", "IconUri": icon})
         writes = registry.writes
         gui_tray.register_windows_identity("GHAADD.GUI", "GHAADD", icon, registry)

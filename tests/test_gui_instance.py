@@ -74,11 +74,13 @@ class OtherProcessTests(unittest.TestCase):
                 [sys.executable, "-c", code], cwd=ROOT, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True
             )
             self.addCleanup(holder.kill)
+            assert holder.stdout is not None
             self.assertEqual(holder.stdout.readline().strip(), "True")
             try:
                 self.assertFalse(gui_instance.acquire(directory))  # the first process is "the open window"
                 self.assertTrue(gui_instance.request_show(directory))
             finally:
+                assert holder.stdin is not None
                 holder.stdin.close()
                 holder.wait(timeout=20)
             self.addCleanup(gui_instance.release)

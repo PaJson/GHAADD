@@ -47,7 +47,9 @@ Start it with `python main_gui.py` (add `--theme clam` for coloured table headin
 
 ## Environment Variables
 
-Create a .env file in the project root with:
+**In the GUI** you do not need to touch any file: the "Gmail & GitHub…" button in the Settings window (beside "Open config.json…") opens a window where you enter the Gmail address, the app password and the optional GitHub token, and choose the mailbox folder. It writes `.env` (keeping its other lines) and `mailbox.folder` in config.json, and its "Test Gmail login" button logs in without saving anything and fills the folder drop-down with your real Gmail folders; "Test token" asks GitHub whether the token is accepted. Under the folder it shows the Gmail filter that fills it (from:(notifications@github.com): skip the inbox, apply the label, never send to spam, never mark as important). The "Internet" menu in that window opens the pages where you create the Gmail app password, switch on 2-step verification and IMAP, set up a filter, and create a GitHub token. A running daemon reads the login when it starts, so the "↻ Restart" button appears after you save. Gmail needs an app password (2-step verification on your Google account), not your normal password; the spaces Google shows in it are dropped. The `.env` file is only readable by its owner on Linux/macOS.
+
+Or create a .env file in the project root by hand with:
 
 ```env
 GMAIL_USER=your-email@gmail.com
@@ -62,7 +64,7 @@ Notes:
 
 ## Gmail Folder
 
-The folder is configured in config.json under mailbox.folder.
+The folder is configured in config.json under mailbox.folder (or in the GUI: Settings → the "Gmail & GitHub…" button, where "Test Gmail login" lists the folders that exist).
 
 Default value:
 
@@ -510,12 +512,18 @@ The `tests/` folder holds automated checks of the code itself (they are separate
 python -m unittest discover -s tests -t .
 ```
 
-To see which lines of the code the tests do not exercise yet, install the development tools (`coverage`) and run:
+To see which lines of the code the tests do not exercise yet, install the development tools (`coverage` and `pyright`) and run:
 
 ```text
 pip install -r requirements-dev.txt
 python -m coverage run --source=modules -m unittest discover -s tests -t .
 python -m coverage report --skip-empty
+```
+
+To check the types of the program and of the tests (the settings are in `pyrightconfig.json`; nothing is excluded, so the result should always be 0 errors):
+
+```text
+python -m pyright
 ```
 
 `python -m coverage html` writes a browsable report to `htmlcov/`. `requirements-dev.txt` is only needed for this; running GHAADD itself needs `requirements.txt` alone.

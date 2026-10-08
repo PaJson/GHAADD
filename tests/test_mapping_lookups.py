@@ -10,6 +10,7 @@ import json
 import os
 import tempfile
 import unittest
+from typing import Any, cast
 from unittest import mock
 
 from modules import config_manager, mapping_manager
@@ -43,14 +44,14 @@ class LookupTestCase(unittest.TestCase):
 class RepositoryLookupTests(LookupTestCase):
     def test_a_repository_is_found_whatever_its_capitalisation(self) -> None:
         self.write({"repository": "Owner/App", "destination": "x"})
-        self.assertEqual(mapping_manager.get_repository_mapping("owner/app")["destination"], "x")
-        self.assertEqual(mapping_manager.get_repository_mapping("  OWNER/APP ")["destination"], "x")
+        self.assertEqual((mapping_manager.get_repository_mapping("owner/app") or {})["destination"], "x")
+        self.assertEqual((mapping_manager.get_repository_mapping("  OWNER/APP ") or {})["destination"], "x")
 
     def test_unknown_or_empty_names_find_nothing(self) -> None:
         self.write({"repository": "o/app"})
         for name in ("o/other", "", "   ", None):
             with self.subTest(name=name):
-                self.assertIsNone(mapping_manager.get_repository_mapping(name))
+                self.assertIsNone(mapping_manager.get_repository_mapping(cast(str, name)))  # None on purpose: it must cope
 
     def test_default_folder_names(self) -> None:
         self.assertEqual(mapping_manager.build_default_folder("stenzek/duckstation"), "duckstation (stenzek)")
@@ -96,7 +97,7 @@ class RecheckIntervalTests(LookupTestCase):
     def test_the_global_list_is_used_when_there_is_no_usable_override(self) -> None:
         for override in (None, [], "5", [0, -3, "x", True], {"a": 1}):
             with self.subTest(override=override):
-                entry = {"repository": "o/app"}
+                entry: dict[str, Any] = {"repository": "o/app"}
                 if override is not None:
                     entry["recheck_intervals"] = override
                 self.write(entry)
@@ -189,8 +190,9 @@ class MissingDestinationTests(LookupTestCase):
         self.write({"repository": "o/a", "destination": os.path.join(self.root, "x")},
                    {"repository": "o/b", "destination": os.path.join(self.root, "y")})
         self.assertEqual(self.quietly(mapping_manager.warn_about_missing_mapped_destinations), 2)
-        self.assertEqual(mapping_manager.log_warning.call_count, 2)
-        self.assertTrue(all(call.args[0] == "MAPPING" for call in mapping_manager.log_warning.call_args_list))
+        warn = cast(mock.Mock, mapping_manager.log_warning)  # replaced by a mock in setUp
+        self.assertEqual(warn.call_count, 2)
+        self.assertTrue(all(call.args[0] == "MAPPING" for call in warn.call_args_list))
 
 
 class ValidationTests(LookupTestCase):

@@ -5,9 +5,16 @@ Run from the project root: python -m unittest discover -s tests -t .
 import os
 import tempfile
 import unittest
+from typing import Optional
 
 from modules import log_files, log_tail
-from modules.log_tail import LogTailer, line_level, read_last_lines
+from modules.log_tail import LogTailer, TailUpdate, line_level, read_last_lines
+
+
+def changed(update: Optional[TailUpdate]) -> TailUpdate:
+    """The update of a poll that is expected to have found something; None fails the test right here."""
+    assert update is not None, "the tailer reported nothing new"
+    return update
 
 
 class TailTestCase(unittest.TestCase):
@@ -74,7 +81,7 @@ class ReadLastLinesTests(TailTestCase):
 class LogTailerTests(TailTestCase):
     def test_no_log_files_reports_once_then_stays_quiet(self) -> None:
         tailer = self.tailer()
-        first = tailer.poll()
+        first = changed(tailer.poll())
         self.assertEqual((first.reset, first.lines, first.file_name), (True, [], None))
         self.assertIsNone(tailer.poll())
 
@@ -82,12 +89,12 @@ class LogTailerTests(TailTestCase):
         self.write("20261006_100000.log", "a\nb\nc\n")
         tailer = self.tailer(max_lines=2)
 
-        first = tailer.poll()
+        first = changed(tailer.poll())
         self.assertEqual((first.reset, first.lines, first.file_name), (True, ["b", "c"], "20261006_100000.log"))
         self.assertIsNone(tailer.poll())  # nothing new
 
         self.append_bytes("20261006_100000.log", b"d\ne\n")
-        update = tailer.poll()
+        update = changed(tailer.poll())
         self.assertEqual((update.reset, update.lines), (False, ["d", "e"]))
 
     def test_partial_lines_wait_for_their_newline(self) -> None:
@@ -98,7 +105,7 @@ class LogTailerTests(TailTestCase):
         self.append_bytes("20261006_100000.log", b"half a li")
         self.assertIsNone(tailer.poll())
         self.append_bytes("20261006_100000.log", b"ne\nnext\n")
-        self.assertEqual(tailer.poll().lines, ["half a line", "next"])
+        self.assertEqual(changed(tailer.poll()).lines, ["half a line", "next"])
 
     def test_a_multibyte_character_split_across_writes_is_not_garbled(self) -> None:
         self.write("20261006_100000.log", "")
@@ -108,14 +115,14 @@ class LogTailerTests(TailTestCase):
         self.append_bytes("20261006_100000.log", emoji[:2])  # half of the 3-byte check mark
         self.assertIsNone(tailer.poll())
         self.append_bytes("20261006_100000.log", emoji[2:])
-        self.assertEqual(tailer.poll().lines, ["✅ done"])
+        self.assertEqual(changed(tailer.poll()).lines, ["✅ done"])
 
     def test_truncated_file_is_reloaded(self) -> None:
         self.write("20261006_100000.log", "old 1\nold 2\nold 3\n")
         tailer = self.tailer()
         tailer.poll()
         self.write("20261006_100000.log", "new\n")  # replaced by something shorter
-        update = tailer.poll()
+        update = changed(tailer.poll())
         self.assertEqual((update.reset, update.lines), (True, ["new"]))
 
     def test_a_backlog_that_is_too_large_is_replaced_by_the_last_lines(self) -> None:
@@ -125,7 +132,7 @@ class LogTailerTests(TailTestCase):
         big = "".join(f"row {i}\n" for i in range(log_tail.MAX_CATCHUP_BYTES // 6 + 100))
         self.append_bytes("20261006_100000.log", big.encode("utf-8"))
 
-        update = tailer.poll()
+        update = changed(tailer.poll())
 
         self.assertTrue(update.reset)
         self.assertEqual(len(update.lines), 3)
@@ -137,7 +144,7 @@ class LogTailerTests(TailTestCase):
         tailer.poll()
         self.write("20261006_110000.log", "Logging enabled. Writing terminal output to: x\nhello\n")
 
-        update = tailer.poll()
+        update = changed(tailer.poll())
 
         self.assertTrue(update.reset and update.changed_file)
         self.assertEqual(update.lines, ["Logging enabled. Writing terminal output to: x", "hello"])
@@ -151,21 +158,21 @@ class LogTailerTests(TailTestCase):
         self.append_bytes("20261006_100000.log", b"c\nd\n")
         self.write("20261006_100000_2.log", "--- Log continued from 20261006_100000.log ---\ne\n")
 
-        update = tailer.poll()
+        update = changed(tailer.poll())
 
         self.assertFalse(update.reset)
         self.assertEqual(update.lines, ["c", "d", "--- Log continued from 20261006_100000.log ---", "e"])
         self.assertEqual(update.file_name, "20261006_100000_2.log")
         # ... and the new file keeps being followed.
         self.append_bytes("20261006_100000_2.log", b"f\n")
-        self.assertEqual(tailer.poll().lines, ["f"])
+        self.assertEqual(changed(tailer.poll()).lines, ["f"])
         self.assertIsNone(tailer.poll())
 
     def test_opening_on_a_rolled_over_file_prefills_from_the_previous_one(self) -> None:
         self.write("20261006_100000.log", "".join(f"old {i}\n" for i in range(10)))
         self.write("20261006_100000_2.log", "--- Log continued from 20261006_100000.log ---\nnew 1\nnew 2\n")
 
-        first = self.tailer(max_lines=6).poll()
+        first = changed(self.tailer(max_lines=6).poll())
 
         self.assertEqual(first.lines, ["old 6", "old 7", "old 8", "old 9",
                                        "--- Log continued from 20261006_100000.log ---", "new 1", "new 2"][-6:])
@@ -178,19 +185,19 @@ class LogTailerTests(TailTestCase):
         os.remove(self.path("20261006_100000.log"))
         self.write("20261006_120000.log", "survivor\n")
 
-        update = tailer.poll()
+        update = changed(tailer.poll())
 
         self.assertEqual((update.reset, update.lines), (True, ["survivor"]))
 
     def test_other_files_in_the_folder_are_ignored(self) -> None:
         self.write("Warning.log", "old plain log\n")
         self.write("notes.txt", "not a log\n")
-        update = self.tailer().poll()
+        update = changed(self.tailer().poll())
         self.assertIsNone(update.file_name)
 
     def test_missing_directory_is_just_no_log(self) -> None:
         tailer = LogTailer(lambda: os.path.join(self.directory, "nope"))
-        self.assertIsNone(tailer.poll().file_name)
+        self.assertIsNone(changed(tailer.poll()).file_name)
 
     def test_works_with_files_written_by_rolling_log_file(self) -> None:
         writer = log_files.RollingLogFile(self.directory, max_bytes=200, keep_files=0)

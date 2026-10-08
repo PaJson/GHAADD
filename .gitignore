@@ -9,6 +9,7 @@ modules/__pycache__/
 
 # --- 2. Volatile Daemon Runtime & Status States ---
 config.json.lock
+.env.lock
 config.json.*.tmp
 ghaadd.lock
 ghaadd.daemon.status.json

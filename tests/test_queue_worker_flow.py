@@ -15,6 +15,7 @@ import tempfile
 import time
 import unittest
 from contextlib import closing
+from typing import Optional
 from unittest import mock
 
 # queue_worker -> mailbox_listener refuses to import without credentials; they are never used to connect.
@@ -140,7 +141,7 @@ class WorkerTestCase(unittest.TestCase):
         return self.quietly(queue_worker.ingest_notifications_once, self.connection, "token", **kwargs)
 
 
-def notification(repo=REPO, tag="v1", release_type="Release", email_id=1) -> dict:
+def notification(repo: Optional[str] = REPO, tag: Optional[str] = "v1", release_type="Release", email_id=1) -> dict:
     return {"repo": repo, "tag": tag, "release_type": release_type, "email_id": email_id}
 
 
@@ -154,6 +155,7 @@ class IngestTests(WorkerTestCase):
         self.assertEqual((row["repo"], row["tag"], row["release_type"], row["expected_commit"]), (REPO, "v1", "Release", "aaa1111"))
         self.assertEqual(self.calls["deleted"], [[11]])
         self.assertEqual((stats["notifications_found"], stats["notifications_queued"]), (1, 1))
+        assert queued is not None
         self.assertEqual(queued["job_id"], row["id"])
         self.assertIsNotNone(mapping_manager.get_repository_mapping(REPO))  # the repository got its mapping entry
 
@@ -533,7 +535,7 @@ class FullCycleTests(WorkerTestCase):
 class CounterProtectionTests(unittest.TestCase):
     """A weaker attempt must never overwrite what an earlier one already achieved."""
 
-    def row(self, downloaded=3, skipped=1, total=4, working_dir="/work/a"):
+    def row(self, downloaded=3, skipped=1, total=4, working_dir: Optional[str] = "/work/a"):
         return {"downloaded_count": downloaded, "skipped_count": skipped, "total_items": total, "working_dir": working_dir}
 
     def test_a_first_attempt_has_nothing_to_protect(self) -> None:
@@ -598,7 +600,7 @@ class FinalizeStagedFolderTests(WorkerTestCase):
         done = self.quietly(queue_worker._finalize_staged_release_folder, working_dir, REPO, "v1", "abc")
         self.assertEqual(done, os.path.join(self.root, "done", "rel1"))
         self.assertEqual(self.calls["completed_logs"], [(REPO, "v1", "abc", done)])
-        self.assertNotEqual(mapping_manager.get_repository_mapping(REPO)["last_finalized"], "")
+        self.assertNotEqual((mapping_manager.get_repository_mapping(REPO) or {})["last_finalized"], "")
 
     def test_nothing_to_finalize_without_a_folder(self) -> None:
         self.assertIsNone(self.quietly(queue_worker._finalize_staged_release_folder, None, REPO, "v1"))

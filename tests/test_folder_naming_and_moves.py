@@ -11,9 +11,11 @@ import json
 import os
 import tempfile
 import unittest
+from typing import Optional, cast
 from unittest import mock
 
 from modules import asset_downloader, config_manager, db_manager, mapping_manager
+from modules.payload_types import ReleaseAssetQueueItem
 
 REPO = "owner/app"
 REPO_FOLDER = "app (owner)"  # what asset_downloader derives from "owner/app"
@@ -89,20 +91,25 @@ class ReleaseFolderNameTests(unittest.TestCase):
         self.assertEqual(untitled, "2026-01-02_03-04, v2, v2, abc1234")
 
 
+def signature(item: dict) -> Optional[str]:
+    """build_expected_signature with a partial item (the real ones are ReleaseAssetQueueItem dicts with every key)."""
+    return asset_downloader.build_expected_signature(cast(ReleaseAssetQueueItem, item))
+
+
 class ExpectedSignatureTests(unittest.TestCase):
     def test_only_a_key_gives_no_signature(self) -> None:
-        self.assertIsNone(asset_downloader.build_expected_signature({"key": "asset:1"}))
+        self.assertIsNone(signature({"key": "asset:1"}))
 
     def test_known_metadata_is_joined_in_a_fixed_order(self) -> None:
         item = {"key": "asset:1", "name": "app.zip", "expected_size": 123, "expected_updated_at": "2026-10-06T10:00:00Z"}
-        self.assertEqual(asset_downloader.build_expected_signature(item), "asset:1|app.zip|123|2026-10-06T10:00:00Z")
+        self.assertEqual(signature(item), "asset:1|app.zip|123|2026-10-06T10:00:00Z")
 
     def test_a_size_of_zero_still_counts(self) -> None:
-        self.assertEqual(asset_downloader.build_expected_signature({"key": "k", "expected_size": 0}), "k|0")
+        self.assertEqual(signature({"key": "k", "expected_size": 0}), "k|0")
 
     def test_the_same_file_with_another_size_has_another_signature(self) -> None:
-        one = asset_downloader.build_expected_signature({"key": "k", "name": "a", "expected_size": 1})
-        two = asset_downloader.build_expected_signature({"key": "k", "name": "a", "expected_size": 2})
+        one = signature({"key": "k", "name": "a", "expected_size": 1})
+        two = signature({"key": "k", "name": "a", "expected_size": 2})
         self.assertNotEqual(one, two)
 
 
@@ -170,6 +177,12 @@ class MoveTestCase(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()):
             return function(*args)
 
+    def moved(self, function, *args) -> str:
+        """Run a move that is expected to succeed and return where the folder went (None would fail the test here)."""
+        target = self.run_quietly(function, *args)
+        assert target is not None, "the folder was not moved"
+        return target
+
     def tree(self, base: str) -> list[str]:
         found = []
         for folder, _dirs, files in os.walk(base):
@@ -186,7 +199,7 @@ class MoveToCompleteTests(MoveTestCase):
         self.write_mapping()  # a mapping entry without a destination
         source = self.make_release(REPO_FOLDER, "Release", "2026-10-06_13-24, Big, v1, abc1234")
 
-        target = self.run_quietly(asset_downloader.move_processing_folder_to_complete, source, REPO)
+        target = self.moved(asset_downloader.move_processing_folder_to_complete, source, REPO)
 
         expected = os.path.join(self.complete, REPO_FOLDER, "Release", "2026-10-06_13-24, Big, v1, abc1234")
         self.assertEqual(os.path.normpath(target), os.path.normpath(expected))
@@ -211,7 +224,7 @@ class MoveToCompleteTests(MoveTestCase):
         self.write_mapping(destination=self.destination, folder="My App", subfolder="@GitHub")
         source = self.make_release(REPO_FOLDER, "Pre-release", "rel1")
 
-        target = self.run_quietly(asset_downloader.move_processing_folder_to_complete, source, REPO)
+        target = self.moved(asset_downloader.move_processing_folder_to_complete, source, REPO)
 
         expected = os.path.join(self.destination, "My App", "@GitHub", "Pre-release", "rel1")
         self.assertEqual(os.path.normpath(target), os.path.normpath(expected))
@@ -221,7 +234,7 @@ class MoveToCompleteTests(MoveTestCase):
     def test_a_default_folder_name_is_used_when_the_mapping_has_none(self) -> None:
         self.write_mapping(destination=self.destination, subfolder="")
         source = self.make_release(REPO_FOLDER, "Release", "rel1")
-        target = self.run_quietly(asset_downloader.move_processing_folder_to_complete, source, REPO)
+        target = self.moved(asset_downloader.move_processing_folder_to_complete, source, REPO)
         self.assertEqual(
             os.path.normpath(target), os.path.normpath(os.path.join(self.destination, REPO_FOLDER, "Release", "rel1"))
         )
@@ -229,14 +242,14 @@ class MoveToCompleteTests(MoveTestCase):
     def test_a_subfolder_cannot_climb_out_of_the_destination(self) -> None:
         self.write_mapping(destination=self.destination, folder="My App", subfolder="../../escape")
         source = self.make_release(REPO_FOLDER, "Release", "rel1")
-        target = self.run_quietly(asset_downloader.move_processing_folder_to_complete, source, REPO)
+        target = self.moved(asset_downloader.move_processing_folder_to_complete, source, REPO)
         self.assertTrue(os.path.normpath(target).startswith(os.path.normpath(self.destination) + os.sep), target)
         self.assertFalse(os.path.exists(os.path.join(self.root, "escape")))
 
     def test_an_unsafe_folder_name_is_sanitized(self) -> None:
         self.write_mapping(destination=self.destination, folder="My: App?", subfolder="")
         source = self.make_release(REPO_FOLDER, "Release", "rel1")
-        target = self.run_quietly(asset_downloader.move_processing_folder_to_complete, source, REPO)
+        target = self.moved(asset_downloader.move_processing_folder_to_complete, source, REPO)
         self.assertIn(os.path.join(self.destination, "My- App_"), os.path.normpath(target))
 
     def test_a_missing_destination_falls_back_to_complete_and_warns(self) -> None:
@@ -244,7 +257,7 @@ class MoveToCompleteTests(MoveTestCase):
         self.write_mapping(destination=missing, folder="My App")
         source = self.make_release(REPO_FOLDER, "Release", "rel1")
 
-        target = self.run_quietly(asset_downloader.move_processing_folder_to_complete, source, REPO)
+        target = self.moved(asset_downloader.move_processing_folder_to_complete, source, REPO)
 
         self.assertTrue(os.path.normpath(target).startswith(os.path.normpath(self.complete)), target)
         self.assertEqual(self.read(target, "app.zip"), "payload")
@@ -256,7 +269,7 @@ class MoveToCompleteTests(MoveTestCase):
         taken = self.make_release("My App", "Release", "rel1", files={"keep.txt": "old"}, root=self.destination)
         source = self.make_release(REPO_FOLDER, "Release", "rel1")
 
-        target = self.run_quietly(asset_downloader.move_processing_folder_to_complete, source, REPO)
+        target = self.moved(asset_downloader.move_processing_folder_to_complete, source, REPO)
 
         self.assertEqual(os.path.normpath(target), os.path.normpath(taken + " (2)"))
         self.assertEqual(self.tree(taken), ["keep.txt"])
@@ -268,7 +281,7 @@ class MoveToCompleteTests(MoveTestCase):
         source = self.make_release(REPO_FOLDER, "Release", "rel1")
         self.dry_run = True
 
-        target = self.run_quietly(asset_downloader.move_processing_folder_to_complete, source, REPO)
+        target = self.moved(asset_downloader.move_processing_folder_to_complete, source, REPO)
 
         self.assertIn("My App", target)  # it says where it would go
         self.assertEqual(self.tree(source), ["app.zip", "notes.txt"])
@@ -286,7 +299,7 @@ class MoveToCompleteTests(MoveTestCase):
 class MoveToPartialTests(MoveTestCase):
     def test_a_superseded_release_moves_to_partial_keeping_its_relative_path(self) -> None:
         source = self.make_release(REPO_FOLDER, "Release", "rel1")
-        target = self.run_quietly(asset_downloader.move_processing_folder_to_partial, source)
+        target = self.moved(asset_downloader.move_processing_folder_to_partial, source)
         self.assertEqual(
             os.path.normpath(target), os.path.normpath(os.path.join(self.partial, REPO_FOLDER, "Release", "rel1"))
         )
@@ -297,7 +310,7 @@ class MoveToPartialTests(MoveTestCase):
     def test_an_existing_partial_folder_is_not_overwritten(self) -> None:
         taken = self.make_release(REPO_FOLDER, "Release", "rel1", files={"keep.txt": "old"}, root=self.partial)
         source = self.make_release(REPO_FOLDER, "Release", "rel1")
-        target = self.run_quietly(asset_downloader.move_processing_folder_to_partial, source)
+        target = self.moved(asset_downloader.move_processing_folder_to_partial, source)
         self.assertEqual(os.path.normpath(target), os.path.normpath(taken + " (2)"))
         self.assertEqual(self.read(taken, "keep.txt"), "old")
 

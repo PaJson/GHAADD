@@ -60,6 +60,11 @@ def tray_available() -> bool:
 # ----- what to tell the user -----
 
 
+def _dynamic(check: Callable[[Any], bool]) -> Any:
+    """pystray evaluates a callable `visible=` / `enabled=` each time the menu opens; its type stubs only say bool."""
+    return check
+
+
 def _names(repos: Iterable[str]) -> str:
     unique = sorted({repo for repo in repos if repo})
     shown = ", ".join(unique[:MAX_NOTIFICATION_NAMES])
@@ -322,18 +327,18 @@ class TrayIcon:
                     default=True,
                 ),
                 pystray.MenuItem(
-                    "Start daemon", lambda *_: self._actions.put(ACTION_START), visible=lambda _item: self._menu_state.can_start
+                    "Start daemon", lambda *_: self._actions.put(ACTION_START), visible=_dynamic(lambda _item: self._menu_state.can_start)
                 ),
                 pystray.MenuItem(
-                    "Poll now", lambda *_: self._actions.put(ACTION_POLL), enabled=lambda _item: self._menu_state.can_poll
+                    "Poll now", lambda *_: self._actions.put(ACTION_POLL), enabled=_dynamic(lambda _item: self._menu_state.can_poll)
                 ),
                 pystray.MenuItem(
-                    "Poll one item", lambda *_: self._actions.put(ACTION_SINGLE), enabled=lambda _item: self._menu_state.can_poll
+                    "Poll one item", lambda *_: self._actions.put(ACTION_SINGLE), enabled=_dynamic(lambda _item: self._menu_state.can_poll)
                 ),
                 pystray.MenuItem(
                     lambda _item: self._paused_label(),
                     lambda *_: self._actions.put(ACTION_PAUSE),
-                    enabled=lambda _item: self._menu_state.can_pause,
+                    enabled=_dynamic(lambda _item: self._menu_state.can_pause),
                 ),
                 pystray.Menu.SEPARATOR,
                 pystray.MenuItem(f"Quit {self._app_name} window", lambda *_: self._actions.put(ACTION_QUIT)),

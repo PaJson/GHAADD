@@ -1,7 +1,7 @@
 import os
 import re
 import sys
-from typing import TypedDict
+from typing import Optional, TypedDict
 
 from modules.config_manager import _normalize_configured_path
 from modules.mapping_manager import find_missing_mapped_destinations, validate_mapping_schema
@@ -46,7 +46,7 @@ def _looks_posix_style(path_value: str) -> bool:
     return path_value.startswith("/")
 
 
-def _warn_path_style_mismatch(path_value: str, platform_name: str) -> str | None:
+def _warn_path_style_mismatch(path_value: Optional[str], platform_name: str) -> str | None:
     if not isinstance(path_value, str) or not path_value.strip():
         return None
 

@@ -11,6 +11,7 @@ import os
 import tempfile
 import time
 import unittest
+from typing import Any
 from unittest import mock
 
 from modules import db_manager, mapping_manager, queue_reports
@@ -39,7 +40,7 @@ class OptionTests(unittest.TestCase):
         self.assertEqual(self.build(queue_date="2026-10-06")["date"], "2026-10-06")
 
     def test_bad_values_are_rejected_with_a_clear_message(self) -> None:
-        for kwargs, fragment in (
+        cases: tuple[tuple[dict[str, Any], str], ...] = (
             ({"queue_limit": -1}, "--queue-limit"),
             ({"queue_hours": 0}, "--queue-hours"),
             ({"queue_hours": -2}, "--queue-hours"),
@@ -47,7 +48,8 @@ class OptionTests(unittest.TestCase):
             ({"queue_date": "2026-13-40"}, "--queue-date"),
             ({"queue_hours": 2, "queue_date": "2026-10-06"}, "only one of"),
             ({"queue_repo_filter": "   "}, "--queue-repo-filter"),
-        ):
+        )
+        for kwargs, fragment in cases:
             with self.subTest(**kwargs):
                 with self.assertRaises(ValueError) as raised:
                     self.build(**kwargs)
@@ -57,10 +59,10 @@ class OptionTests(unittest.TestCase):
         explicit = self.build(queue_report_csv="out.csv")
         self.assertEqual((explicit["report"], explicit["report_csv_path"]), (True, "out.csv"))
         default = self.build(queue_report_csv="  ", queue_status_filter="failed", queue_date="2026-10-06")
-        self.assertRegex(default["report_csv_path"], r"^queue-report-date-2026-10-06-failed-\d{8}-\d{6}\.csv$")
+        self.assertRegex(str(default["report_csv_path"]), r"^queue-report-date-2026-10-06-failed-\d{8}-\d{6}\.csv$")
         hours = self.build(queue_report_csv="", queue_hours=1.5)
-        self.assertRegex(hours["report_csv_path"], r"^queue-report-last-1p5h-\d{8}-\d{6}\.csv$")
-        self.assertRegex(self.build(queue_report_csv="")["report_csv_path"], r"^queue-report-all-\d{8}-\d{6}\.csv$")
+        self.assertRegex(str(hours["report_csv_path"]), r"^queue-report-last-1p5h-\d{8}-\d{6}\.csv$")
+        self.assertRegex(str(self.build(queue_report_csv="")["report_csv_path"]), r"^queue-report-all-\d{8}-\d{6}\.csv$")
 
 
 class ScopeTests(unittest.TestCase):
@@ -76,7 +78,7 @@ class ScopeTests(unittest.TestCase):
     def test_a_date_covers_exactly_that_day(self) -> None:
         clause, params = self.scope(date_value="2026-10-06")
         self.assertEqual(clause, "WHERE created_at >= ? AND created_at < ?")
-        self.assertTrue(23 * 3600 <= params[1] - params[0] <= 25 * 3600, params)  # one day (23-25 h around a clock change)
+        self.assertTrue(23 * 3600 <= float(params[1]) - float(params[0]) <= 25 * 3600, params)  # one day (23-25 h around a clock change)
 
     def test_repo_status_and_table_alias(self) -> None:
         clause, params = self.scope(repo_filter="Owner", status_filter="FAILED", table_alias="j")

@@ -14,6 +14,7 @@ import time
 import types
 import unittest
 from email.utils import formatdate
+from typing import Any, cast
 from unittest import mock
 
 import requests
@@ -189,11 +190,18 @@ class DownloadTestCase(unittest.TestCase):
             "2026-10-06_13-24, First release, v1.0, abcdef1",
         )
 
-    def run_download(self, include_stats: bool = True, release_type: str | None = "Release"):
+    def run_download(self, release_type: str | None = "Release") -> dict[str, Any]:
+        """The detailed result (a dict); `run_download_legacy` gives the old True / "SKIP" / False values."""
         with contextlib.redirect_stdout(io.StringIO()) as output:
-            result = asset_downloader.download_release(REPO, TAG, release_type, include_stats=include_stats)
+            result = asset_downloader.download_release(REPO, TAG, release_type, include_stats=True)
         self.output = output.getvalue()
-        return result
+        return cast(dict[str, Any], result)
+
+    def run_download_legacy(self) -> bool | str:
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            result = asset_downloader.download_release(REPO, TAG, "Release", include_stats=False)
+        self.output = output.getvalue()
+        return cast("bool | str", result)
 
     def files_in_release_dir(self) -> list[str]:
         if not os.path.isdir(self.release_dir):
@@ -212,7 +220,8 @@ class GitHubLookupTests(DownloadTestCase):
     def test_release_data_is_returned_on_200(self) -> None:
         with contextlib.redirect_stdout(io.StringIO()):
             data = asset_downloader.get_release_data(REPO, TAG)
-        self.assertEqual(data["tag_name"], TAG)
+        self.assertIsNotNone(data)
+        self.assertEqual((data or {})["tag_name"], TAG)
 
     def test_a_missing_tag_gives_none(self) -> None:
         self.github.release_status = 404
@@ -302,7 +311,7 @@ class SuccessfulDownloadTests(DownloadTestCase):
         self.assertFalse([name for name in self.files_in_release_dir() if name.endswith(".part")])
 
     def test_the_legacy_return_value_is_true(self) -> None:
-        self.assertIs(self.run_download(include_stats=False), True)
+        self.assertIs(self.run_download_legacy(), True)
 
     def test_the_state_is_saved_for_every_item(self) -> None:
         self.run_download()
@@ -405,7 +414,7 @@ class NothingToDownloadTests(DownloadTestCase):
 
     def test_the_legacy_value_for_a_vanished_release(self) -> None:
         self.github.release_status = 404
-        self.assertEqual(self.run_download(include_stats=False), "SKIP")
+        self.assertEqual(self.run_download_legacy(), "SKIP")
 
     def test_a_release_with_no_assets_and_no_source_fails_after_waiting(self) -> None:
         self.github.release["assets"] = []

@@ -87,10 +87,9 @@ class OpenFolderMatchesDownloaderTests(unittest.TestCase):
                         expected, uses_mapping, warning = asset_downloader._resolve_finalized_base_directory(repo, "unused")
                     self.assertTrue(uses_mapping, warning)
                     os.makedirs(expected, exist_ok=True)
-                    self.assertEqual(
-                        os.path.normcase(gui_forms.resolve_open_folder(repo, root, folder, subfolder)),
-                        os.path.normcase(os.path.normpath(expected)),
-                    )
+                    opened = gui_forms.resolve_open_folder(repo, root, folder, subfolder)
+                    assert opened is not None
+                    self.assertEqual(os.path.normcase(opened), os.path.normcase(os.path.normpath(expected)))
 
 
 class LoggerTestCase(unittest.TestCase):
@@ -306,10 +305,10 @@ class DoctorTests(unittest.TestCase):
         self.assertIsNone(warn("/srv/games", "linux"))
         self.assertIsNone(warn("", "windows"))
         self.assertIsNone(warn(None, "windows"))
-        self.assertIn("drive-relative", warn("D:", "windows"))
-        self.assertIn("drive-relative", warn("D:games", "windows"))
+        self.assertIn("drive-relative", warn("D:", "windows") or "")
+        self.assertIn("drive-relative", warn("D:games", "windows") or "")
         self.assertIsNone(warn("D:/games", "windows"))
-        self.assertIn("Windows-style", warn("\\\\server\\share", "darwin"))
+        self.assertIn("Windows-style", warn("\\\\server\\share", "darwin") or "")
 
 
 if __name__ == "__main__":

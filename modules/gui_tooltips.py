@@ -153,6 +153,17 @@ CONTROL_HELP = {
              "in total, the busiest and the biggest repositories and how old the history is (the same as --stats).",
     "open_repo_folder": "Open the selected repository's folder in the file manager (the same as \"Open folder\" in the "
                         "Mappings tab: destination + name + subfolder, or the nearest part of it that exists).",
+    "credentials": "Your Gmail login (an app password, not your normal password) and the optional GitHub token, "
+                   "stored in the .env file, and the Gmail folder the GitHub mails are read from (mailbox.folder in config.json). "
+                   "The window has its own Save and Cancel and can test the login before saving. "
+                   "A running daemon reads them when it starts: use Restart afterwards.",
+    "internet_links": "Open the page where you create or check what this window asks for: the Gmail app password, "
+                      "2-step verification, IMAP access and filters, and GitHub's token pages.",
+    "show_secrets": "Show the app password and the token as plain text instead of bullets.",
+    "test_gmail": "Log in to Gmail with the address and password above (nothing is saved or changed in the mailbox), "
+                  "list its folders for the drop-down and check that the chosen folder exists.",
+    "test_token": "Ask GitHub whether this token is accepted and how many requests per hour it allows. "
+                  "Without a token GitHub allows only 60 an hour, which is too few for many repositories.",
     "doctor_attention": "This looks like a first run, or something needed is missing. Click to see what to set up.",
     "clear_filter": "Clear the filter (Esc)",
     "open_log": "Open the log file this tab is following in your default program for .log files "

@@ -26,7 +26,9 @@ from typing import Any, Callable, Iterable, Literal, Optional
 from modules import (
     autostart,
     config_manager,
+    connection_tests,
     daemon_launcher,
+    env_manager,
     gui_daemon,
     gui_data,
     gui_doctor,
@@ -1626,6 +1628,7 @@ class SettingsDialog(tk.Toplevel):
         master: tk.Misc,
         on_saved: Callable[[str], None],
         on_warnings_saved: Optional[Callable[[], None]] = None,
+        on_credentials_saved: Optional[Callable[[str], None]] = None,
     ) -> None:
         super().__init__(master)
         self.title("Settings")
@@ -1633,6 +1636,7 @@ class SettingsDialog(tk.Toplevel):
         self.transient(master)  # type: ignore[arg-type]
         self._on_saved = on_saved
         self._on_warnings_saved = on_warnings_saved  # the warning checklist saves by itself; tell the main window
+        self._on_credentials_saved = on_credentials_saved  # so does the Gmail & GitHub window
 
         body = ttk.Frame(self, padding=14)
         body.pack(fill="both", expand=True)
@@ -1796,9 +1800,14 @@ class SettingsDialog(tk.Toplevel):
         buttons = ttk.Frame(body)
         buttons.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(10, 0))
         buttons.columnconfigure(1, weight=1)
-        open_config_button = ttk.Button(buttons, text="Open config.json…", command=self._open_config)
-        open_config_button.grid(row=0, column=0, sticky="w")
+        file_buttons = ttk.Frame(buttons)
+        file_buttons.grid(row=0, column=0, sticky="w")
+        open_config_button = ttk.Button(file_buttons, text="Open config.json…", command=self._open_config)
+        open_config_button.grid(row=0, column=0, padx=(0, 6))
         attach_tooltip(open_config_button, gui_tooltips.CONTROL_HELP["open_config"])
+        accounts_button = ttk.Button(file_buttons, text="Gmail & GitHub…", command=self._open_credentials)
+        accounts_button.grid(row=0, column=1)
+        attach_tooltip(accounts_button, gui_tooltips.CONTROL_HELP["credentials"])
         ttk.Button(buttons, text="Cancel", command=self._close_request).grid(row=0, column=2, padx=(0, 6))
         ttk.Button(buttons, text="Save", command=self._save).grid(row=0, column=3)
 
@@ -1829,6 +1838,14 @@ class SettingsDialog(tk.Toplevel):
     def _choose_warnings(self) -> None:
         """Open the checklist of warning types. It saves by itself (its own Save button), whatever this window does."""
         WarningTypesDialog(self, self._silenced, self._warning_types_saved)
+
+    def _open_credentials(self) -> None:
+        """Open the Gmail & GitHub window. It saves by itself (its own Save button), whatever this window does."""
+        CredentialsDialog(self, self._credentials_saved)
+
+    def _credentials_saved(self, message: str) -> None:
+        if self._on_credentials_saved is not None:
+            self._on_credentials_saved(message)
 
     def _warning_types_saved(self, silenced: set[str]) -> None:
         self._silenced = set(silenced)
@@ -2038,6 +2055,228 @@ class WarningTypesDialog(tk.Toplevel):
         self._on_saved(silenced)
 
 
+class CredentialsDialog(tk.Toplevel):
+    """Gmail login, GitHub token and the Gmail folder, so nobody has to edit `.env` or config.json by hand.
+
+    It has its own Save and Cancel (the Settings window's Save neither writes nor undoes it). Save writes the login to
+    `.env` (`env_manager`) and the folder to config.json; the Test buttons try the values as typed, without saving,
+    in a thread so the window never freezes.
+    """
+
+    def __init__(self, master: tk.Misc, on_saved: Callable[[str], None]) -> None:
+        super().__init__(master)
+        self.title("Gmail & GitHub")
+        self.resizable(False, False)
+        self.transient(master)  # type: ignore[arg-type]
+        self._on_saved = on_saved
+        self._results: list[tuple[str, connection_tests.ConnectionResult]] = []
+        self._busy: set[str] = set()
+
+        saved = env_manager.read_values()
+        self._initial = {
+            "user": saved[env_manager.GMAIL_USER],
+            "password": saved[env_manager.GMAIL_APP_PASSWORD],
+            "token": saved[env_manager.GITHUB_PAT],
+            "folder": config_manager.get_gmail_folder(),
+        }
+        self.vars = {key: tk.StringVar(value=value) for key, value in self._initial.items()}
+        self.show_var = tk.BooleanVar(value=False)
+        self._baseline = self._values()  # normalised like the form, so a password saved with spaces is not a "change"
+
+        body = ttk.Frame(self, padding=14)
+        body.pack(fill="both", expand=True)
+        body.columnconfigure(0, weight=1)
+
+        def field(frame: tk.Misc, row: int, label: str, widget: tk.Widget) -> None:
+            ttk.Label(frame, text=label).grid(row=row, column=0, sticky="w", pady=4, padx=(0, 12))
+            widget.grid(row=row, column=1, sticky="ew", pady=4)
+
+        ttk.Label(body, text="Saved now: " + env_manager.summary(), foreground=COLOR_MUTED).grid(row=0, column=0, sticky="w", pady=(0, 8))
+        gmail = ttk.LabelFrame(body, text="Gmail (where the GitHub notification mails arrive)", padding=10)
+        gmail.grid(row=1, column=0, sticky="ew")
+        gmail.columnconfigure(1, weight=1)
+        ttk.Label(
+            gmail,
+            text="GHAADD reads the mails over IMAP with a Gmail app password, not your normal password. "
+                 "An app password needs 2-step verification on your Google account.",
+            foreground=COLOR_MUTED, wraplength=520, justify="left",
+        ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 6))
+        self.user_entry = ttk.Entry(gmail, textvariable=self.vars["user"], width=44)
+        field(gmail, 1, "Gmail address", self.user_entry)
+        self.password_entry = ttk.Entry(gmail, textvariable=self.vars["password"], show="•", width=44)
+        field(gmail, 2, "App password", self.password_entry)
+        self.folder_box = ttk.Combobox(gmail, textvariable=self.vars["folder"], values=[self._initial["folder"]], width=42)
+        field(gmail, 3, "Mailbox folder", self.folder_box)
+        # The folder is a Gmail label that a filter fills; the recipe follows the folder name as it is typed.
+        self.filter_hint = ttk.Label(gmail, text="", foreground=COLOR_MUTED, wraplength=520, justify="left")
+        self.filter_hint.grid(row=4, column=0, columnspan=2, sticky="w", pady=(2, 0))
+        self.vars["folder"].trace_add("write", lambda *_: self._update_filter_hint())
+        self._update_filter_hint()
+        gmail_actions = ttk.Frame(gmail)
+        gmail_actions.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        gmail_actions.columnconfigure(2, weight=1)
+        self.test_gmail_button = ttk.Button(gmail_actions, text="Test Gmail login", command=self._test_gmail)
+        self.test_gmail_button.grid(row=0, column=0, padx=(0, 6))
+        attach_tooltip(self.test_gmail_button, gui_tooltips.CONTROL_HELP["test_gmail"])
+        self.gmail_result = ttk.Label(gmail, text="", wraplength=520, justify="left")
+        self.gmail_result.grid(row=6, column=0, columnspan=2, sticky="w", pady=(6, 0))
+
+        github = ttk.LabelFrame(body, text="GitHub (optional)", padding=10)
+        github.grid(row=2, column=0, sticky="ew", pady=(10, 0))
+        github.columnconfigure(1, weight=1)
+        ttk.Label(
+            github,
+            text="A token raises GitHub's request limit from 60 to 5000 an hour. Use a personal access token (classic); it needs no scopes for public repositories.",
+            foreground=COLOR_MUTED, wraplength=520, justify="left",
+        ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 6))
+        self.token_entry = ttk.Entry(github, textvariable=self.vars["token"], show="•", width=44)
+        field(github, 1, "Personal access token", self.token_entry)
+        github_actions = ttk.Frame(github)
+        github_actions.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        self.test_token_button = ttk.Button(github_actions, text="Test token", command=self._test_token)
+        self.test_token_button.grid(row=0, column=0, padx=(0, 6))
+        attach_tooltip(self.test_token_button, gui_tooltips.CONTROL_HELP["test_token"])
+        self.token_result = ttk.Label(github, text="", wraplength=520, justify="left")
+        self.token_result.grid(row=3, column=0, columnspan=2, sticky="w", pady=(6, 0))
+
+        show = ttk.Checkbutton(body, text="Show the password and the token", variable=self.show_var, command=self._toggle_show)
+        show.grid(row=3, column=0, sticky="w", pady=(10, 0))
+        attach_tooltip(show, gui_tooltips.CONTROL_HELP["show_secrets"])
+        self.message = ttk.Label(body, text="", foreground=COLOR_ERROR, wraplength=540, justify="left")
+        self.message.grid(row=4, column=0, sticky="w", pady=(6, 0))
+        buttons = ttk.Frame(body)
+        buttons.grid(row=5, column=0, sticky="ew", pady=(10, 0))
+        buttons.columnconfigure(1, weight=1)
+        internet = ttk.Menubutton(buttons, text="Internet ▾")  # where to get the app password, the token, ...
+        menu = tk.Menu(internet, tearoff=False)
+        for label, url in env_manager.HELP_LINKS:
+            menu.add_command(label=label, command=lambda url=url: self._open_link(url))
+        internet.configure(menu=menu)
+        internet.grid(row=0, column=0, sticky="w")
+        attach_tooltip(internet, gui_tooltips.CONTROL_HELP["internet_links"])
+        ttk.Button(buttons, text="Cancel", command=self._close_request).grid(row=0, column=2, padx=(0, 6))
+        self.save_button = ttk.Button(buttons, text="Save", command=self._save)
+        self.save_button.grid(row=0, column=3)
+
+        self.bind("<Escape>", lambda _event: self._close_request())
+        self.protocol("WM_DELETE_WINDOW", self._close_request)
+        center_dialog(self, master, focus=self.user_entry)
+        self.user_entry.selection_range(0, "end")
+        self.grab_set()
+
+    # ----- helpers -----
+
+    def _values(self) -> dict[str, str]:
+        """The form as typed: the address and token trimmed, the app password without its spaces."""
+        return {
+            "user": self.vars["user"].get().strip(),
+            "password": env_manager.normalize_password(self.vars["password"].get()),
+            "token": self.vars["token"].get().strip(),
+            "folder": self.vars["folder"].get().strip(),
+        }
+
+    def _changed(self) -> bool:
+        return self._values() != self._baseline
+
+    def _update_filter_hint(self) -> None:
+        folder = self.vars["folder"].get().strip() or config_manager.DEFAULT_GMAIL_FOLDER
+        self.filter_hint.configure(text=gui_forms.gmail_filter_hint(folder))
+
+    def _open_link(self, url: str) -> None:
+        try:
+            opened = webbrowser.open(url)
+        except webbrowser.Error:
+            opened = False
+        self.message.configure(
+            text="" if opened else f"Could not open a browser. The address is: {url}", foreground=COLOR_ERROR
+        )
+
+    def _toggle_show(self) -> None:
+        shown = "" if self.show_var.get() else "•"
+        self.password_entry.configure(show=shown)
+        self.token_entry.configure(show=shown)
+
+    def _close_request(self) -> None:
+        if self._changed() and not messagebox.askyesno(
+            "Gmail & GitHub",
+            "You have changes that are not saved.\n\nClose the window and discard them?",
+            icon="warning", default="no", parent=self,
+        ):
+            return
+        self.destroy()
+
+    # ----- the Test buttons (network in a thread, the answer is picked up by _poll) -----
+
+    def _start_test(self, name: str, button: ttk.Button, label: ttk.Label, work: Callable[[], connection_tests.ConnectionResult]) -> None:
+        if name in self._busy:
+            return
+        self._busy.add(name)
+        button.state(["disabled"])
+        label.configure(text="Testing…", foreground=COLOR_MUTED)
+
+        def run() -> None:
+            try:
+                result = work()
+            except Exception as exc:  # shown in the window instead of vanishing
+                result = connection_tests.ConnectionResult(False, f"The test could not run: {exc}")
+            self._results.append((name, result))
+
+        threading.Thread(target=run, daemon=True).start()
+        self.after(100, self._poll)
+
+    def _test_gmail(self) -> None:
+        values = self._values()
+        self._start_test(
+            "gmail", self.test_gmail_button, self.gmail_result,
+            lambda: connection_tests.check_gmail(values["user"], values["password"], values["folder"]),
+        )
+
+    def _test_token(self) -> None:
+        token = self._values()["token"]
+        self._start_test("token", self.test_token_button, self.token_result, lambda: connection_tests.check_github_token(token))
+
+    def _poll(self) -> None:
+        if not self.winfo_exists():
+            return
+        while self._results:
+            name, result = self._results.pop(0)
+            self._busy.discard(name)
+            ok_color = "#2e7d32" if result.ok and result.folder_found is not False else COLOR_WARNING if result.ok else COLOR_ERROR
+            if name == "gmail":
+                self.test_gmail_button.state(["!disabled"])
+                self.gmail_result.configure(text=result.message, foreground=ok_color)
+                if result.folders:  # the drop-down offers the real folders; what was typed stays
+                    self.folder_box.configure(values=result.folders)
+            else:
+                self.test_token_button.state(["!disabled"])
+                self.token_result.configure(text=result.message, foreground=ok_color)
+        if self._busy:
+            self.after(100, self._poll)
+
+    # ----- Save -----
+
+    def _save(self) -> None:
+        values = self._values()
+        problems = env_manager.validate(values["user"], values["password"], values["token"])
+        if not values["folder"]:
+            problems.append(f"Enter the mailbox folder (the default is {config_manager.DEFAULT_GMAIL_FOLDER}).")
+        if problems:
+            self.message.configure(text="\n".join(problems))
+            return
+        try:
+            env_manager.update_values({
+                env_manager.GMAIL_USER: values["user"],
+                env_manager.GMAIL_APP_PASSWORD: values["password"],
+                env_manager.GITHUB_PAT: values["token"] or None,
+            })
+            config_manager.set_config_values({"mailbox.folder": values["folder"]})
+        except (env_manager.EnvLockTimeout, config_manager.ConfigLockTimeout, config_manager.ConfigUnreadableError, OSError) as exc:
+            self.message.configure(text=describe_error(exc))
+            return
+        self.destroy()
+        self._on_saved("Gmail & GitHub settings saved. A running daemon uses them after a restart.")
+
+
 class DoctorDialog(tk.Toplevel):
     """Runs the --doctor checks and shows the result; the first-run notes (if any) come first."""
 
@@ -2126,7 +2365,7 @@ class DoctorDialog(tk.Toplevel):
             self.summary.configure(text="The checks could not run.")
             self._write(self._error + "\n", "error")
         elif report is not None:
-            self.summary.configure(text=gui_doctor.summary_line(report))  # type: ignore[arg-type]
+            self.summary.configure(text=gui_doctor.summary_line(report))
             if reasons:
                 self._write("Looks like a first run\n", "heading")
                 for reason in reasons:
@@ -2931,7 +3170,12 @@ class MainWindow(tk.Tk):
             )
 
     def _open_settings(self) -> None:
-        SettingsDialog(self, self._after_settings_saved, self._reload_silenced_warnings)
+        SettingsDialog(self, self._after_settings_saved, self._reload_silenced_warnings, self._after_credentials_saved)
+
+    def _after_credentials_saved(self, message: str) -> None:
+        """The Gmail & GitHub window saved: say so, and re-check the first-run hints (the Doctor button)."""
+        self.set_status(message)
+        self._refresh_doctor_attention()
 
     def _reload_silenced_warnings(self) -> None:
         """The warning checklist saved its choice: use it from the next warning on (no restart needed)."""
@@ -2954,7 +3198,7 @@ class MainWindow(tk.Tk):
             reasons = gui_doctor.first_run_reasons()
         except Exception:
             return
-        self.control_bar.set_doctor_attention(reasons, gui_doctor.needs_attention(reasons, report))  # type: ignore[arg-type]
+        self.control_bar.set_doctor_attention(reasons, gui_doctor.needs_attention(reasons, report))
 
     def _after_settings_saved(self, message: str) -> None:
         self._refresh_doctor_attention()  # saving the Settings creates config.json

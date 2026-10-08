@@ -25,7 +25,7 @@ class QueueTestCase(unittest.TestCase):
         self.connection = db_manager.open_database()
         self.addCleanup(self.connection.close)
 
-    def job(self, repo="o/app", tag="v1", release_type="Release", due=0.0, commit=None) -> int:
+    def job(self, repo="o/app", tag="v1", release_type: str | None = "Release", due=0.0, commit=None) -> int:
         return db_manager.enqueue_job(self.connection, repo, tag, release_type, due, commit)
 
     def row(self, job_id: int):

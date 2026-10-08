@@ -438,7 +438,7 @@ def launchd_plist_bytes(python: str, script: str, workdir: str) -> bytes:
 
 
 def _launchd_domain(uid: Optional[int]) -> str:
-    return f"gui/{uid if uid is not None else os.getuid()}"
+    return f"gui/{uid if uid is not None else getattr(os, 'getuid')()}"
 
 
 def _install_macos(runner: Runner, home: Optional[str], python: Optional[str], uid: Optional[int]) -> AutostartResult:

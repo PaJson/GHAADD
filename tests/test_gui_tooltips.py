@@ -2,12 +2,15 @@
 
 Run from the project root: python -m unittest discover -s tests -t .
 """
+import importlib
 import unittest
+from typing import Any
 
 from modules import gui_tooltips
 
+main_gui: Any
 try:
-    import main_gui
+    main_gui = importlib.import_module("main_gui")
 except ImportError:  # no Tk on this machine
     main_gui = None
 

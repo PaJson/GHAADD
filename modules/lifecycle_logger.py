@@ -116,7 +116,7 @@ def log_partial_move(
     )
 
 
-def log_warning(warning_type: str, message: str) -> None:
+def log_warning(warning_type: Optional[str], message: str) -> None:
     """Record a typed warning lifecycle event."""
     normalized_type = str(warning_type or "GENERAL").strip().upper() or "GENERAL"
     _record_lifecycle_event("WARNING", message, category=normalized_type)

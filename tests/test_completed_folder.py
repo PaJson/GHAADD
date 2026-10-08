@@ -45,5 +45,14 @@ class OpenFolderForEntryTests(unittest.TestCase):
         self.assertIsNone(gui_forms.open_folder_for_entry("o/app", {"destination": "/definitely/not/here"}))
 
 
+class GmailFilterHintTests(unittest.TestCase):
+    def test_the_recipe_names_the_sender_the_folder_and_the_four_actions(self) -> None:
+        text = gui_forms.gmail_filter_hint("My Folder")
+        self.assertIn("from:(notifications@github.com)", text)
+        self.assertIn('Apply label "My Folder"', text)
+        for action in ("Skip Inbox", "Never send it to Spam", "Never mark it as important"):
+            self.assertIn(action, text)
+
+
 if __name__ == "__main__":
     unittest.main()

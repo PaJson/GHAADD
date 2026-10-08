@@ -59,7 +59,7 @@ def format_list(values: Optional[list[Any]]) -> str:
     return ", ".join(str(value) for value in (values or []))
 
 
-def parse_str_list(text: str) -> list[str]:
+def parse_str_list(text: Optional[str]) -> list[str]:
     """Split a comma-separated entry into trimmed, non-empty, case-insensitively unique items."""
     items: list[str] = []
     seen: set[str] = set()
@@ -128,6 +128,15 @@ def resolve_open_folder(repo: str, destination: str, folder: str, subfolder: str
         if os.path.isdir(candidate):
             return candidate
     return None
+
+
+def gmail_filter_hint(folder: str) -> str:
+    """How to make Gmail put the GitHub mails in `folder` (a label), for the Gmail & GitHub window."""
+    return (
+        "Gmail needs a filter that fills this folder (Gmail's Settings, Filters and blocked addresses):\n"
+        "Matches: from:(notifications@github.com)\n"
+        f"Do this: Skip Inbox, Apply label \"{folder}\", Never send it to Spam, Never mark it as important"
+    )
 
 
 def folder_display_name(repo: str, entry: Optional[Mapping[str, Any]]) -> str:

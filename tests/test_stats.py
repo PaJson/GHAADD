@@ -12,6 +12,7 @@ import tempfile
 import unittest
 from contextlib import closing
 from datetime import datetime
+from typing import Any
 from unittest import mock
 
 from modules import cli_commands, config_manager, db_manager, mapping_manager, stats
@@ -90,7 +91,7 @@ class MappingStatsTests(unittest.TestCase):
 
 class BuildTests(unittest.TestCase):
     def build(self, **overrides):
-        arguments = dict(entries=ENTRIES, jobs=jobs_fixture(), cycles=[NOW - 5 * HOUR, NOW - 2 * DAY, NOW - 100 * DAY],
+        arguments: dict[str, Any] = dict(entries=ENTRIES, jobs=jobs_fixture(), cycles=[NOW - 5 * HOUR, NOW - 2 * DAY, NOW - 100 * DAY],
                          sizes=SIZES, folder_counts={}, now=NOW)
         arguments.update(overrides)
         return stats.build(**arguments)

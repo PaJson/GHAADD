@@ -441,7 +441,10 @@ def enqueue_job(connection, repo, tag, release_type=None, next_check_time=None, 
         (repo, tag, release_type, float(next_check_time), expected_commit),
     )
     connection.commit()
-    return cursor.lastrowid
+    job_id = cursor.lastrowid
+    if job_id is None:  # cannot happen after a successful INSERT; says so instead of returning None as an id
+        raise RuntimeError("SQLite did not report a row id for the new job")
+    return job_id
 
 
 def get_pending_job_for_release(connection, repo, tag, release_type=None, expected_commit=None, exclude_job_id=None):
@@ -1318,7 +1321,10 @@ def insert_lifecycle_event(
         (event_type, category, repo, tag, commit_hash, destination_path, message),
     )
     connection.commit()
-    return cursor.lastrowid
+    event_id = cursor.lastrowid
+    if event_id is None:  # cannot happen after a successful INSERT; says so instead of returning None as an id
+        raise RuntimeError("SQLite did not report a row id for the new event")
+    return event_id
 
 
 def get_lifecycle_events(connection, limit: Optional[int] = 20, event_type=None, repo_filter=None):

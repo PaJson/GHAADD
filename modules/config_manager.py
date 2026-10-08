@@ -10,6 +10,7 @@ from typing import Any, Callable, Dict, Optional, TypedDict, TypeVar
 
 from filelock import FileLock, Timeout
 
+from modules import env_manager
 from modules.dry_run_mode import is_dry_run
 from modules.warning_types import DEFAULT_SILENCED as DEFAULT_SILENCED_WARNING_TYPES
 
@@ -375,7 +376,7 @@ def get_default_subfolder(config=None):
     """
     config = config if config is not None else load_config()
     value = _get_nested(config, "paths", "default_subfolder")
-    if is_valid_subfolder(value):
+    if isinstance(value, str) and is_valid_subfolder(value):
         return value.strip()
     return DEFAULT_SUBFOLDER
 
@@ -579,6 +580,7 @@ def get_config_fingerprint(config: Optional[Dict[str, Any]] = None) -> str:
         "terminal_log": get_terminal_log_settings(config),
         "folders": get_folder_settings(config),
         "gmail_folder": get_gmail_folder(config),
+        "credentials": env_manager.credentials_fingerprint(),  # a hash of the .env login: a changed login needs a restart too
         "state_persistence_disabled": is_state_persistence_disabled(config),
     }
     payload = json.dumps(effective, sort_keys=True, default=str)

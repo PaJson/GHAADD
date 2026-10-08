@@ -7,7 +7,7 @@ at start-up to decide whether the Doctor button should be highlighted; `run_repo
 from __future__ import annotations
 
 import os
-from typing import Mapping, Optional
+from typing import Any, Mapping, Optional
 
 from modules import config_manager, mapping_manager
 from modules.doctor_checks import DoctorReport, run_doctor
@@ -44,7 +44,7 @@ def first_run_reasons(
         reasons.append("mapping.json is missing: it is created when the first notification arrives or you add a repository.")
     missing = [name for name in REQUIRED_VARIABLES if not environment.get(name)]
     if missing:
-        reasons.append(f"{' and '.join(missing)} not set: create the .env file with your Gmail login (see the README).")
+        reasons.append(f"{' and '.join(missing)} not set: open Settings, choose 'Gmail & GitHub…' and enter your Gmail login.")
     return reasons
 
 
@@ -54,7 +54,7 @@ def run_report() -> DoctorReport:
     return run_doctor()
 
 
-def summary_line(report: DoctorReport) -> str:
+def summary_line(report: Mapping[str, Any]) -> str:
     errors, warnings = len(report["errors"]), len(report["warnings"])
     if errors:
         return f"{errors} problem(s) need fixing" + (f", {warnings} warning(s)." if warnings else ".")
@@ -63,6 +63,6 @@ def summary_line(report: DoctorReport) -> str:
     return "Everything looks fine."
 
 
-def needs_attention(reasons: list[str], report: Optional[DoctorReport] = None) -> bool:
+def needs_attention(reasons: list[str], report: Optional[Mapping[str, Any]] = None) -> bool:
     """Highlight the button for a first run, or when a doctor report found errors."""
     return bool(reasons) or bool(report and report["errors"])
