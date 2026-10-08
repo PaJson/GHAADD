@@ -2,13 +2,22 @@
 
 Only temporary folders are used. Run from the project root: python -m unittest discover -s tests -t .
 """
+import importlib
 import os
 import subprocess
 import sys
 import tempfile
 import unittest
+from typing import Any
+from unittest import mock
 
 from modules import gui_instance
+
+main_gui: Any
+try:
+    main_gui = importlib.import_module("main_gui")
+except ImportError:  # no Tk on this machine
+    main_gui = None
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -86,6 +95,31 @@ class OtherProcessTests(unittest.TestCase):
             self.addCleanup(gui_instance.release)
             self.assertTrue(gui_instance.acquire(directory))  # it ended, so the lock is free again
             self.assertFalse(gui_instance.take_show_request(directory))  # the note that was left was stale and dropped
+
+
+@unittest.skipIf(main_gui is None, "tkinter is not available")
+class SecondStartTests(unittest.TestCase):
+    """Starting the GUI while one is open brings that window forward, however this start was configured."""
+
+    def second_start(self, *argv: str, start_minimized_setting: bool = False) -> list[bool]:
+        shown: list[bool] = []
+        with mock.patch.object(sys, "argv", ["main_gui.py", *argv]), \
+                mock.patch.object(main_gui.gui_instance, "acquire", lambda: False), \
+                mock.patch.object(main_gui.gui_instance, "request_show", lambda: shown.append(True) or True), \
+                mock.patch.object(main_gui.config_manager, "get_gui_start_minimized", lambda config=None: start_minimized_setting), \
+                mock.patch.object(main_gui, "MainWindow", side_effect=AssertionError("a second window must not open")):
+            main_gui.main()
+        return shown
+
+    def test_a_plain_second_start_asks_the_open_window_to_come_forward(self) -> None:
+        self.assertEqual(self.second_start(), [True])
+
+    def test_a_second_start_asking_to_be_minimized_still_brings_the_window_forward(self) -> None:
+        self.assertEqual(self.second_start("--minimized"), [True])
+
+    def test_the_start_minimized_setting_does_not_keep_the_window_hidden_either(self) -> None:
+        self.assertEqual(self.second_start(start_minimized_setting=True), [True])
+        self.assertEqual(self.second_start("--minimized", start_minimized_setting=True), [True])
 
 
 if __name__ == "__main__":

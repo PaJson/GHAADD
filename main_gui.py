@@ -3467,10 +3467,10 @@ def main() -> None:
     parser.add_argument("--start-daemon", action="store_true", help="Start the daemon when the window opens if none is running, whatever the Settings say.")
     args = parser.parse_args()
     if not gui_instance.acquire():
-        # Another window is already open: bring it forward (unless this start was meant to stay out of the way)
-        # instead of opening a second one.
-        if not (args.minimized or config_manager.get_gui_start_minimized()):
-            gui_instance.request_show()
+        # Another window is already open (maybe hidden in the tray): bring it forward instead of opening a second one.
+        # This also holds for a start that asked to be minimized: someone starting the GUI again most likely cannot
+        # find the window, so showing it is more useful than staying quiet.
+        gui_instance.request_show()
         return
     try:
         MainWindow(theme=args.theme, start_minimized=args.minimized, start_daemon=args.start_daemon).mainloop()
