@@ -229,6 +229,8 @@ CLI options:
 - --pause / --resume / --poll-now: Control a running polling daemon from a second terminal (or the GUI). --pause freezes the countdown to the next poll and no poll runs until --resume (a poll cycle already in progress stops at the next safe boundary: the running job or email finishes, the rest wait, and polling restarts immediately on resume); --poll-now makes the daemon poll right away and then restart its countdown (it also works while paused: that one poll runs to the end and the daemon stays paused afterwards). They write a single-row `daemon_control` table in `state.db`; a daemon that is not running reports "nothing to control". Pause is always cleared when a daemon starts.
 - --stop: Stop the running polling daemon gracefully from a second terminal (or the GUI's Stop button). The job in progress finishes first, then the daemon exits and releases its lock; a stop request left behind by an earlier run never stops a new daemon. Same control channel and "nothing to control" behaviour as --pause. Only the polling mode (--poll / polling.enabled) listens for it; use Ctrl+C for the other run modes.
 - --log-on / --log-off: Switch terminal logging on or off in a running polling daemon without restarting it (same control channel and "nothing to control" behaviour as --pause). --log-on starts a new .log file from that moment (it does not contain earlier output), --log-off closes the file; console output is unaffected. Each --log-on gets its own file, and retention (terminal_log.keep_files) is applied when it starts. The switch overrides terminal_log.enabled for the running session only and is cleared when a daemon starts, so the config value decides again after a restart.
+- --push-on / --push-off: Start or stop sending read-only snapshots to the web viewer (see "Web viewer" below) in a running daemon, without restarting it (same control channel and "nothing to control" behaviour as --log-on). They override `viewer.enabled` for the running session only and are cleared when a daemon starts. Pushing needs `viewer.url` and `viewer.token` in config.json; without them --push-on says what is missing in the daemon's output.
+- --new-viewer-token: Print a new random token for the web viewer and exit (it writes nothing): put it in config.json as `viewer.token` and give the same value to `ghaadd_viewer.py`.
 - --purge-state: Delete local state.db and exit. Add --dry-run to preview whether it would delete anything without doing so.
 - --smoke-test: Run internal smoke tests and exit.
 - --doctor: Run environment and cross-platform diagnostics.
@@ -399,6 +401,8 @@ Key behavior:
 	- Size limit per log file in MB (default 10). When the current file reaches it, the daemon continues in a new, newer-named log file (the first line says which file it continues). Lines are never split across files. 0 disables rollover.
 - backup.enabled, backup.every_hours, backup.keep_files, backup.directory, backup.include_env
 	- Scheduled backups (Settings -> Backup…). `enabled` (default true) lets the daemon back up when the newest backup is older than `every_hours` (default 24, at least 1); it checks at start and after every poll (in idle mode: after every Poll now). `keep_files` (default 14, 0 = keep all) deletes the oldest backups beyond that number. `directory` (default empty = a `backups` folder beside the app files) is where the zips go (`ghaadd_backup_YYYYMMDD_HHMMSS.zip`). `include_env` (default false) adds `.env`. A failed scheduled backup is recorded as a `BACKUP` warning. Changes apply without a daemon restart.
+- viewer.enabled, viewer.url, viewer.token, viewer.name
+	- Sending read-only snapshots to the web viewer (see "Web viewer" below). `enabled` (default false) starts the push when the daemon starts (`--push-on` / `--push-off` switch it while the daemon runs). `url` is the viewer's address, e.g. `http://192.168.0.100:8888` (no trailing slash needed). `token` is the shared secret (make one with `python main.py --new-viewer-token`). `name` (default: the computer's name) is how this daemon is listed in the viewer. The daemon only connects *out* to this address and opens no port. The address and token are read when the daemon starts.
 - gui.refresh_seconds
 	- How often the GUI re-reads the data it shows, in seconds (default 3, allowed 1 to 60). A longer time uses less CPU on a slow machine. Edit config.json by hand; the GUI reads it when it starts. The daemon ignores the `gui` section.
 - gui.silenced_warning_types
@@ -413,6 +417,36 @@ Key behavior:
 	- How long a message in the GUI's status bar stays before the default text returns, in seconds (default 6, allowed 2 to 60). Same rules as above.
 - terminal_log.keep_files
 	- Number of log files to keep (default 30, including the current one). The oldest GHAADD log files (names matching YYYYMMDD_HHMMSS.log) beyond this are deleted when the polling daemon starts and after every rollover. 0 keeps everything. Never applied in --dry-run.
+
+## Web viewer (optional)
+
+A passive page that shows what the daemon is doing, in a browser, from any computer: the daemon's status, the Mappings table and the Warnings, Completed, Folder limits and Unmapped lists, as in the GUI. It can only *look*: it has no buttons, cannot control the daemon and cannot even reach it.
+
+How it works: the **daemon connects out** to the viewer (`viewer.url`) and sends a read-only snapshot when something changed, plus a small heartbeat every 15 seconds, and says goodbye when it stops cleanly. The viewer keeps only the latest snapshot per daemon, in memory. The daemon opens no port, so there is no firewall rule to add on its computer and nothing listens on the machine that holds your Gmail and GitHub logins. The viewer is one standard-library file, `ghaadd_viewer.py`, that you can run anywhere (a headless Debian server, a NAS, Docker). It lives in the `viewer` folder together with its Docker files and its own short README (`viewer/README.md`), so you can copy just that folder to the server.
+
+Set it up:
+
+1. Make a token on the daemon's computer: `python main.py --new-viewer-token`.
+2. Start the viewer where you want to look from, with the same token (it listens on port 8888):
+   - plain Python 3.10+, no packages: `python3 viewer/ghaadd_viewer.py --token <token>` (options: `--port`, `--host`, `--lost-after`; or the environment variables `GHAADD_VIEWER_TOKENS`, `GHAADD_VIEWER_PORT`, `GHAADD_VIEWER_HOST`, `GHAADD_VIEWER_LOST_AFTER`), or
+   - Docker: copy the `viewer` folder (`ghaadd_viewer.py`, `Dockerfile`, `.dockerignore`, `docker-compose.yml`) to the server, go into it and run `GHAADD_VIEWER_TOKENS=<token> docker compose up -d --build` (or put that line in a `.env` file beside them). The image holds only the viewer and runs as an unprivileged user with a read-only file system.
+3. In the daemon's config.json add the `viewer` section (see `config.example.json`) with `"enabled": true`, `"url": "http://<viewer-host>:8888"` and the `"token"`, then restart the daemon. Or leave `enabled` false and use `python main.py --push-on` / `--push-off` while the daemon runs.
+4. Open `http://<viewer-host>:8888/` in a browser.
+
+What you see and when:
+
+- **live**: data arrives; everything on the page is current.
+- **daemon stopped**: the daemon said goodbye (a clean stop). The page shows no data until it sends again.
+- **no data received**: nothing arrived for 45 seconds (about three missed heartbeats; `--lost-after` changes it): the daemon, its computer or the network is down, or the push is off. The viewer never shows old numbers: when the data is not current, it is not shown.
+- **viewer unreachable**: the page itself cannot get data from the viewer.
+
+Good to know:
+
+- **No paths leave the daemon.** The destination column is not sent, and absolute paths in message texts (for example in a Completed line) are replaced by `<path>`. A path ends at the next comma, semicolon, closing bracket or quote, so the odd word of prose after a path can disappear with it.
+- **The token is the only protection and travels in clear text over plain HTTP.** That is fine on a trusted home network or inside Tailscale or WireGuard. For anything wider, put the viewer behind a reverse proxy with TLS. Internet access is not built in: the daemon only needs to reach the viewer's address, so a VPN is the simple way to use it between places. The viewer refuses to start without a token of at least 16 characters, and a daemon with a wrong token is rejected and shown nowhere.
+- The viewer itself has no login: anyone who can open its port can read what the daemon sends. Keep it on a trusted network.
+- Several daemons (for example one at home and one on a NAS) can push to one viewer with different `viewer.name` values; the page then offers a selector.
+- A viewer that is down never disturbs the daemon: it retries with a growing pause (5 s up to 1 minute), says why once in its output, and polling goes on as usual.
 
 ## Starting the daemon automatically
 

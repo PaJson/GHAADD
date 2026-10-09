@@ -4,12 +4,13 @@ import os
 import random
 import sys
 import time
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from modules.config_manager import (
     get_config_fingerprint,
     get_destination_check_every_n_polls,
     get_polling_settings,
     get_terminal_log_settings,
+    get_viewer_settings,
     load_config,
 )
 from datetime import datetime
@@ -23,8 +24,14 @@ GITHUB_TOKEN = os.getenv("GITHUB_PAT", None)
 
 # Import application modules.
 from modules.cli_commands import handle_cli_command, parse_cli_args
-from modules.daemon_control import ControlWatcher, reset_log_override_on_startup, reset_paused_on_startup
+from modules.daemon_control import (
+    ControlWatcher,
+    reset_log_override_on_startup,
+    reset_paused_on_startup,
+    reset_push_override_on_startup,
+)
 from modules.daemon_lock import acquire_daemon_lock, update_daemon_status
+from modules.viewer_push import ViewerPusher
 from modules.db_manager import get_next_pending_job, open_database
 from modules.asset_downloader import check_folder_limits, clear_all_resolved_limit_warnings, download_release
 from modules.dry_run_mode import is_dry_run, set_dry_run
@@ -240,6 +247,16 @@ def run_internal_smoke_tests():
     print("\n🎉 Smoke tests complete.")
 
 
+@contextmanager
+def _viewer_push_scope(pusher):
+    """Stop pushing to the viewer (telling it goodbye) however the polling loop ends."""
+    try:
+        yield
+    finally:
+        if pusher is not None:
+            pusher.stop()
+
+
 def run_polling_loop(
     interval_seconds, jitter_min_seconds, jitter_max_seconds, terminal_log=None, config_fingerprint=None, idle=False
 ):
@@ -265,6 +282,20 @@ def run_polling_loop(
     control_enabled = not is_dry_run()
 
     announced_paused = False
+
+    # The read-only web viewer: snapshots are pushed OUT to viewer.url (the daemon opens no port). Like the terminal
+    # log it can be switched live (--push-on / --push-off); address and token are read once, at start.
+    viewer_settings = get_viewer_settings()
+    pusher = (
+        ViewerPusher(viewer_settings, on_status=lambda status: update_daemon_status(viewer_push=status))
+        if control_enabled
+        else None
+    )
+
+    def apply_push_override(override):
+        """Follow a live push switch (None = the viewer.enabled setting of config.json)."""
+        if pusher is not None:
+            pusher.apply_override(override, viewer_settings["enabled"])
 
     def log_is_active():
         """Return whether the terminal log file is open right now (published for the GUI)."""
@@ -305,20 +336,24 @@ def run_polling_loop(
             print(f"   ⚠️ Could not check folder limits: {exc}")
 
     cycle = 1
-    with open_database() as connection:
+    with open_database() as connection, _viewer_push_scope(pusher):
         if control_enabled:
             reset_paused_on_startup(connection)
             reset_log_override_on_startup(connection)
+            reset_push_override_on_startup(connection)
             update_daemon_status(
                 paused=False, next_poll_at=None, last_forced_poll_handled=None, current_job=None,
                 config_fingerprint=config_fingerprint, log_active=log_is_active(), polling_idle=bool(idle),
+                viewer_push=None,
             )
         watcher = ControlWatcher(
             connection=connection,
             enabled=control_enabled,
             on_log_override=apply_log_override if terminal_log is not None else None,
             on_check_folders=lambda: run_folder_checks("requested"),
+            on_push_override=apply_push_override if pusher is not None else None,
         )
+        apply_push_override(None)  # viewer.enabled in config.json starts the push right away
         if destination_check_every_n_polls > 0:
             run_folder_checks("at start")  # counts and warnings are there right away, not after N polls
         run_backup_check()  # a daemon that was off for a while catches up at once

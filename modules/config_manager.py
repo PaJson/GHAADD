@@ -4,6 +4,7 @@ import copy
 import hashlib
 import json
 import os
+import platform
 import re
 import sys
 import tempfile
@@ -37,6 +38,7 @@ DEFAULT_TERMINAL_LOG_KEEP_FILES = 30
 DEFAULT_BACKUP_ENABLED = True  # a safety net users would otherwise overlook; switch off in the Backup window
 DEFAULT_BACKUP_EVERY_HOURS = 24
 DEFAULT_BACKUP_KEEP_FILES = 14
+DEFAULT_VIEWER_ENABLED = False  # pushing snapshots to the web viewer is opt-in
 DEFAULT_GHAADD_ROOT_FOLDER = "GHAADD"
 DEFAULT_PROCESSING_FOLDER = "Processing"
 DEFAULT_COMPLETE_FOLDER = "Complete"
@@ -66,6 +68,14 @@ class BackupSettings(TypedDict):
     keep_files: int
     directory: str
     include_env: bool
+
+
+class ViewerSettings(TypedDict):
+    """The viewer section of config.json after normalising (see get_viewer_settings())."""
+    enabled: bool
+    url: str
+    token: str
+    name: str
 
 
 class TerminalLogSettings(TypedDict):
@@ -557,6 +567,26 @@ def get_terminal_log_settings(config: Optional[Dict[str, Any]] = None) -> Termin
     }
 
 
+def get_viewer_settings(config: Optional[Dict[str, Any]] = None) -> ViewerSettings:
+    """Return the normalised web-viewer push settings (off by default); the name defaults to the computer's name.
+
+    The address is kept without a trailing slash. Pushing also needs an address and a token: see viewer_push.
+    """
+    config = config if config is not None else load_config()
+
+    def text(key: str) -> str:
+        """The setting as stripped text, "" when it is missing or not a string."""
+        value = _get_nested(config, "viewer", key)
+        return value.strip() if isinstance(value, str) else ""
+
+    return {
+        "enabled": _as_bool(_get_nested(config, "viewer", "enabled"), DEFAULT_VIEWER_ENABLED),
+        "url": text("url").rstrip("/"),
+        "token": text("token"),
+        "name": text("name") or platform.node() or "ghaadd",
+    }
+
+
 def get_backup_settings(config: Optional[Dict[str, Any]] = None) -> BackupSettings:
     """Return the normalised backup settings; an empty directory means a `backups` folder beside the app files."""
     config = config if config is not None else load_config()
@@ -614,6 +644,7 @@ def get_config_fingerprint(config: Optional[Dict[str, Any]] = None) -> str:
         "destination_check": get_destination_check_every_n_polls(config),
         "download_dirs": get_all_download_dirs(config),
         "terminal_log": get_terminal_log_settings(config),
+        "viewer": get_viewer_settings(config),
         "folders": get_folder_settings(config),
         "gmail_folder": get_gmail_folder(config),
         "credentials": env_manager.credentials_fingerprint(),  # a hash of the .env login: a changed login needs a restart too

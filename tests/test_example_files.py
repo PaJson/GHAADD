@@ -56,6 +56,12 @@ class ConfigExampleTests(unittest.TestCase):
         self.assertEqual(config_manager.get_polling_settings(config)["interval_seconds"], 300)
         self.assertEqual(config_manager.get_destination_check_every_n_polls(config), 10)
 
+    def test_the_viewer_section_is_read_and_is_off_in_the_example(self) -> None:
+        settings = config_manager.get_viewer_settings(load("config.example.json"))
+        self.assertFalse(settings["enabled"])  # copying the example must never start sending data anywhere
+        self.assertTrue(settings["url"].startswith("http://"))
+        self.assertTrue(settings["name"])  # the empty example name falls back to the computer's name
+
     def test_the_example_matches_the_built_in_defaults_of_the_new_entry_settings(self) -> None:
         config = load("config.example.json")
         self.assertEqual(config["paths"]["default_subfolder"], config_manager.DEFAULT_SUBFOLDER)

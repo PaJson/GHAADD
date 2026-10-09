@@ -33,6 +33,12 @@
   "state": {
     "disable_state_persistence": false
   },
+  "viewer": {
+    "enabled": false,
+    "url": "http://192.168.0.100:8888",
+    "token": "<make one with: python main.py --new-viewer-token>",
+    "name": ""
+  },
   "gui": {
     "refresh_seconds": 3,
     "status_message_seconds": 6,

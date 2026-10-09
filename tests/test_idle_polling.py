@@ -30,35 +30,84 @@ class FakeWatcher:
 
     def wait(self, seconds, on_change=None, idle=False):
         self.calls.append({"seconds": seconds, "idle": idle})
-        return self.results.pop(0)
+        result = self.results.pop(0)
+        if isinstance(result, BaseException):  # a result can also be something that goes wrong in the wait
+            raise result
+        return result
+
+
+class FakeViewerPusher:
+    """Stands in for the viewer push: records the switches and the stop instead of opening a connection."""
+
+    instances: list["FakeViewerPusher"] = []
+
+    def __init__(self, settings, **_kwargs) -> None:
+        self.settings = settings
+        self.switches: list[tuple] = []
+        self.stopped = 0
+        FakeViewerPusher.instances.append(self)
+
+    def apply_override(self, override, configured) -> bool:
+        self.switches.append((override, configured))
+        return bool(configured if override is None else override)
+
+    def stop(self) -> None:
+        self.stopped += 1
 
 
 class IdleLoopTests(unittest.TestCase):
-    def run_loop(self, results, idle):
+    def run_loop(self, results, idle, viewer_enabled=False, dry_run=False):
         watcher = FakeWatcher(results)
         cycles = []
+        FakeViewerPusher.instances = []
+        self.watcher_kwargs: dict = {}
 
         @contextlib.contextmanager
         def fake_database():
             yield object()
 
+        def fake_watcher(**kwargs):
+            self.watcher_kwargs = kwargs
+            return watcher
+
         with contextlib.ExitStack() as stack:
             for name, value in (
                 ("open_database", fake_database),
-                ("ControlWatcher", lambda **kwargs: watcher),
+                ("ControlWatcher", fake_watcher),
+                ("ViewerPusher", FakeViewerPusher),
+                ("get_viewer_settings", lambda: {"enabled": viewer_enabled, "url": "http://v:8888", "token": "t", "name": "pc"}),
+                ("reset_push_override_on_startup", lambda c: None),
                 ("run_ingest_and_queue_cycle", lambda *a, **k: cycles.append(1)),
                 ("update_daemon_status", lambda **k: None),
                 ("reset_paused_on_startup", lambda c: None),
                 ("reset_log_override_on_startup", lambda c: None),
                 ("get_destination_check_every_n_polls", lambda: 0),
                 ("clear_all_resolved_limit_warnings", lambda: 0),
-                ("is_dry_run", lambda: False),
+                ("is_dry_run", lambda: dry_run),
                 ("run_scheduled_backup", lambda: None),  # backups are on by default: never write into the real app folder
             ):
                 stack.enter_context(mock.patch.object(main, name, value))
             stack.enter_context(contextlib.redirect_stdout(open(__import__("os").devnull, "w", encoding="utf-8")))
             main.run_polling_loop(300, 5, 30, None, "fingerprint", idle=idle)
         return watcher, cycles
+
+    def test_the_viewer_push_starts_from_the_config_follows_live_switches_and_stops_on_exit(self) -> None:
+        self.run_loop(["stop"], idle=False, viewer_enabled=True)
+        (pusher,) = FakeViewerPusher.instances
+        self.assertEqual(pusher.switches, [(None, True)])  # viewer.enabled starts it at once
+        self.assertEqual(pusher.stopped, 1)
+        self.watcher_kwargs["on_push_override"](False)  # --push-off arrives through the watcher
+        self.assertEqual(pusher.switches, [(None, True), (False, True)])
+
+    def test_the_viewer_push_is_stopped_even_when_the_loop_ends_with_an_error(self) -> None:
+        with self.assertRaises(KeyboardInterrupt):
+            self.run_loop([KeyboardInterrupt()], idle=True, viewer_enabled=True)
+        self.assertEqual(FakeViewerPusher.instances[0].stopped, 1)
+
+    def test_a_dry_run_never_pushes(self) -> None:
+        self.run_loop(["stop"], idle=True, viewer_enabled=True, dry_run=True)
+        self.assertEqual(FakeViewerPusher.instances, [])
+        self.assertIsNone(self.watcher_kwargs["on_push_override"])
 
     def test_an_idle_daemon_waits_first_and_polls_once_per_request(self) -> None:
         watcher, cycles = self.run_loop(["forced", "forced", "stop"], idle=True)

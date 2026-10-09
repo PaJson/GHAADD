@@ -1,0 +1,27 @@
+# GHAADD web viewer (the daemon stays on its own computer and pushes to this).
+#
+#   1. python main.py --new-viewer-token          (on the daemon's computer; prints a token)
+#   2. in this folder:  GHAADD_VIEWER_TOKENS=<token> docker compose up -d --build
+#      (or put GHAADD_VIEWER_TOKENS=<token> in a .env file beside this one)
+#   3. in the daemon's config.json:  "viewer": {"enabled": true, "url": "http://<this-host>:8888", "token": "<token>"}
+#
+# Copy this whole folder (viewer/) to the server; nothing else is needed.
+services:
+  ghaadd-viewer:
+    build: .
+    image: ghaadd-viewer:local
+    container_name: ghaadd-viewer
+    restart: unless-stopped
+    ports:
+      - "8888:8888"
+    environment:
+      GHAADD_VIEWER_TOKENS: ${GHAADD_VIEWER_TOKENS:?Set GHAADD_VIEWER_TOKENS to the token the daemon uses (python main.py --new-viewer-token)}
+      GHAADD_VIEWER_PORT: "8888"
+      # Seconds without data before the page says "no data received" (about three missed heartbeats).
+      GHAADD_VIEWER_LOST_AFTER: "45"
+    # The viewer keeps everything in memory and writes nothing.
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true

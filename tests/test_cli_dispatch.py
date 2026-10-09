@@ -171,7 +171,7 @@ class ReportCommandTests(DispatchTestCase):
 class DaemonControlTests(DispatchTestCase):
     def setUp(self) -> None:
         super().setUp()
-        for name in ("set_paused", "set_log_override", "request_poll_now", "request_single_poll",
+        for name in ("set_paused", "set_log_override", "set_push_override", "request_poll_now", "request_single_poll",
                      "request_check_folders", "request_stop"):
             self.patch(name, self.recorder(name))
 
@@ -181,6 +181,8 @@ class DaemonControlTests(DispatchTestCase):
             "--resume": ("set_paused", (False,)),
             "--log-on": ("set_log_override", (True,)),
             "--log-off": ("set_log_override", (False,)),
+            "--push-on": ("set_push_override", (True,)),
+            "--push-off": ("set_push_override", (False,)),
             "--poll-now": ("request_poll_now", ()),
             "--poll-one": ("request_single_poll", ()),
             "--check-folders": ("request_check_folders", ()),
@@ -206,7 +208,19 @@ class DaemonControlTests(DispatchTestCase):
         self.assertIn("--pause and --resume cannot be combined", err)
         _, _, err = self.run_cli("--log-on", "--log-off")
         self.assertIn("--log-on and --log-off cannot be combined", err)
+        _, _, err = self.run_cli("--push-on", "--push-off")
+        self.assertIn("--push-on and --push-off cannot be combined", err)
         self.assertEqual(self.calls, [])
+
+    def test_new_viewer_token_prints_a_usable_token_and_needs_no_daemon(self) -> None:
+        self.daemon_running = False
+        handled, out, err = self.run_cli("--new-viewer-token")
+        self.assertTrue(handled)
+        token = out.strip()
+        self.assertGreaterEqual(len(token), 16)
+        self.assertNotIn(token, err)  # the hint goes to stderr and never repeats the secret
+        self.assertEqual(self.calls, [])
+        self.assertNotEqual(token, self.run_cli("--new-viewer-token")[1].strip())
 
     def test_a_locked_database_is_reported_instead_of_crashing(self) -> None:
         def locked(*args):

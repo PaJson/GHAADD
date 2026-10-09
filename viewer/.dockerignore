@@ -1,0 +1,3 @@
+# The build context is this folder only; the image still holds nothing but the viewer.
+*
+!ghaadd_viewer.py

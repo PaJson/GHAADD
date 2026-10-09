@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import secrets
 import sqlite3
 import sys
 from typing import Callable
@@ -14,6 +15,7 @@ from modules.daemon_control import (
     request_stop,
     set_log_override,
     set_paused,
+    set_push_override,
 )
 from modules.daemon_lock import is_daemon_running
 from modules.db_manager import (
@@ -217,6 +219,9 @@ def parse_cli_args(args: list[str], version: str) -> argparse.Namespace:
 
     control_group.add_argument("--log-on", action="store_true", help="Start writing terminal output to a new .log file in the running daemon (until it stops or --log-off).")
     control_group.add_argument("--log-off", action="store_true", help="Stop writing the .log file in the running daemon.")
+    control_group.add_argument("--push-on", action="store_true", help="Start pushing read-only snapshots to the web viewer (viewer.url / viewer.token in config.json) in the running daemon, until it stops or --push-off.")
+    control_group.add_argument("--push-off", action="store_true", help="Stop pushing snapshots to the web viewer in the running daemon.")
+    control_group.add_argument("--new-viewer-token", action="store_true", help="Print a new random token for the web viewer (put it in config.json as viewer.token and give it to ghaadd_viewer.py). Writes nothing.")
 
     autostart_group = parser.add_argument_group("autostart options")
     autostart_group.add_argument("--install-autostart", action="store_true", help="Start the polling daemon automatically at login (Linux: systemd user unit; Windows: per-user Run entry).")
@@ -485,15 +490,24 @@ def handle_cli_command(parsed_args: argparse.Namespace, run_smoke_tests: Callabl
 
         return True
 
+    if parsed_args.new_viewer_token:
+        print(secrets.token_urlsafe(24))
+        print("Put it in config.json as viewer.token (section \"viewer\") and give the same value to ghaadd_viewer.py.", file=sys.stderr)
+        return True
+
     if (
         parsed_args.pause or parsed_args.resume or parsed_args.poll_now or parsed_args.poll_one or parsed_args.stop
         or parsed_args.log_on or parsed_args.log_off or parsed_args.check_folders
+        or parsed_args.push_on or parsed_args.push_off
     ):
         if parsed_args.pause and parsed_args.resume:
             print("Control option error: --pause and --resume cannot be combined.", file=sys.stderr)
             return True
         if parsed_args.log_on and parsed_args.log_off:
             print("Control option error: --log-on and --log-off cannot be combined.", file=sys.stderr)
+            return True
+        if parsed_args.push_on and parsed_args.push_off:
+            print("Control option error: --push-on and --push-off cannot be combined.", file=sys.stderr)
             return True
 
         # A stopped daemon clears pause on startup and ignores older requests, so writing would mislead.
@@ -514,6 +528,12 @@ def handle_cli_command(parsed_args: argparse.Namespace, run_smoke_tests: Callabl
             if parsed_args.log_off:
                 set_log_override(False)
                 print("Log off requested. The daemon closes its .log file within about a second.")
+            if parsed_args.push_on:
+                set_push_override(True)
+                print("Push on requested. The daemon starts sending snapshots to the viewer within about a second (see viewer.url / viewer.token).")
+            if parsed_args.push_off:
+                set_push_override(False)
+                print("Push off requested. The daemon stops sending snapshots to the viewer within about a second.")
             if parsed_args.poll_now:
                 request_poll_now()
                 print("Forced poll requested. It runs within a second, also while the daemon is paused (it then stays paused).")

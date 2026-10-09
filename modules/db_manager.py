@@ -304,6 +304,9 @@ def open_database():
     # Epoch stamp of the latest "poll one item" request (GUI button / CLI --poll-one).
     if "single_request" not in control_columns:
         connection.execute("ALTER TABLE daemon_control ADD COLUMN single_request REAL")
+    # Session override for pushing snapshots to the web viewer: NULL = follow config.json, 1 = force on, 0 = force off.
+    if "push_override" not in control_columns:
+        connection.execute("ALTER TABLE daemon_control ADD COLUMN push_override INTEGER")
 
     # Latest folder count per repository (written by the daemon's limit checks, read by the GUI).
     connection.execute(
@@ -1682,6 +1685,26 @@ def set_daemon_log_override(connection, override: Optional[bool]):
         """
         INSERT INTO daemon_control (id, log_override) VALUES (1, ?)
         ON CONFLICT(id) DO UPDATE SET log_override = excluded.log_override
+        """,
+        (None if override is None else int(override),),
+    )
+    connection.commit()
+
+
+def get_daemon_push_override(connection) -> Optional[bool]:
+    """Return the viewer-push override: None (follow config.json), True (force on) or False (force off)."""
+    row = connection.execute("SELECT push_override FROM daemon_control WHERE id = 1").fetchone()
+    if row is None or row["push_override"] is None:
+        return None
+    return bool(row["push_override"])
+
+
+def set_daemon_push_override(connection, override: Optional[bool]):
+    """Set the viewer-push override (None = follow config.json), leaving the rest untouched."""
+    connection.execute(
+        """
+        INSERT INTO daemon_control (id, push_override) VALUES (1, ?)
+        ON CONFLICT(id) DO UPDATE SET push_override = excluded.push_override
         """,
         (None if override is None else int(override),),
     )

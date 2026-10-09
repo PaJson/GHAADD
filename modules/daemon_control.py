@@ -14,6 +14,9 @@ later), so a clock stepping backwards cannot swallow a request.
 runs: None follows ``terminal_log.enabled`` in config.json, True/False force it.
 It is a session setting, cleared when a daemon starts.
 
+``push_override`` does the same for pushing snapshots to the web viewer (``viewer.enabled`` in config.json):
+None follows the config, True/False force it on/off while the daemon runs. Also cleared at startup.
+
 ``stop_request`` works like ``poll_now_request``: the daemon stops (gracefully:
 the running job finishes first) when it *differs* from the value the daemon saw
 at startup, so a request left over from an earlier run never stops a new one.
@@ -33,12 +36,14 @@ from modules.db_manager import (
     get_daemon_check_folders_request,
     get_daemon_control,
     get_daemon_single_request,
+    get_daemon_push_override,
     get_daemon_stop_request,
     open_database,
     set_daemon_check_folders_request,
     set_daemon_log_override,
     set_daemon_paused,
     set_daemon_poll_now_request,
+    set_daemon_push_override,
     set_daemon_single_request,
     set_daemon_stop_request,
 )
@@ -57,13 +62,14 @@ class ControlState(TypedDict):
     stop_request: NotRequired[Optional[float]]  # absent in states built by older callers/tests
     check_folders_request: NotRequired[Optional[float]]
     single_request: NotRequired[Optional[float]]
+    push_override: NotRequired[Optional[bool]]
 
 
 def _default_state() -> ControlState:
     """Return the neutral state used when there is no database (dry-run) or it cannot be read."""
     return {
         "paused": False, "poll_now_request": None, "log_override": None, "stop_request": None,
-        "check_folders_request": None, "single_request": None,
+        "check_folders_request": None, "single_request": None, "push_override": None,
     }
 
 
@@ -77,6 +83,7 @@ def read_control_state(connection: sqlite3.Connection) -> ControlState:
         "stop_request": get_daemon_stop_request(connection),
         "check_folders_request": get_daemon_check_folders_request(connection),
         "single_request": get_daemon_single_request(connection),
+        "push_override": get_daemon_push_override(connection),
     }
 
 
@@ -96,6 +103,12 @@ def set_log_override(override: Optional[bool]) -> None:
     """Force terminal logging on/off in the running daemon (None = follow config.json)."""
     with closing(open_database()) as connection:
         set_daemon_log_override(connection, override)
+
+
+def set_push_override(override: Optional[bool]) -> None:
+    """Force the push of snapshots to the web viewer on/off in the running daemon (None = follow config.json)."""
+    with closing(open_database()) as connection:
+        set_daemon_push_override(connection, override)
 
 
 def request_stop() -> float:
@@ -134,6 +147,12 @@ def reset_log_override_on_startup(connection: sqlite3.Connection) -> None:
         set_daemon_log_override(connection, None)
 
 
+def reset_push_override_on_startup(connection: sqlite3.Connection) -> None:
+    """Start from config.json: a push switch left behind by a previous run must not stick."""
+    if read_control_state(connection).get("push_override") is not None:
+        set_daemon_push_override(connection, None)
+
+
 class ControlWatcher:
     """Waits out a polling interval while honouring pause and forced-poll requests."""
 
@@ -148,6 +167,7 @@ class ControlWatcher:
         tick_seconds: float = DEFAULT_TICK_SECONDS,
         on_log_override: Optional[Callable[[Optional[bool]], None]] = None,
         on_check_folders: Optional[Callable[[], None]] = None,
+        on_push_override: Optional[Callable[[Optional[bool]], None]] = None,
     ) -> None:
         """Set up the watcher; `read_state`, `clock` and `sleep` are injectable so tests need no database or real time.
 
@@ -165,6 +185,9 @@ class ControlWatcher:
         # Fires with the new log_override whenever it changes; None means "follow config".
         self._on_log_override = on_log_override
         self._on_check_folders = on_check_folders
+        # Fires with the new push_override whenever it changes; the daemon starts from None (follow config).
+        self._on_push_override = on_push_override
+        self._last_push_override: Optional[bool] = None
         self._last_log_override: Optional[bool] = None
         # True once a checkpoint() during work saw a pause (cleared by begin_cycle()).
         self.cycle_interrupted = False
@@ -185,7 +208,9 @@ class ControlWatcher:
         self.cycle_interrupted = False
         self._cycle_ignores_pause = self.forced_while_paused
         self.forced_while_paused = False
-        self._sync_log_override(self._read_state())
+        state = self._read_state()
+        self._sync_log_override(state)
+        self._sync_push_override(state)
 
     def _check_stop(self, state: ControlState) -> bool:
         """Latch stop_requested once the stop stamp differs from the one seen at startup."""
@@ -209,6 +234,14 @@ class ControlWatcher:
             if self._on_log_override is not None:
                 self._on_log_override(override)
 
+    def _sync_push_override(self, state: ControlState) -> None:
+        """Call the push-switch callback when the stored override changed since the last look."""
+        override = state.get("push_override")
+        if override != self._last_push_override:
+            self._last_push_override = override
+            if self._on_push_override is not None:
+                self._on_push_override(override)
+
     def checkpoint(self) -> bool:
         """Return True if work should stop now because polling is paused or a stop was requested.
 
@@ -217,6 +250,7 @@ class ControlWatcher:
         """
         state = self._read_state()
         self._sync_log_override(state)
+        self._sync_push_override(state)
         if self._check_stop(state) or (state["paused"] and not self._cycle_ignores_pause):
             self.cycle_interrupted = True
             return True
@@ -258,6 +292,7 @@ class ControlWatcher:
         while True:
             state = self._read_state()
             self._sync_log_override(state)
+            self._sync_push_override(state)
             if self._check_stop(state):
                 return "stop"
             self._run_requested_folder_check(state)

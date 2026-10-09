@@ -35,10 +35,11 @@ def _state(
     stop: Optional[float] = None,
     check: Optional[float] = None,
     single: Optional[float] = None,
+    push: Optional[bool] = None,
 ) -> ControlState:
     return {
         "paused": paused, "poll_now_request": request, "log_override": log_override, "stop_request": stop,
-        "check_folders_request": check, "single_request": single,
+        "check_folders_request": check, "single_request": single, "push_override": push,
     }
 
 
@@ -124,6 +125,43 @@ class ControlStateTests(unittest.TestCase):
         daemon_control.set_log_override(True)
         daemon_control.reset_log_override_on_startup(self.connection)
         self.assertEqual(self.read(), _state(False, stamp, None))
+
+    def test_push_override_round_trip_keeps_the_other_fields(self) -> None:
+        stamp = daemon_control.request_poll_now()
+        daemon_control.set_paused(True)
+        daemon_control.set_log_override(True)
+        daemon_control.set_push_override(True)
+        self.assertEqual(self.read(), _state(True, stamp, True, push=True))
+        daemon_control.set_push_override(False)
+        self.assertEqual(self.read(), _state(True, stamp, True, push=False))
+        daemon_control.set_push_override(None)
+        self.assertEqual(self.read(), _state(True, stamp, True, push=None))
+
+    def test_other_writes_keep_the_push_override(self) -> None:
+        daemon_control.set_push_override(False)
+        daemon_control.set_paused(True)
+        daemon_control.set_log_override(True)
+        daemon_control.request_poll_now()
+        self.assertIs(self.read().get("push_override"), False)
+
+    def test_reset_push_override_on_startup_clears_only_the_override(self) -> None:
+        daemon_control.set_log_override(True)
+        daemon_control.set_push_override(True)
+        daemon_control.reset_push_override_on_startup(self.connection)
+        self.assertEqual(self.read(), _state(log_override=True, push=None))
+
+    def test_existing_database_gains_the_push_override_column(self) -> None:
+        self.connection.execute("DROP TABLE daemon_control")
+        self.connection.execute(
+            "CREATE TABLE daemon_control (id INTEGER PRIMARY KEY CHECK (id = 1), "
+            "paused INTEGER NOT NULL DEFAULT 0, poll_now_request REAL)"
+        )
+        self.connection.execute("INSERT INTO daemon_control (id, paused) VALUES (1, 1)")
+        self.connection.commit()
+        with contextlib.closing(db_manager.open_database()) as upgraded:
+            self.assertEqual(daemon_control.read_control_state(upgraded), _state(True))
+            db_manager.set_daemon_push_override(upgraded, True)
+            self.assertIs(daemon_control.read_control_state(upgraded).get("push_override"), True)
 
     def test_single_request_round_trips_and_every_request_differs(self) -> None:
         first = daemon_control.request_single_poll()
@@ -442,6 +480,42 @@ class LogOverrideWatcherTests(unittest.TestCase):
         fake = FakeTime()
         seen = []
         watcher = ControlWatcher(enabled=False, on_log_override=seen.append, clock=fake.clock, sleep=fake.sleep)
+        watcher.begin_cycle()
+        watcher.checkpoint()
+        self.assertEqual(seen, [])
+
+
+class PushOverrideWatcherTests(unittest.TestCase):
+    """The watcher reports live push switches to its callback exactly once per change."""
+
+    def test_wait_reports_each_change_once(self) -> None:
+        fake = FakeTime()
+        seen = []
+        watcher = ControlWatcher(
+            read_state=lambda: _state(push=True if 2 <= fake.now < 5 else (False if fake.now >= 5 else None)),
+            clock=fake.clock, sleep=fake.sleep, on_push_override=seen.append,
+        )
+        watcher.wait(8)
+        self.assertEqual(seen, [True, False])
+
+    def test_checkpoint_and_begin_cycle_report_changes(self) -> None:
+        value: dict[str, Optional[bool]] = {"v": None}
+        seen = []
+        watcher = ControlWatcher(read_state=lambda: _state(push=value["v"]), on_push_override=seen.append)
+        watcher.begin_cycle()
+        self.assertEqual(seen, [])
+        value["v"] = True
+        watcher.checkpoint()
+        watcher.checkpoint()
+        self.assertEqual(seen, [True])
+        value["v"] = None
+        watcher.begin_cycle()
+        self.assertEqual(seen, [True, None])
+
+    def test_disabled_watcher_never_reports(self) -> None:
+        fake = FakeTime()
+        seen = []
+        watcher = ControlWatcher(enabled=False, on_push_override=seen.append, clock=fake.clock, sleep=fake.sleep)
         watcher.begin_cycle()
         watcher.checkpoint()
         self.assertEqual(seen, [])

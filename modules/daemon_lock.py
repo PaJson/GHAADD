@@ -6,7 +6,7 @@ import sys
 import tempfile
 import time
 from contextlib import contextmanager
-from typing import Optional, TypedDict
+from typing import NotRequired, Optional, TypedDict
 
 from filelock import FileLock, Timeout
 
@@ -32,6 +32,7 @@ class DaemonStatus(TypedDict):
     mapping_format: Optional[int]  # app_info.MAPPING_FORMAT the daemon understands (None: an older daemon)
     polling_idle: bool  # started with polling switched off: it only polls on "Poll now"
     queue_progress: Optional[dict]  # {"index", "total", "repo", "tag", "release_type", "commit", "since"} while a queue cycle runs
+    viewer_push: NotRequired[Optional[dict]]  # {"active", "last_ok", "error"} of the push to the web viewer (None: never on)
 
 
 def get_daemon_lock_path() -> str:
@@ -133,8 +134,16 @@ def get_daemon_status() -> DaemonStatus:
             "mapping_format": None,
             "polling_idle": False,
             "queue_progress": None,
+            "viewer_push": None,
         }
+    return read_published_status()
 
+
+def read_published_status() -> DaemonStatus:
+    """Return the status the daemon published, taking it as running (no lock probe).
+
+    For code that runs inside the daemon itself (it holds the lock, so probing it would only be a detour).
+    """
     payload = _read_status_payload()
     return {
         "running": True,
@@ -149,6 +158,7 @@ def get_daemon_status() -> DaemonStatus:
         "mapping_format": payload.get("mapping_format") if isinstance(payload.get("mapping_format"), int) else None,
         "polling_idle": payload.get("polling_idle") is True,
         "queue_progress": payload.get("queue_progress") if isinstance(payload.get("queue_progress"), dict) else None,
+        "viewer_push": payload.get("viewer_push") if isinstance(payload.get("viewer_push"), dict) else None,
     }
 
 
