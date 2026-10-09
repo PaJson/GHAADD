@@ -7,6 +7,7 @@ import os
 from typing import Any, Dict, NamedTuple, Optional
 
 from modules import config_manager
+from modules.file_cache import StatCache
 
 
 class WorkFolder(NamedTuple):
@@ -40,6 +41,18 @@ def count_entries(path: str) -> int:
             return sum(1 for _ in entries)
     except OSError:
         return 0
+
+
+def folder_count_cache() -> StatCache[dict[str, int]]:
+    """Return a cache of {key: entry count} that re-lists a folder only when its modified time changed.
+
+    Adding or removing a direct entry changes a folder's mtime, which is exactly what is counted; the cache's
+    periodic safety refresh covers filesystems with coarse timestamps.
+    """
+    return StatCache(
+        paths=lambda: [item.path for item in work_folders()],
+        compute=lambda: {item.key: count_entries(item.path) for item in work_folders()},
+    )
 
 
 def button_text(label: str, count: int) -> str:

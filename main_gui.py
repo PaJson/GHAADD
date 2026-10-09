@@ -3282,6 +3282,7 @@ class MainWindow(tk.Tk):
         config = config_manager.load_config()
         self._refresh_ms = int(config_manager.get_gui_refresh_seconds(config) * 1000)
         self._status_message_ms = int(config_manager.get_gui_status_message_seconds(config) * 1000)
+        self._folder_counts = work_folders.folder_count_cache()
         self._icon_image: Optional[tk.PhotoImage] = None  # keep a reference or Tk drops the icon
         self._set_icon()
         self.minsize(*self.MIN_SIZE)
@@ -3513,8 +3514,7 @@ class MainWindow(tk.Tk):
     def _update_folder_counts(self) -> None:
         """Refresh the Folders buttons' counts (one directory listing per folder; a failure leaves the old text)."""
         try:
-            counts = {item.key: work_folders.count_entries(item.path) for item in work_folders.work_folders()}
-            self.control_bar.set_folder_counts(counts)
+            self.control_bar.set_folder_counts(self._folder_counts.get())  # re-lists only a changed folder
         except Exception:  # a hiccup in a slow or missing drive must not disturb the refresh loop
             pass
 
