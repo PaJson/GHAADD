@@ -43,6 +43,7 @@ from modules import (
     stats,
     status_tabs,
     warning_types,
+    work_folders,
 )
 from modules.app_info import APP_NAME, APP_USER_MODEL_ID, __version__
 
@@ -296,7 +297,9 @@ class ControlBar(ttk.Frame):
         box_padding = (8, 2, 8, 6)
         daemon_box = ttk.LabelFrame(groups, text="Daemon", padding=box_padding, labelanchor="n")
         polling_box = ttk.LabelFrame(groups, text="Polling", padding=box_padding, labelanchor="n")
+        folders_box = ttk.LabelFrame(groups, text="Folders", padding=box_padding, labelanchor="n")
         tools_box = ttk.LabelFrame(groups, text="Tools", padding=box_padding, labelanchor="n")
+        self.folder_buttons = {key: ttk.Button(folders_box, text=label) for key, label in work_folders.FOLDER_BUTTONS}
         self.start_button = ttk.Button(daemon_box, text="Start")
         self.stop_button = ttk.Button(daemon_box, text="Stop")
         self.pause_button = ttk.Button(daemon_box, text="Pause")
@@ -326,6 +329,7 @@ class ControlBar(ttk.Frame):
         for box, widgets in (
             (daemon_box, (self.start_button, self.stop_button, self.pause_button, self.restart_button)),
             (polling_box, (self.poll_button, self.single_button, self.check_button)),
+            (folders_box, tuple(self.folder_buttons.values())),
             (tools_box, (self.log_check, self.doctor_button, self.stats_button, self.settings_button)),
         ):
             box.pack(side="left", padx=(0, 10))
@@ -336,11 +340,20 @@ class ControlBar(ttk.Frame):
         attach_tooltip(self.single_button, gui_tooltips.CONTROL_HELP["poll_one"])
         attach_tooltip(self.check_button, gui_tooltips.CONTROL_HELP["check_folders"])
         attach_tooltip(self.stats_button, gui_tooltips.CONTROL_HELP["stats"])
+        for key, button in self.folder_buttons.items():
+            attach_tooltip(button, gui_tooltips.CONTROL_HELP[f"folder_{key}"])
         # The light/dark switch sits at the right edge of the header, clear of the centred groups.
         self.theme_button = ttk.Button(self, text=gui_theme.button_text(False), width=8)
         self.theme_button.place(relx=1.0, x=-2, y=0, anchor="ne")
         attach_tooltip(self.theme_button, gui_tooltips.CONTROL_HELP["dark_mode"])
         self.apply_view(gui_daemon.build_view(gui_daemon.DaemonSnapshot(), 0.0))
+
+    def set_folder_counts(self, counts: dict[str, int]) -> None:
+        """Show each folder's entry count in its button ("Complete (2)"); an empty folder shows just the name."""
+        for key, label in work_folders.FOLDER_BUTTONS:
+            text = work_folders.button_text(label, counts.get(key, 0))
+            if str(self.folder_buttons[key].cget("text")) != text:
+                self.folder_buttons[key].configure(text=text)
 
     def set_doctor_attention(self, reasons: list[str], highlight: bool) -> None:
         """Highlight the Doctor button (and say why in its tooltip) when something needed is missing."""
@@ -3323,6 +3336,8 @@ class MainWindow(tk.Tk):
         self.control_bar.restart_button.configure(command=self._on_restart)
         self.control_bar.doctor_button.configure(command=self._open_doctor)
         self.control_bar.stats_button.configure(command=self._open_stats)
+        for key, button in self.control_bar.folder_buttons.items():
+            button.configure(command=lambda key=key: self._open_work_folder(key))
         self.control_bar.theme_button.configure(command=self._toggle_dark_mode)
         self.control_bar.theme_button.configure(text=gui_theme.button_text(self._dark))
         ttk.Separator(self).pack(fill="x")
@@ -3480,6 +3495,28 @@ class MainWindow(tk.Tk):
         if self._status_titles.get(key) != title:
             self._status_titles[key] = title
             self.notebook.tab(self._status_tabs[key], text=title)
+
+    def _open_work_folder(self, key: str) -> None:
+        """Open one of the working folders (Complete, Logs, Partial, Processing) in the file manager."""
+        folder = next((item for item in work_folders.work_folders() if item.key == key), None)
+        target = work_folders.open_target(folder.path) if folder else None
+        if folder is None or target is None:
+            self.set_status("That folder does not exist yet: it is created at the first download.")
+            return
+        try:
+            open_in_file_manager(target)
+        except OSError as exc:
+            self.set_status(f"Cannot open {target}: {describe_error(exc)}")
+            return
+        self.set_status(f"Opened {target}")
+
+    def _update_folder_counts(self) -> None:
+        """Refresh the Folders buttons' counts (one directory listing per folder; a failure leaves the old text)."""
+        try:
+            counts = {item.key: work_folders.count_entries(item.path) for item in work_folders.work_folders()}
+            self.control_bar.set_folder_counts(counts)
+        except Exception:  # a hiccup in a slow or missing drive must not disturb the refresh loop
+            pass
 
     def _open_repo_folder(self, repo: str) -> None:
         """Open a repository's folder like the Mappings tab's "Open folder" button does."""
@@ -3661,6 +3698,8 @@ class MainWindow(tk.Tk):
         """The periodic refresh: Mappings, status tabs and the daemon view; reschedules itself."""
         try:
             self._refresh_mappings_if_visible()
+            if self.state() != "iconic":
+                self._update_folder_counts()
             if self.state() != "iconic" or self._tray_active():  # a tray icon still has news to deliver
                 self._refresh_status_tabs()
         finally:

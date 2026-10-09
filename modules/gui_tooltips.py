@@ -150,6 +150,12 @@ CONTROL_HELP = {
     "check_folders": "Check now that every mapped destination exists, count the folders of each repository with a "
                      "limit (the \"12 / 15\" in the table) and warn about repositories over their limit. "
                      "It does not poll the mailbox.",
+    "folder_complete": "Open the Complete folder: finished downloads of repositories without a destination wait here. "
+                       "The number is how many items it holds.",
+    "folder_logs": "Open the Logs folder with the terminal log files. The number is how many files it holds.",
+    "folder_partial": "Open the Partial folder: downloads that did not finish completely. "
+                      "The number is how many items it holds.",
+    "folder_processing": "Open the Processing folder: downloads in progress. The number is how many items it holds.",
     "doctor": "Check that the installation is ready: the Gmail login (.env), config.json, mapping.json, "
               "path styles and that every mapped destination exists (the same checks as --doctor).",
     "stats": "Statistics: how many repositories are mapped and active, how many jobs ran per day, week, month, year and "
