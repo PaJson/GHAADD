@@ -582,6 +582,23 @@ class FolderRelocationTests(WorkerTestCase):
         self.assertEqual(self.calls["partial"], [old])
         self.assertEqual(self.warning_kinds(), ["FOLDER_RENAMED", "FOLDER_RENAMED_MOVED"])
 
+    def test_a_quarantined_folder_adds_its_size_to_the_job_and_the_final_folder_adds_more(self) -> None:
+        job_id = self.job()
+        partial_dir = os.path.join(self.root, "partial", "old")
+        os.makedirs(partial_dir)
+        with open(os.path.join(partial_dir, "half.zip"), "wb") as handle:
+            handle.write(b"x" * 4)
+        self.quietly(queue_worker._handle_working_dir_relocation, self.staged_dir("old"), self.staged_dir("new"), REPO, "v1",
+                     job_id, self.connection)
+        done_dir = os.path.join(self.root, "done", "new")
+        os.makedirs(done_dir)
+        with open(os.path.join(done_dir, "full.zip"), "wb") as handle:
+            handle.write(b"x" * 10)
+        self.quietly(queue_worker._finalize_staged_release_folder, self.staged_dir("new"), REPO, "v1",
+                     connection=self.connection, job_id=job_id)
+        (_repo, _tag, _created, folder_bytes, folder_files), = db_manager.get_job_folder_sizes(self.connection)
+        self.assertEqual((folder_bytes, folder_files), (14, 2))
+
     def test_a_previous_folder_that_no_longer_exists_is_ignored(self) -> None:
         self.quietly(queue_worker._handle_working_dir_relocation, os.path.join(self.root, "gone"), self.staged_dir("n"), REPO, "v1", 7)
         self.assertEqual((self.calls["partial"], self.calls["warnings"]), ([], []))

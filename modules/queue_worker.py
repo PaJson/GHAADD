@@ -22,7 +22,7 @@ from modules.db_manager import (
     supersede_duplicate_pending_jobs,
     reschedule_job,
     save_job_skip_details,
-    set_job_folder_size,
+    add_job_folder_size,
     update_job_for_manual_check,
 )
 from modules.asset_downloader import (
@@ -89,8 +89,7 @@ def _finalize_staged_release_folder(
 
     if done_dir:
         print(f"   📁 Finalized artifacts: {done_dir}")
-        if connection is not None and job_id is not None and not is_dry_run():
-            _record_folder_size(connection, job_id, done_dir)
+        _record_folder_size(connection, job_id, done_dir)
         if repo:
             mark_repository_finalized(repo)
         if write_complete_log and repo and tag:
@@ -99,11 +98,13 @@ def _finalize_staged_release_folder(
     return done_dir
 
 
-def _record_folder_size(connection, job_id: int, folder: str) -> None:
-    """Measure a finished job's folder and store its bytes and file count on the job; a failure only warns."""
+def _record_folder_size(connection, job_id: Optional[int], folder: str) -> None:
+    """Measure a job's moved folder (finished or in Partial) and add it to the job; a failure only warns."""
+    if connection is None or job_id is None or is_dry_run():
+        return
     try:
         folder_bytes, folder_files = measure_folder(folder)
-        set_job_folder_size(connection, job_id, folder_bytes, folder_files)
+        add_job_folder_size(connection, job_id, folder_bytes, folder_files)
     except Exception as exc:  # statistics must never break finalizing a release
         print(f"   ⚠️ Could not record the size of {folder}: {exc}")
         log_warning("FOLDER_SIZE", f"Could not record the size of job #{job_id}'s folder: {exc}")
@@ -115,6 +116,7 @@ def _handle_working_dir_relocation(
     repo: str,
     tag: str,
     job_id: int,
+    connection=None,
 ) -> None:
     """Warn about and quarantine a Processing folder abandoned by a mid-flight rename.
 
@@ -146,6 +148,7 @@ def _handle_working_dir_relocation(
         return
 
     if quarantined_dir:
+        _record_folder_size(connection, job_id, quarantined_dir)
         print(f"   📁 Moved stale staging folder to {_PARTIAL_LABEL}: {quarantined_dir}")
         log_warning(
             "FOLDER_RENAMED_MOVED",
@@ -264,6 +267,7 @@ def _handle_superseded_pending_job_artifacts(
             return "none"
 
         if superseded_dir:
+            _record_folder_size(connection, job_id, superseded_dir)
             print(
                 "   [SUPERSEDE_FINALIZE] "
                 f"{reason_code}: moved incomplete superseded job #{job_id} "
@@ -376,6 +380,7 @@ def _finalize_terminal_skip_job(
                 log_warning("MOVE", f"Could not move incomplete staging folder to {_PARTIAL_LABEL}: {exc}")
                 partial_dir = None
             if partial_dir:
+                _record_folder_size(connection, int(row["id"]), partial_dir)
                 print(f"   📁 Moved incomplete artifacts to {_PARTIAL_LABEL}: {partial_dir}")
                 log_partial_move(repo, tag, commit, partial_dir)
 
@@ -947,7 +952,7 @@ def process_selected_pending_jobs(connection, github_token: Optional[str], job_i
         downloaded_count, skipped_count, total_items, working_dir = _preserve_best_known_counters(
             row, downloaded_count, skipped_count, total_items, working_dir
         )
-        _handle_working_dir_relocation(previous_working_dir, working_dir, repo, tag, job_id)
+        _handle_working_dir_relocation(previous_working_dir, working_dir, repo, tag, job_id, connection)
 
         latest_commit = current_commit or expected_commit
 
@@ -1296,7 +1301,7 @@ def _process_queue_once(
         downloaded_count, skipped_count, total_items, working_dir = _preserve_best_known_counters(
             job, downloaded_count, skipped_count, total_items, working_dir
         )
-        _handle_working_dir_relocation(previous_working_dir, working_dir, repo, tag, job_id)
+        _handle_working_dir_relocation(previous_working_dir, working_dir, repo, tag, job_id, connection)
 
         current_attempt_count = attempt_count + 1
         latest_commit = current_commit or expected_commit

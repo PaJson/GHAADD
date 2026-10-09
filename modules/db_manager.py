@@ -65,6 +65,19 @@ def open_database():
         """
     )
     
+    # Sizes of purged jobs, so the Stats data volumes survive --purge-jobs (see purge_job_queue_rows).
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS job_size_archive (
+            repo TEXT NOT NULL,
+            tag TEXT NOT NULL,
+            created_at REAL NOT NULL,
+            folder_bytes INTEGER NOT NULL,
+            folder_files INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
+
     # Store queued jobs for re-checks and retries.
     connection.execute(
         """
@@ -1487,23 +1500,30 @@ def get_job_history(connection):
     return [(row[0], row[1], row[2], float(row[3])) for row in rows]
 
 
-def set_job_folder_size(connection, job_id, folder_bytes, folder_files):
-    """Store the size of a job's finished folder (what that job brought in), measured when it was finalized."""
+def add_job_folder_size(connection, job_id, folder_bytes, folder_files):
+    """Add the size of one of a job's folders (finished, or quarantined in Partial) to what the job brought in."""
     connection.execute(
-        "UPDATE job_queue SET folder_bytes = ?, folder_files = ? WHERE id = ?",
+        """
+        UPDATE job_queue
+        SET folder_bytes = COALESCE(folder_bytes, 0) + ?, folder_files = COALESCE(folder_files, 0) + ?
+        WHERE id = ?
+        """,
         (int(folder_bytes), int(folder_files), int(job_id)),
     )
     connection.commit()
 
 
 def get_job_folder_sizes(connection):
-    """Every job with a measured folder as (repo, tag, created_at, bytes, files), oldest first (read-only)."""
+    """Every job with a measured folder as (repo, tag, created_at, bytes, files), oldest first (read-only).
+
+    Includes the sizes archived when their jobs were purged, so purging history does not shrink the data volumes.
+    """
     rows = connection.execute(
         """
-        SELECT repo, tag, created_at, folder_bytes, folder_files
-        FROM job_queue
-        WHERE folder_bytes IS NOT NULL
-        ORDER BY created_at, id
+        SELECT repo, tag, created_at, folder_bytes, folder_files FROM job_queue WHERE folder_bytes IS NOT NULL
+        UNION ALL
+        SELECT repo, tag, created_at, folder_bytes, folder_files FROM job_size_archive
+        ORDER BY created_at
         """
     ).fetchall()
     return [(row[0], row[1], float(row[2]), int(row[3]), int(row[4] or 0)) for row in rows]
@@ -1612,6 +1632,7 @@ def purge_job_queue_rows(connection, status=None, repo_filter=None, min_age_days
             ).fetchone()
             return int(row["matched_count"])
 
+        _archive_job_sizes(connection, f"WHERE id IN ({oldest_ids_query})", oldest_params)
         cursor = connection.execute(f"DELETE FROM job_queue WHERE id IN ({oldest_ids_query})", oldest_params)
         connection.commit()
         return cursor.rowcount
@@ -1622,9 +1643,22 @@ def purge_job_queue_rows(connection, status=None, repo_filter=None, min_age_days
         ).fetchone()
         return int(row["matched_count"])
 
+    _archive_job_sizes(connection, where_clause, params)
     cursor = connection.execute(f"DELETE FROM job_queue {where_clause}", params)
     connection.commit()
     return cursor.rowcount
+
+
+def _archive_job_sizes(connection, where_clause, params):
+    """Copy the measured folder sizes of the jobs a purge is about to delete into job_size_archive."""
+    connection.execute(
+        f"""
+        INSERT INTO job_size_archive (repo, tag, created_at, folder_bytes, folder_files)
+        SELECT repo, tag, created_at, folder_bytes, COALESCE(folder_files, 0)
+        FROM job_queue {where_clause} {'AND' if where_clause else 'WHERE'} folder_bytes IS NOT NULL
+        """,
+        params,
+    )
 
 
 # Daemon control helpers (single row, id = 1).

@@ -56,6 +56,8 @@ class QueueJobPayload(TypedDict):
     updated_at_readable: str
     completed_at: Optional[float]
     completed_at_readable: str
+    folder_bytes: Optional[int]
+    folder_files: Optional[int]
     previous_success_tag: Optional[str]
     previous_success_total_items: Optional[int]
     file_count_delta_vs_previous_success: Optional[int]

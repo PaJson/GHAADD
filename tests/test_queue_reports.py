@@ -262,6 +262,21 @@ class TextOutputTests(ReportTestCase):
             self.assertIn(fragment, text)
         self.assertNotIn("Queue report", text)
 
+    def test_a_measured_job_shows_what_it_brought_in_beside_its_last_check(self) -> None:
+        self.seed()
+        with contextlib.closing(db_manager.open_database()) as c:
+            job = c.execute("SELECT id FROM job_queue WHERE repo = 'o/app' AND tag = 'v1'").fetchone()["id"]
+            db_manager.add_job_folder_size(c, job, 400 * 1024 * 1024, 13)
+        data = self.status(limit=None)["recent_jobs"]
+        self.assertEqual([(j["folder_bytes"], j["folder_files"]) for j in data if j["tag"] == "v1" and j["repo"] == "o/app"],
+                         [(400 * 1024 * 1024, 13)])
+        self.assertIsNone(next(j for j in data if j["tag"] == "v2")["folder_bytes"])
+        lines = [line for line in self.text(limit=None).splitlines() if line.startswith("- #")]
+        measured = next(line for line in lines if "o/app v1 " in line)
+        self.assertIn("last check: downloaded=", measured)
+        self.assertIn("brought_in=13 files / 400.0 MB, ", measured)
+        self.assertNotIn("brought_in", next(line for line in lines if "o/app v2 " in line))
+
     def test_active_filters_are_listed(self) -> None:
         self.seed()
         self.assertIn("Filters: repo~app, status=FAILED", self.text(repo_filter="app", status_filter="FAILED"))

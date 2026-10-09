@@ -450,6 +450,21 @@ class CollectTests(CollectTestCase):
             connection.commit()
             self.assertEqual(db_manager.get_release_sizes(connection), {"o/r|t": {"bytes": 20, "files": 2, "newest": 300}})
 
+    def test_purging_jobs_keeps_their_measured_sizes(self) -> None:
+        with closing(db_manager.open_database()) as connection:
+            first = db_manager.enqueue_job(connection, "o/app", "v1")
+            second = db_manager.enqueue_job(connection, "o/app", "v2")
+            for job_id, size, files in ((first, 100, 2), (second, 50, 1)):
+                db_manager.add_job_folder_size(connection, job_id, size, files)
+                db_manager.mark_job_completed(connection, job_id)  # PENDING jobs are never purged
+            before = db_manager.get_job_folder_sizes(connection)
+            self.assertEqual(db_manager.purge_job_queue_rows(connection, oldest_count=1), 1)
+            self.assertEqual(db_manager.purge_job_queue_rows(connection, status="COMPLETED"), 1)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM job_queue").fetchone()[0], 0)
+            self.assertEqual(db_manager.get_job_folder_sizes(connection), before)  # nothing double counted, nothing lost
+        report = stats.collect()
+        self.assertEqual(report["periods"][-1]["bytes"], 150)
+
     def test_it_never_writes_to_the_mapping_file(self) -> None:
         path = mapping_manager._mapping_file_path()
         before = os.path.getmtime(path)

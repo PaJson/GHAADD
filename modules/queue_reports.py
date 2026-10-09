@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from modules.db_manager import get_previous_successful_completed_job, open_database
+from modules.stats import format_bytes
 from modules.mapping_manager import load_mapping, normalize_sanity_check_mode
 from modules.payload_types import (
     NextPendingJobPayload,
@@ -109,6 +110,8 @@ def _build_queue_job_payload(
         "updated_at_readable": _format_timestamp(row["updated_at"]),
         "completed_at": float(row["completed_at"]) if row["completed_at"] is not None else None,
         "completed_at_readable": _format_timestamp(row["completed_at"]),
+        "folder_bytes": None if row["folder_bytes"] is None else int(row["folder_bytes"]),
+        "folder_files": None if row["folder_files"] is None else int(row["folder_files"]),
         "previous_success_tag": previous_success_tag,
         "previous_success_total_items": previous_success_total_items,
         "file_count_delta_vs_previous_success": file_count_delta_vs_previous_success,
@@ -305,6 +308,17 @@ def _build_default_queue_report_csv_path(options: QueueStatusOptions) -> str:
 
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     return f"queue-report-{scope}{status_part}-{timestamp}.csv"
+
+
+def _brought_in_text(job: QueueJobPayload) -> str:
+    """Return "brought_in=13 files / 398.2 MB, " for a job whose folder was measured, else nothing.
+
+    The downloaded/skipped counters describe the job's LAST check (later checks find everything unchanged and report
+    0 downloaded), so the measured folder is what the job really brought in.
+    """
+    if job["folder_bytes"] is None:
+        return ""
+    return f"brought_in={job['folder_files'] or 0} files / {format_bytes(job['folder_bytes'])}, "
 
 
 def _write_queue_report_csv(report_data: QueueReportPayload, output_path: str) -> None:
@@ -552,7 +566,9 @@ def _collect_queue_status_data(
                 last_result,
                 created_at,
                 updated_at,
-                completed_at
+                completed_at,
+                folder_bytes,
+                folder_files
             FROM job_queue
             {scope_where}
             ORDER BY id DESC
@@ -919,7 +935,7 @@ def print_queue_status(
             f"({next_pending['release_type']}, attempt={next_pending['attempt_count']}, "
             f"next_check={next_pending['next_check_time_readable']}, "
             f"expected_commit={next_pending['expected_commit']}, "
-            f"downloaded={next_pending['downloaded_count']}, "
+            f"last check: downloaded={next_pending['downloaded_count']}, "
             f"skipped={next_pending['skipped_count']}, "
             f"total={next_pending['total_items']}, "
             f"last_result={next_pending['last_result'] or '-'}, "
@@ -1035,9 +1051,10 @@ def print_queue_status(
                 f"({job['release_type']}, attempt={job['attempt_count']}, "
                 f"next_check={job['next_check_time_readable']}, "
                 f"expected_commit={job['expected_commit']}, "
-                f"downloaded={job['downloaded_count']}, "
+                f"last check: downloaded={job['downloaded_count']}, "
                 f"skipped={job['skipped_count']}, "
                 f"total={job['total_items']}, "
+                f"{_brought_in_text(job)}"
                 f"last_result={job['last_result'] or '-'}, "
                 f"created={job['created_at_readable']}, "
                 f"updated={job['updated_at_readable']}, "
