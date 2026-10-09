@@ -22,11 +22,13 @@ from modules.db_manager import (
     supersede_duplicate_pending_jobs,
     reschedule_job,
     save_job_skip_details,
+    set_job_folder_size,
     update_job_for_manual_check,
 )
 from modules.asset_downloader import (
     download_release,
     get_release_data,
+    measure_folder,
     move_processing_folder_to_complete,
     move_processing_folder_to_partial,
 )
@@ -68,8 +70,13 @@ def _finalize_staged_release_folder(
     tag: Optional[str] = None,
     commit: Optional[str] = None,
     write_complete_log: bool = True,
+    connection=None,
+    job_id: Optional[int] = None,
 ) -> Optional[str]:
-    """Move a terminal job's staging folder from Processing to complete destination."""
+    """Move a terminal job's staging folder from Processing to complete destination.
+
+    With a `connection` and `job_id`, the finished folder's size is stored on the job (what the Stats window reports).
+    """
     if not working_dir:
         return None
 
@@ -82,12 +89,24 @@ def _finalize_staged_release_folder(
 
     if done_dir:
         print(f"   📁 Finalized artifacts: {done_dir}")
+        if connection is not None and job_id is not None and not is_dry_run():
+            _record_folder_size(connection, job_id, done_dir)
         if repo:
             mark_repository_finalized(repo)
         if write_complete_log and repo and tag:
             log_completed_move(repo, tag, commit, done_dir)
 
     return done_dir
+
+
+def _record_folder_size(connection, job_id: int, folder: str) -> None:
+    """Measure a finished job's folder and store its bytes and file count on the job; a failure only warns."""
+    try:
+        folder_bytes, folder_files = measure_folder(folder)
+        set_job_folder_size(connection, job_id, folder_bytes, folder_files)
+    except Exception as exc:  # statistics must never break finalizing a release
+        print(f"   ⚠️ Could not record the size of {folder}: {exc}")
+        log_warning("FOLDER_SIZE", f"Could not record the size of job #{job_id}'s folder: {exc}")
 
 
 def _handle_working_dir_relocation(
@@ -208,6 +227,7 @@ def _handle_superseded_pending_job_artifacts(
     repo: str,
     tag: str,
     reason_code: str,
+    connection=None,
 ) -> str:
     """Return artifact handling outcome: finalized, quarantined, or none."""
     job_id = int(row["id"])
@@ -284,6 +304,8 @@ def _handle_superseded_pending_job_artifacts(
         tag=tag,
         commit=row["expected_commit"],
         write_complete_log=False,
+        connection=connection,
+        job_id=job_id,
     )
     if not done_dir:
         print(
@@ -314,6 +336,7 @@ def _finalize_terminal_skip_job(
     current_skipped_count: int,
     current_total_items: int,
     current_working_dir: Optional[str],
+    connection=None,
 ) -> Tuple[int, int, int]:
     """Finalize a job whose release/tag disappeared, moving any real staged files.
 
@@ -334,7 +357,9 @@ def _finalize_terminal_skip_job(
 
     if working_dir and os.path.isdir(working_dir):
         if _has_all_release_items_accounted(downloaded_count, skipped_count, total_items):
-            done_dir = _finalize_staged_release_folder(working_dir, repo=repo, tag=tag, commit=commit)
+            done_dir = _finalize_staged_release_folder(
+                working_dir, repo=repo, tag=tag, commit=commit, connection=connection, job_id=int(row["id"])
+            )
             if done_dir:
                 premature_message = (
                     f"Release/tag {tag} for {repo} disappeared from GitHub (likely replaced/superseded "
@@ -642,6 +667,7 @@ def ingest_notifications_once(
                         repo,
                         tag,
                         reason_code="NEW_NOTIFICATION",
+                        connection=connection,
                     )
                     if artifact_outcome == "finalized":
                         finalized_superseded_count += 1
@@ -848,6 +874,7 @@ def process_selected_pending_jobs(connection, github_token: Optional[str], job_i
                 repo,
                 tag,
                 reason_code="COMMIT_CHANGED_MANUAL",
+                connection=connection,
             )
             mark_job_superseded(
                 connection,
@@ -934,6 +961,7 @@ def process_selected_pending_jobs(connection, github_token: Optional[str], job_i
                 skipped_count,
                 total_items,
                 working_dir,
+                connection,
             )
             mark_job_completed(
                 connection,
@@ -1027,6 +1055,8 @@ def process_selected_pending_jobs(connection, github_token: Optional[str], job_i
                 repo=repo,
                 tag=tag,
                 commit=latest_commit,
+                connection=connection,
+                job_id=job_id,
             )
 
     return processed_count, skipped_ids, missing_ids
@@ -1186,6 +1216,7 @@ def _process_queue_once(
                 repo,
                 tag,
                 reason_code="COMMIT_CHANGED_AUTO",
+                connection=connection,
             )
             commit_changed_last_result = (
                 "SUPERSEDED_COMMIT_CHANGED_FINALIZED"
@@ -1322,6 +1353,7 @@ def _process_queue_once(
                     skipped_count,
                     total_items,
                     working_dir,
+                    connection,
                 )
 
             if result_status in ("SUCCESS", "SKIP"):
@@ -1380,6 +1412,8 @@ def _process_queue_once(
                     repo=repo,
                     tag=tag,
                     commit=latest_commit,
+                    connection=connection,
+                    job_id=job_id,
                 )
 
             downloaded_files_total += downloaded_count

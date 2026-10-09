@@ -565,6 +565,19 @@ def move_complete_folders_to_mapped_destinations() -> dict[str, int]:
     }
 
 
+def measure_folder(path: str) -> tuple[int, int]:
+    """Return (bytes, files) of everything below a folder; a file that vanishes or cannot be read counts as 0 bytes."""
+    total_bytes = total_files = 0
+    for current, _dirs, names in os.walk(path):
+        for name in names:
+            total_files += 1
+            try:
+                total_bytes += os.path.getsize(os.path.join(current, name))
+            except OSError:
+                pass
+    return total_bytes, total_files
+
+
 def move_processing_folder_to_complete(working_dir: str, repo: Optional[str] = None) -> Optional[str]:
     """Move a finished release folder from Processing to final destination."""
     if not working_dir:

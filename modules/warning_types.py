@@ -20,6 +20,7 @@ WARNING_TYPES: tuple[tuple[str, str], ...] = (
     ("SUPERSEDE_FINALIZE", "A release that a newer one replaced was finalized with the files it already had."),
     ("PREMATURE_FINALIZE", "A release disappeared from GitHub before its re-checks finished, so it was finalized as it was."),
     ("FOLDER_RENAMED", "A release's staging folder changed between attempts (title edited upstream); the old folder was left behind."),
+    ("FOLDER_SIZE", "The size of a finished release folder could not be recorded (only the statistics miss it)."),
     ("FOLDER_RENAMED_MOVE", "...and the old staging folder could not be moved to the Partial folder."),
     ("FOLDER_RENAMED_MOVED", "...and the old staging folder was moved to the Partial folder."),
     ("DESTINATION", "A repository's destination is missing or unusable, so the default folder was used."),

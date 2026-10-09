@@ -240,6 +240,11 @@ def open_database():
         connection.execute(
             "ALTER TABLE job_queue ADD COLUMN completed_at REAL"
         )
+    # Size of the job's finished folder (NULL = not measured, e.g. jobs from before this column existed).
+    if "folder_bytes" not in existing_columns:
+        connection.execute("ALTER TABLE job_queue ADD COLUMN folder_bytes INTEGER")
+    if "folder_files" not in existing_columns:
+        connection.execute("ALTER TABLE job_queue ADD COLUMN folder_files INTEGER")
 
     # Backfill timestamps for rows created before timestamp columns existed.
     connection.execute(
@@ -1482,6 +1487,28 @@ def get_job_history(connection):
     return [(row[0], row[1], row[2], float(row[3])) for row in rows]
 
 
+def set_job_folder_size(connection, job_id, folder_bytes, folder_files):
+    """Store the size of a job's finished folder (what that job brought in), measured when it was finalized."""
+    connection.execute(
+        "UPDATE job_queue SET folder_bytes = ?, folder_files = ? WHERE id = ?",
+        (int(folder_bytes), int(folder_files), int(job_id)),
+    )
+    connection.commit()
+
+
+def get_job_folder_sizes(connection):
+    """Every job with a measured folder as (repo, tag, created_at, bytes, files), oldest first (read-only)."""
+    rows = connection.execute(
+        """
+        SELECT repo, tag, created_at, folder_bytes, folder_files
+        FROM job_queue
+        WHERE folder_bytes IS NOT NULL
+        ORDER BY created_at, id
+        """
+    ).fetchall()
+    return [(row[0], row[1], float(row[2]), int(row[3]), int(row[4] or 0)) for row in rows]
+
+
 def get_cycle_times(connection):
     """Creation times of the CYCLE_SUMMARY events (one per polling cycle), oldest first (read-only)."""
     rows = connection.execute(
@@ -1491,18 +1518,23 @@ def get_cycle_times(connection):
 
 
 def get_release_sizes(connection):
-    """{"owner/repo|tag": {"bytes": int, "files": int}} from asset_state: what each release's files weigh (read-only).
+    """{"owner/repo|tag": {"bytes": int, "files": int, "newest": epoch}} from asset_state (read-only).
 
     Uses the size of the local file, else the size the server reported (source archives may lack one).
+    `newest` is the time of the release's newest file (0 when unknown): a rolling tag such as "latest" keeps only
+    its newest build here, so stats date the release by it rather than by the first job ever seen for the tag.
     """
     rows = connection.execute(
         """
-        SELECT release_key, COALESCE(SUM(COALESCE(local_size, size, 0)), 0), COUNT(*)
+        SELECT release_key, COALESCE(SUM(COALESCE(local_size, size, 0)), 0), COUNT(*),
+               COALESCE(MAX(COALESCE(local_mtime, last_modified)), 0)
         FROM asset_state
         GROUP BY release_key
         """
     ).fetchall()
-    return {str(row[0]): {"bytes": int(row[1]), "files": int(row[2])} for row in rows}
+    return {
+        str(row[0]): {"bytes": int(row[1]), "files": int(row[2]), "newest": int(row[3])} for row in rows
+    }
 
 
 def get_max_event_id(connection):

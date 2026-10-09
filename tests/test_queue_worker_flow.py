@@ -602,6 +602,34 @@ class FinalizeStagedFolderTests(WorkerTestCase):
         self.assertEqual(self.calls["completed_logs"], [(REPO, "v1", "abc", done)])
         self.assertNotEqual((mapping_manager.get_repository_mapping(REPO) or {})["last_finalized"], "")
 
+    def test_the_size_of_the_finished_folder_is_stored_on_the_job(self) -> None:
+        job_id = self.job()
+        done_dir = os.path.join(self.root, "done", "rel1")
+        os.makedirs(os.path.join(done_dir, "sub"))
+        for name, size in (("a.zip", 5), (os.path.join("sub", "b.zip"), 7)):
+            with open(os.path.join(done_dir, name), "wb") as handle:
+                handle.write(b"x" * size)
+        self.quietly(queue_worker._finalize_staged_release_folder, self.staged_dir(), REPO, "v1", "abc",
+                     connection=self.connection, job_id=job_id)
+        self.assertEqual(db_manager.get_job_folder_sizes(self.connection), [(REPO, "v1", self.row(job_id)["created_at"], 12, 2)])
+
+    def test_no_size_is_stored_in_a_dry_run_or_without_a_job(self) -> None:
+        job_id = self.job()
+        self.dry_run = True
+        self.quietly(queue_worker._finalize_staged_release_folder, self.staged_dir(), REPO, "v1",
+                     connection=self.connection, job_id=job_id)
+        self.dry_run = False
+        self.quietly(queue_worker._finalize_staged_release_folder, self.staged_dir(), REPO, "v1")
+        self.assertEqual(db_manager.get_job_folder_sizes(self.connection), [])
+
+    def test_a_failing_measurement_only_warns(self) -> None:
+        job_id = self.job()
+        with mock.patch.object(queue_worker, "measure_folder", side_effect=OSError("denied")):
+            done = self.quietly(queue_worker._finalize_staged_release_folder, self.staged_dir(), REPO, "v1",
+                                connection=self.connection, job_id=job_id)
+        self.assertIsNotNone(done)
+        self.assertEqual(self.warning_kinds(), ["FOLDER_SIZE"])
+
     def test_nothing_to_finalize_without_a_folder(self) -> None:
         self.assertIsNone(self.quietly(queue_worker._finalize_staged_release_folder, None, REPO, "v1"))
         self.assertIsNone(self.quietly(queue_worker._finalize_staged_release_folder, "", REPO, "v1"))

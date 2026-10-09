@@ -291,6 +291,40 @@ class BuildRangeTests(unittest.TestCase):
         self.assertEqual([(row["repo"], row["tag"]) for row in report["biggest_releases"]], [("o/quiet", "v1")])
         self.assertEqual([row["repo"] for row in report["biggest_repositories"]], ["o/quiet"])  # o/gone has no job at all
 
+    def test_a_reused_tag_counts_for_the_day_of_its_newest_file(self) -> None:
+        # "latest" is reused by many jobs; asset_state holds only the newest build, so today's window must find it.
+        jobs = [("o/roll", "latest", "COMPLETED", NOW - 30 * DAY), ("o/roll", "latest", "COMPLETED", NOW - 2 * HOUR)]
+        sizes = {"o/roll|latest": {"bytes": 2 * GB, "files": 3, "newest": int(NOW - 2 * HOUR)}}
+        today = stats.date_range(date(2026, 10, 8), date(2026, 10, 8))
+        report = self.build(today, jobs=jobs, sizes=sizes)
+        self.assertEqual([(row["repo"], row["bytes"]) for row in report["busiest_repositories"]], [("o/roll", 2 * GB)])
+        self.assertEqual(report["periods"][-1]["bytes"], 2 * GB)
+        older = self.build(stats.date_range(date(2026, 9, 1), date(2026, 9, 15)), jobs=jobs, sizes=sizes)
+        self.assertEqual(older["periods"][-1]["bytes"], 0)  # no longer dated by the first job of the tag
+
+    def test_measured_jobs_add_up_per_day_even_when_the_tag_is_reused(self) -> None:
+        # Three jobs on one reused tag, two today and one a month ago; asset_state only knows the newest build.
+        jobs = [("o/roll", "latest", "COMPLETED", NOW - 30 * DAY), ("o/roll", "latest", "COMPLETED", NOW - 5 * HOUR),
+                ("o/roll", "latest", "COMPLETED", NOW - 2 * HOUR)]
+        sizes = {"o/roll|latest": {"bytes": 1 * GB, "files": 3, "newest": int(NOW - 2 * HOUR)}}
+        measured = [("o/roll", "latest", NOW - 30 * DAY, 1 * GB, 3), ("o/roll", "latest", NOW - 5 * HOUR, 2 * GB, 3),
+                    ("o/roll", "latest", NOW - 2 * HOUR, 1 * GB, 3)]
+        today = stats.date_range(date(2026, 10, 8), date(2026, 10, 8))
+        report = self.build(today, jobs=jobs, sizes=sizes, job_sizes=measured)
+        self.assertEqual(report["periods"][-1]["bytes"], 3 * GB)  # both of today's folders, not the single asset_state build
+        self.assertEqual([(row["repo"], row["bytes"]) for row in report["busiest_repositories"]], [("o/roll", 3 * GB)])
+        self.assertEqual([(row["tag"], row["bytes"]) for row in report["biggest_releases"]],
+                         [("latest", 2 * GB), ("latest", 1 * GB)])  # each build is a row, with the plain tag
+        lifetime = next(row for row in report["periods"] if row["key"] == "lifetime")
+        self.assertEqual(lifetime["bytes"], 4 * GB)  # asset_state is not added on top of the measured jobs
+
+    def test_a_release_without_measured_jobs_keeps_the_asset_state_estimate(self) -> None:
+        jobs = [("o/a", "v1", "COMPLETED", NOW - 3 * HOUR), ("o/b", "v1", "COMPLETED", NOW - 2 * HOUR)]
+        sizes = {"o/a|v1": {"bytes": 5, "files": 1}, "o/b|v1": {"bytes": 7, "files": 1}}
+        report = self.build(None, jobs=jobs, sizes=sizes, job_sizes=[("o/b", "v1", NOW - 2 * HOUR, 70, 2)])
+        lifetime = next(row for row in report["periods"] if row["key"] == "lifetime")
+        self.assertEqual((lifetime["bytes"], lifetime["files"]), (75, 3))
+
     def test_the_activity_table_gets_a_row_for_the_window(self) -> None:
         report = self.build(stats.date_range(date(2026, 10, 1), date(2026, 10, 5)))
         row = report["periods"][-1]
@@ -406,6 +440,15 @@ class CollectTests(CollectTestCase):
         self.assertEqual(report["busiest_repositories"][0]["repo"], "o/app")
         self.assertEqual(report["biggest_repositories"][0]["repo"], "o/app")
         self.assertEqual(report["storage"]["rows"]["asset_state"], 1)
+
+    def test_release_sizes_carry_the_newest_file_time(self) -> None:
+        with closing(db_manager.open_database()) as connection:
+            for item, mtime in (("a", 100.0), ("b", 300.0)):
+                connection.execute(
+                    "INSERT INTO asset_state (release_key, item_key, file_path, size, local_size, local_mtime) "
+                    "VALUES ('o/r|t', ?, 'p', 10, 10, ?)", (item, mtime))
+            connection.commit()
+            self.assertEqual(db_manager.get_release_sizes(connection), {"o/r|t": {"bytes": 20, "files": 2, "newest": 300}})
 
     def test_it_never_writes_to_the_mapping_file(self) -> None:
         path = mapping_manager._mapping_file_path()

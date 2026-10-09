@@ -69,10 +69,13 @@ def _stamp(timestamp: Optional[float]) -> Optional[str]:
     return None if timestamp is None else datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M")
 
 
+MEASURED_MARK = "\x00"  # separates the tag from a job number in the key of a measured job (see build())
+
+
 def _split_release_key(release_key: str) -> tuple[str, str]:
-    """Split a "repo|tag" release key into (repo, tag)."""
+    """Split a "repo|tag" release key into (repo, tag); the job number of a measured job is dropped."""
     repo, _, tag = release_key.partition("|")
-    return repo, tag
+    return repo, tag.partition(MEASURED_MARK)[0]
 
 
 def mapping_stats(entries: Sequence[Mapping[str, Any]], folder_counts: Mapping[str, Mapping[str, Any]]) -> dict[str, int]:
@@ -318,12 +321,15 @@ def build(
     now: float,
     top: Optional[int] = TOP_COUNT,
     date_range: Optional[DateRange] = None,
+    job_sizes: Sequence[tuple[str, str, float, int, int]] = (),
 ) -> dict[str, Any]:
     """Assemble the report from already loaded data (no file or database access; this is what the tests feed).
 
-    With a `date_range` the Busiest, Biggest and Per day figures cover only that window (a release counts for the day
-    of its first job, so releases whose jobs were purged drop out) and the Activity table gets one more row for it.
-    Mapping, history and reliability always describe everything on record.
+    With a `date_range` the Busiest, Biggest and Per day figures cover only that window and the Activity table gets
+    one more row for it. Sizes come from `job_sizes` (repo, tag, created_at, bytes, files: the finished folder of each
+    job, dated by the job); a release without any falls back to asset_state, dated by its first job (or its newest
+    file for a reused tag), so releases whose jobs were purged drop out. Mapping, history and reliability always
+    describe everything on record.
     """
     first_job = jobs[0][3] if jobs else None
     last_job = jobs[-1][3] if jobs else None
@@ -333,6 +339,23 @@ def build(
         key = f"{repo}|{tag}"
         if key not in release_first_job or created < release_first_job[key]:
             release_first_job[key] = created
+    # A rolling tag ("latest", "continuous", "nightly") is reused by hundreds of jobs while asset_state holds only its
+    # newest build: dating that by the first job ever would put today's download weeks back. So a release counts for
+    # the day of its newest file when that is later than its first job (ordinary releases keep the first job's day).
+    for key in release_first_job:
+        size = sizes.get(key)
+        if size:
+            release_first_job[key] = max(release_first_job[key], float(size.get("newest", 0)))
+
+    # A release with measured jobs is counted from those (each finished job's folder, dated by the job); only the
+    # releases without any use the asset_state estimate above. A measured job gets its own unique key (MEASURED_MARK).
+    measured = {f"{repo}|{tag}" for repo, tag, _created, _bytes, _files in job_sizes}
+    dated_sizes: dict[str, Mapping[str, int]] = {key: size for key, size in sizes.items() if key not in measured}
+    release_first_job = {key: moment for key, moment in release_first_job.items() if key not in measured}
+    for number, (repo, tag, created, folder_bytes, folder_files) in enumerate(job_sizes):
+        key = f"{repo}|{tag}{MEASURED_MARK}{number}"
+        dated_sizes[key] = {"bytes": folder_bytes, "files": folder_files}
+        release_first_job[key] = created
 
     def inside(moment: float) -> bool:
         """True when a timestamp is in the chosen window (always, without one)."""
@@ -341,8 +364,8 @@ def build(
         )
 
     ranked_jobs = [job for job in jobs if inside(job[3])]
-    ranked_sizes = sizes if date_range is None else {
-        key: size for key, size in sizes.items() if key in release_first_job and inside(release_first_job[key])
+    ranked_sizes = dated_sizes if date_range is None else {
+        key: size for key, size in dated_sizes.items() if key in release_first_job and inside(release_first_job[key])
     }
     biggest_repos, biggest_releases, bytes_by_repo = _biggest(ranked_sizes, top)
     busiest_repositories = _busiest_repositories(ranked_jobs, bytes_by_repo, now, top)
@@ -391,7 +414,7 @@ def build(
             "pending": sum(1 for job in jobs if job[2] == "PENDING"),
             "success_percent": round(100.0 * completed / finished, 1) if finished else None,
         },
-        "periods": _period_rows(jobs, cycles, release_first_job, sizes, now, first_job, date_range),
+        "periods": _period_rows(jobs, cycles, release_first_job, dated_sizes, now, first_job, date_range),
         "range": None if date_range is None else date_range.label,
         "daily": daily,
         "busiest_repositories": busiest_repositories,
@@ -416,6 +439,7 @@ def load() -> dict[str, Any]:
             "jobs": db_manager.get_job_history(connection),
             "cycles": db_manager.get_cycle_times(connection),
             "sizes": db_manager.get_release_sizes(connection),
+            "job_sizes": db_manager.get_job_folder_sizes(connection),
             "folder_counts": db_manager.get_folder_counts(connection),
         }
         storage = db_manager.get_storage_stats(connection)
@@ -438,7 +462,7 @@ def report_from(
     """Build the report from load()'s data; the GUI calls this again for every new window or "now"."""
     report = build(
         data["entries"], data["jobs"], data["cycles"], data["sizes"], data["folder_counts"],
-        time.time() if now is None else now, top, date_range,
+        time.time() if now is None else now, top, date_range, data.get("job_sizes", ()),
     )
     report["storage"] = data["storage"]
     return report
