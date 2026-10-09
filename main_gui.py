@@ -27,6 +27,7 @@ from modules import (
     config_manager,
     connection_tests,
     daemon_launcher,
+    daemon_lock,
     env_manager,
     gui_daemon,
     gui_data,
@@ -37,6 +38,7 @@ from modules import (
     gui_theme,
     gui_tooltips,
     gui_tray,
+    gui_viewer,
     log_tail,
     mapping_manager,
     shortcuts,
@@ -1939,8 +1941,11 @@ class SettingsDialog(tk.Toplevel):
         accounts_button.grid(row=0, column=1, padx=(0, 6))
         attach_tooltip(accounts_button, gui_tooltips.CONTROL_HELP["credentials"])
         backup_button = ttk.Button(file_buttons, text="Backup…", command=self._open_backup)
-        backup_button.grid(row=0, column=2)
+        backup_button.grid(row=0, column=2, padx=(0, 6))
         attach_tooltip(backup_button, gui_tooltips.CONTROL_HELP["backup"])
+        viewer_button = ttk.Button(file_buttons, text="Viewer…", command=self._open_viewer)
+        viewer_button.grid(row=0, column=3)
+        attach_tooltip(viewer_button, gui_tooltips.CONTROL_HELP["viewer"])
         ttk.Button(buttons, text="Cancel", command=self._close_request).grid(row=0, column=2, padx=(0, 6))
         ttk.Button(buttons, text="Save", command=self._save).grid(row=0, column=3)
 
@@ -1979,6 +1984,10 @@ class SettingsDialog(tk.Toplevel):
     def _open_backup(self) -> None:
         """Open the Backup window. It saves by itself (its own Save button), whatever this window does."""
         BackupDialog(self, self._credentials_saved)  # the callback just passes the message on to the main window
+
+    def _open_viewer(self) -> None:
+        """Open the Viewer window. It saves by itself (its own Save button), whatever this window does."""
+        ViewerDialog(self, self._credentials_saved)  # the callback just passes the message on to the main window
 
     def _credentials_saved(self, message: str) -> None:
         """Pass the "credentials saved" message on to the main window."""
@@ -2637,6 +2646,239 @@ class BackupDialog(tk.Toplevel):
             return
         self.destroy()
         self._on_saved("Backup settings saved. The daemon applies them at its next check.")
+
+
+class ViewerDialog(tk.Toplevel):
+    """Set up the push to the standalone web viewer, test the connection and switch the push of the running daemon.
+
+    It has its own Save and Cancel (the Settings window's Save neither writes nor undoes it). Save writes the `viewer`
+    section of config.json; the daemon reads the address and token when it starts, so after a change the Restart button
+    appears by itself. Start/Stop sending change the running daemon's push at once. Test connection uses the values as
+    typed, without saving, in a thread so the window never freezes.
+    """
+
+    STATUS_REFRESH_MS = 2000
+
+    def __init__(self, master: tk.Misc, on_saved: Callable[[str], None]) -> None:
+        """Build the Viewer window: the settings, the connection test and the daemon's live push status."""
+        super().__init__(master)
+        self.title("Viewer")
+        self.resizable(False, False)
+        self.transient(master)  # type: ignore[arg-type]
+        self._on_saved = on_saved
+        self._answer: list[connection_tests.ConnectionResult] = []
+        self._token_visible = False
+
+        saved = config_manager.get_viewer_settings()
+        configured = config_manager.load_config().get("viewer")
+        shown_name = str(configured.get("name", "")) if isinstance(configured, dict) else ""
+        self.vars: dict[str, tk.Variable] = {
+            "enabled": tk.BooleanVar(value=saved["enabled"]),
+            "url": tk.StringVar(value=saved["url"]),
+            "token": tk.StringVar(value=saved["token"]),
+            "name": tk.StringVar(value=shown_name),
+        }
+        self._baseline = self._values()
+
+        body = ttk.Frame(self, padding=14)
+        body.pack(fill="both", expand=True)
+        body.columnconfigure(0, weight=1)
+
+        send = ttk.LabelFrame(body, text="Send to the web viewer", padding=10)
+        send.grid(row=0, column=0, sticky="ew")
+        send.columnconfigure(1, weight=1)
+        ttk.Checkbutton(
+            send, text="Send read-only snapshots to the viewer (the daemon connects out and opens no port)",
+            variable=self.vars["enabled"],
+        ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 6))
+        ttk.Label(send, text="Viewer address").grid(row=1, column=0, sticky="w", padx=(0, 12))
+        self.url_entry = ttk.Entry(send, textvariable=self.vars["url"], width=48)
+        self.url_entry.grid(row=1, column=1, columnspan=2, sticky="ew")
+        ttk.Label(
+            send, text="For example http://192.168.0.100:8888: the computer that runs viewer/ghaadd_viewer.py.",
+            foreground=COLOR_MUTED, wraplength=720, justify="left",
+        ).grid(row=2, column=1, columnspan=2, sticky="w", pady=(2, 8))
+        ttk.Label(send, text="Name").grid(row=3, column=0, sticky="w", padx=(0, 12))
+        ttk.Entry(send, textvariable=self.vars["name"], width=48).grid(row=3, column=1, columnspan=2, sticky="ew")
+        ttk.Label(
+            send, text=f"How this daemon is listed in the viewer. Empty = this computer's name ({gui_viewer.computer_name()}).",
+            foreground=COLOR_MUTED, wraplength=720, justify="left",
+        ).grid(row=4, column=1, columnspan=2, sticky="w", pady=(2, 8))
+        ttk.Label(send, text="Token").grid(row=5, column=0, sticky="w", padx=(0, 12))
+        self.token_entry = ttk.Entry(send, textvariable=self.vars["token"], show="•", width=48)
+        self.token_entry.grid(row=5, column=1, sticky="ew")
+        token_buttons = ttk.Frame(send)
+        token_buttons.grid(row=5, column=2, padx=(6, 0))
+        self.show_button = ttk.Button(token_buttons, text="Show", width=6, command=self._toggle_token)
+        self.show_button.grid(row=0, column=0, padx=(0, 4))
+        ttk.Button(token_buttons, text="Generate", command=self._generate_token).grid(row=0, column=1, padx=(0, 4))
+        ttk.Button(token_buttons, text="Copy", width=6, command=self._copy_token).grid(row=0, column=2)
+        ttk.Label(
+            send,
+            text="The same secret must be given to the viewer (--token, or GHAADD_VIEWER_TOKENS in Docker). "
+            "It is stored in config.json, and so in backups.",
+            foreground=COLOR_MUTED, wraplength=720, justify="left",
+        ).grid(row=6, column=1, columnspan=2, sticky="w", pady=(2, 0))
+
+        live = ttk.LabelFrame(body, text="Connection", padding=10)
+        live.grid(row=1, column=0, sticky="ew", pady=(10, 0))
+        live.columnconfigure(1, weight=1)
+        self.test_button = ttk.Button(live, text="Test connection", command=self._test)
+        self.test_button.grid(row=0, column=0, sticky="w", padx=(0, 12))
+        self.test_result = ttk.Label(live, text="", wraplength=520, justify="left")
+        self.test_result.grid(row=0, column=1, sticky="w")
+        self.status_label = ttk.Label(live, text="", wraplength=720, justify="left", foreground=COLOR_MUTED)
+        self.status_label.grid(row=1, column=0, columnspan=2, sticky="w", pady=(10, 0))
+        push_buttons = ttk.Frame(live)
+        push_buttons.grid(row=2, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        self.start_button = ttk.Button(push_buttons, text="Start sending", command=lambda: self._set_push(True))
+        self.start_button.grid(row=0, column=0, padx=(0, 6))
+        self.stop_button = ttk.Button(push_buttons, text="Stop sending", command=lambda: self._set_push(False))
+        self.stop_button.grid(row=0, column=1)
+
+        ttk.Label(
+            body,
+            text="The address and token are read when the daemon starts: after a change use the Restart button. "
+            "Start/Stop sending work at once, for this run of the daemon. No paths are ever sent.",
+            foreground=COLOR_MUTED, wraplength=800, justify="left",
+        ).grid(row=2, column=0, sticky="w", pady=(10, 0))
+        self.message = ttk.Label(body, text="", foreground=COLOR_ERROR, wraplength=800, justify="left")
+        self.message.grid(row=3, column=0, sticky="w", pady=(6, 0))
+
+        buttons = ttk.Frame(body)
+        buttons.grid(row=4, column=0, sticky="ew", pady=(10, 0))
+        buttons.columnconfigure(0, weight=1)
+        ttk.Button(buttons, text="Cancel", command=self._close_request).grid(row=0, column=1, padx=(0, 6))
+        ttk.Button(buttons, text="Save", command=self._save).grid(row=0, column=2)
+
+        self._refresh_status()
+        self.bind("<Escape>", lambda _event: self._close_request())
+        self.protocol("WM_DELETE_WINDOW", self._close_request)
+        center_dialog(self, master, focus=self.url_entry)
+        self.grab_set()
+
+    def _values(self) -> dict[str, Any]:
+        """The form as typed."""
+        return {
+            "enabled": bool(self.vars["enabled"].get()),
+            "url": str(self.vars["url"].get()).strip(),
+            "token": str(self.vars["token"].get()).strip(),
+            "name": str(self.vars["name"].get()).strip(),
+        }
+
+    # ----- the token -----
+
+    def _toggle_token(self) -> None:
+        """Show or hide the token in its field."""
+        self._token_visible = not self._token_visible
+        self.token_entry.configure(show="" if self._token_visible else "•")
+        self.show_button.configure(text="Hide" if self._token_visible else "Show")
+
+    def _generate_token(self) -> None:
+        """Fill in a new random token, after asking when there already is one (the viewer must get the new one)."""
+        if str(self.vars["token"].get()).strip() and not messagebox.askyesno(
+            "Viewer",
+            "Replace the token?\n\nThe viewer must be given the new one, or it will reject this daemon.",
+            icon="warning", default="no", parent=self,
+        ):
+            return
+        self.vars["token"].set(gui_viewer.generate_token())
+        if not self._token_visible:
+            self._toggle_token()  # a token nobody can read cannot be copied to the viewer
+        self.message.configure(text="New token made. Copy it to the viewer, then Save.", foreground=COLOR_MUTED)
+
+    def _copy_token(self) -> None:
+        """Put the token on the clipboard."""
+        token = str(self.vars["token"].get()).strip()
+        if not token:
+            self.message.configure(text="There is no token to copy yet.", foreground=COLOR_ERROR)
+            return
+        self.clipboard_clear()
+        self.clipboard_append(token)
+        self.message.configure(text="Token copied to the clipboard.", foreground=COLOR_OK)
+
+    # ----- the connection test (network in a thread, the answer is picked up by _poll) -----
+
+    def _test(self) -> None:
+        """Ask the viewer, with the address and token as typed, whether it is there and accepts the token."""
+        values = self._values()
+        self.test_button.state(["disabled"])
+        self.test_result.configure(text="Testing…", foreground=COLOR_MUTED)
+        self._answer.clear()
+
+        def run() -> None:
+            """Thread body: run the check and queue its result (an exception becomes a failed result)."""
+            try:
+                self._answer.append(gui_viewer.check_viewer(values["url"], values["token"]))
+            except Exception as exc:  # shown in the window instead of vanishing
+                self._answer.append(connection_tests.ConnectionResult(ok=False, message=f"The test could not run: {exc}"))
+
+        threading.Thread(target=run, daemon=True).start()
+        self.after(100, self._poll)
+
+    def _poll(self) -> None:
+        """Wait (polling every 100 ms) for the test thread, then show the result."""
+        if not self.winfo_exists():
+            return
+        if not self._answer:
+            self.after(100, self._poll)
+            return
+        result = self._answer[0]
+        self.test_button.state(["!disabled"])
+        self.test_result.configure(text=result.message, foreground=COLOR_OK if result.ok else COLOR_ERROR)
+
+    # ----- the running daemon -----
+
+    def _refresh_status(self) -> None:
+        """Show what the running daemon reports about its push, and enable the matching button (every 2 seconds)."""
+        if not self.winfo_exists():
+            return
+        try:
+            view = gui_viewer.describe_push(daemon_lock.get_daemon_status(), time.time())
+        except OSError:
+            view = None
+        if view is not None:
+            self.status_label.configure(text=view.text, foreground=COLOR_ERROR if view.problem else COLOR_MUTED)
+            self.start_button.state(["!disabled"] if view.start_enabled else ["disabled"])
+            self.stop_button.state(["!disabled"] if view.stop_enabled else ["disabled"])
+        self.after(self.STATUS_REFRESH_MS, self._refresh_status)
+
+    def _set_push(self, on: bool) -> None:
+        """Ask the running daemon to start or stop sending right now (the saved address and token are what it uses)."""
+        error = gui_daemon.do_set_push(on)
+        if error:
+            self.message.configure(text=error, foreground=COLOR_ERROR)
+            return
+        self.message.configure(
+            text="Asked the daemon to start sending." if on else "Asked the daemon to stop sending.", foreground=COLOR_MUTED
+        )
+        self.after(1500, self._refresh_status)
+
+    # ----- close and save -----
+
+    def _close_request(self) -> None:
+        """Close the window, asking first when there are unsaved changes."""
+        if self._values() != self._baseline and not messagebox.askyesno(
+            "Viewer",
+            "You have changes that are not saved.\n\nClose the window and discard them?",
+            icon="warning", default="no", parent=self,
+        ):
+            return
+        self.destroy()
+
+    def _save(self) -> None:
+        """Validate the form and write the `viewer` section of config.json, then close."""
+        result = gui_forms.build_viewer_changes(self._values())
+        if not result.ok:
+            self.message.configure(text="\n".join(result.errors), foreground=COLOR_ERROR)
+            return
+        try:
+            config_manager.set_config_values(result.changes)
+        except (config_manager.ConfigLockTimeout, config_manager.ConfigUnreadableError, OSError) as exc:
+            self.message.configure(text=describe_error(exc), foreground=COLOR_ERROR)
+            return
+        self.destroy()
+        self._on_saved("Viewer settings saved. A running daemon uses a new address or token after a restart.")
 
 
 class DoctorDialog(tk.Toplevel):

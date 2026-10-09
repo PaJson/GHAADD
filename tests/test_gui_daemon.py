@@ -216,6 +216,11 @@ class ActionTests(unittest.TestCase):
         with mock.patch.object(gui_daemon.daemon_control, "set_log_override") as set_log:
             self.assertIsNone(gui_daemon.do_set_log(False))
             set_log.assert_called_once_with(False)
+        with mock.patch.object(gui_daemon.daemon_control, "set_push_override") as set_push:
+            self.assertIsNone(gui_daemon.do_set_push(True))
+            set_push.assert_called_once_with(True)
+        with mock.patch.object(gui_daemon.daemon_control, "set_push_override", side_effect=sqlite3.OperationalError("locked")):
+            self.assertIn("locked", str(gui_daemon.do_set_push(False)))
         with mock.patch.object(gui_daemon.daemon_control, "request_poll_now") as poll:
             self.assertIsNone(gui_daemon.do_poll_now())
             poll.assert_called_once_with()

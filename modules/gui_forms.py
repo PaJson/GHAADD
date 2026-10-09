@@ -12,6 +12,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Optional
+from urllib.parse import urlsplit
 
 from modules import config_manager, mapping_manager
 
@@ -45,6 +46,15 @@ BACKUP_KEYS = {
     "directory": "backup.directory",
     "include_env": "backup.include_env",
 }
+
+VIEWER_KEYS = {
+    "enabled": "viewer.enabled",
+    "url": "viewer.url",
+    "token": "viewer.token",
+    "name": "viewer.name",
+}
+MIN_VIEWER_TOKEN_LENGTH = 16  # the viewer refuses shorter ones
+MAX_VIEWER_NAME_LENGTH = 64
 
 MIN_POLL_INTERVAL_SECONDS = 10
 
@@ -277,6 +287,55 @@ def build_backup_changes(form: Mapping[str, Any]) -> FormResult:
         "include_env": bool(form.get("include_env", False)),
     }
     result.changes = {BACKUP_KEYS[key]: value for key, value in values.items()}
+    return result
+
+
+def normalize_viewer_url(text: str) -> Optional[str]:
+    """Return the viewer address without a trailing slash, or None when it is not a plain http(s) address."""
+    address = text.strip()
+    if not address or re.search(r"\s", address):
+        return None
+    try:
+        parts = urlsplit(address)
+        port = parts.port  # raises for a port that is not a number or out of range
+    except ValueError:
+        return None
+    if parts.scheme not in ("http", "https") or not parts.hostname or parts.query or parts.fragment:
+        return None
+    if parts.path not in ("", "/") or parts.username or parts.password or port == 0:
+        return None
+    return address.rstrip("/")
+
+
+def build_viewer_changes(form: Mapping[str, Any]) -> FormResult:
+    """Validate the Viewer window; `changes` maps dotted config.json keys to values.
+
+    Sending needs both an address and a token, so "enabled" without them is an error. The name may stay empty
+    (the daemon then uses the computer's name).
+    """
+    result = FormResult()
+    enabled = bool(form.get("enabled", False))
+    typed_url = str(form.get("url", "")).strip()
+    token = str(form.get("token", "")).strip()
+    name = str(form.get("name", "")).strip()
+
+    url = ""
+    if typed_url:
+        normalized = normalize_viewer_url(typed_url)
+        if normalized is None:
+            result.errors.append("The viewer address must look like http://192.168.0.100:8888 (http or https, a host, optionally a port).")
+        else:
+            url = normalized
+    if token and (re.search(r"\s", token) or len(token) < MIN_VIEWER_TOKEN_LENGTH):
+        result.errors.append(f"The token must be at least {MIN_VIEWER_TOKEN_LENGTH} characters without spaces (Generate makes a good one).")
+    if len(name) > MAX_VIEWER_NAME_LENGTH or re.search(r"[\x00-\x1f\x7f]", name):
+        result.errors.append(f"The name must be at most {MAX_VIEWER_NAME_LENGTH} characters, without control characters.")
+    if enabled and not result.errors and (not url or not token):
+        result.errors.append("To send to the viewer, enter its address and a token (or untick the box).")
+    if result.errors:
+        return result
+    values = {"enabled": enabled, "url": url, "token": token, "name": name}
+    result.changes = {VIEWER_KEYS[key]: value for key, value in values.items()}
     return result
 
 

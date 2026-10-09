@@ -357,6 +357,11 @@ def do_set_log(on: bool) -> Optional[str]:
     return _guarded(lambda: daemon_control.set_log_override(on))
 
 
+def do_set_push(on: bool) -> Optional[str]:
+    """Switch the daemon's push to the web viewer on or off for this session; returns an error text, or None."""
+    return _guarded(lambda: daemon_control.set_push_override(on))
+
+
 def do_stop() -> Optional[str]:
     """Ask the daemon to stop gracefully (the job in progress finishes); returns an error text, or None."""
     return _guarded(daemon_control.request_stop)

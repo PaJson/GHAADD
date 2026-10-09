@@ -97,6 +97,9 @@ CONTROL_HELP = {
     "dark_mode": "Switch between the light and the dark colors. The choice is remembered (gui.dark_mode in config.json).",
     "backup": "Back up state.db, config.json and mapping.json (and .env if you tick it) into a zip file, now or on a "
               "schedule the daemon keeps. Opens its own window.",
+    "viewer": "Send a read-only picture of what the daemon is doing (status, Mappings, warnings, completed...) to the "
+              "standalone web viewer (viewer/ghaadd_viewer.py), for example on a server. The daemon connects out; no "
+              "paths are sent. Opens its own window.",
     "queue_counts": "Jobs waiting in the queue.\n"
                     "Due now: their check time has come, so the next poll (or Poll now) processes them. This is the "
                     "number the daemon prints as \"Processing N due queue job(s)\".\n"

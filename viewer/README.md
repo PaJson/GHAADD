@@ -39,7 +39,8 @@ The page is then at `http://<this-computer>:8888/`.
 
 ## Point the daemon at it
 
-In the daemon's `config.json` (then restart the daemon):
+In the GUI: Settings, then **Viewer…**: tick "Send read-only snapshots", enter `http://<this-computer>:8888` and the
+token, press **Test connection**, Save, and restart the daemon. Or in the daemon's `config.json`:
 
 ```json
 "viewer": {"enabled": true, "url": "http://<this-computer>:8888", "token": "<token>"}
