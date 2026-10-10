@@ -3090,8 +3090,6 @@ class StatsDialog(tk.Toplevel):
         body.pack(fill="both", expand=True)
         body.columnconfigure(0, weight=1)
         body.rowconfigure(2, weight=1)
-        self.summary = ttk.Label(body, text="", font=self._bold)
-        self.summary.grid(row=0, column=0, sticky="w", pady=(0, 8))
         self._build_period_bar(body).grid(row=1, column=0, sticky="ew", pady=(0, 8))
 
         self.notebook = ttk.Notebook(body)
@@ -3099,16 +3097,18 @@ class StatsDialog(tk.Toplevel):
 
         overview = ttk.Frame(self.notebook, padding=8)
         overview.columnconfigure(0, weight=1)
-        overview.rowconfigure(2, weight=1)
+        overview.rowconfigure(3, weight=1)
+        self.summary = ttk.Label(overview, text="", font=self._bold)
+        self.summary.grid(row=0, column=0, sticky="w", pady=(0, 4))
         self.overview_text = tk.Text(overview, width=96, height=11, wrap="word", state="disabled", relief="flat",
                                      borderwidth=0, font="TkDefaultFont", background=self.cget("background"))
-        self.overview_text.grid(row=0, column=0, sticky="ew")
+        self.overview_text.grid(row=1, column=0, sticky="ew")
         self.overview_text.tag_configure("heading", font=self._bold, spacing1=6, spacing3=2)
         self._overview_width = 0
         self.overview_text.bind("<Configure>", self._on_overview_resized)  # lines re-wrap when the width changes
         self.overview_text.bind("<MouseWheel>", lambda _event: "break")  # it is sized to fit, never scrolled
-        ttk.Label(overview, text="Activity", font=self._bold).grid(row=1, column=0, sticky="w", pady=(10, 2))
-        self.periods = self._make_table(overview, stats.PERIOD_HEADERS, row=2)
+        ttk.Label(overview, text="Activity", font=self._bold).grid(row=2, column=0, sticky="w", pady=(10, 2))
+        self.periods = self._make_table(overview, stats.PERIOD_HEADERS, row=3)
         self.notebook.add(overview, text="Overview")
 
         busiest = ttk.Frame(self.notebook, padding=8)
@@ -3193,10 +3193,10 @@ class StatsDialog(tk.Toplevel):
                 button.pack(side="left")
                 self._calendar_buttons.append(button)
             ttk.Frame(bar, width=10).pack(side="left")
+        hint = "dates as YYYY-MM-DD; empty = no limit" if calendar_module() is None else "pick a day or type YYYY-MM-DD"
+        ttk.Label(bar, text=hint, foreground=COLOR_MUTED).pack(side="left", padx=(0, 12))
         self.period_message = ttk.Label(bar, text="", foreground=COLOR_ERROR)
         self.period_message.pack(side="left")
-        hint = "dates as YYYY-MM-DD; empty = no limit" if calendar_module() is None else "pick a day or type YYYY-MM-DD"
-        ttk.Label(bar, text=hint, foreground=COLOR_MUTED).pack(side="right")
         return bar
 
     def _close_picker(self) -> None:

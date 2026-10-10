@@ -422,6 +422,8 @@ Key behavior:
 
 A passive page that shows what the daemon is doing, in a browser, from any computer: the daemon's status, the Mappings table and the Warnings, Completed, Folder limits and Unmapped lists, as in the GUI. It can only *look*: it has no buttons, cannot control the daemon and cannot even reach it.
 
+![The web viewer](docs/screenshots/Viewer.png)
+
 How it works: the **daemon connects out** to the viewer (`viewer.url`) and sends a read-only snapshot when something changed, plus a small heartbeat every 15 seconds, and says goodbye when it stops cleanly. The viewer keeps only the latest snapshot per daemon, in memory. The daemon opens no port, so there is no firewall rule to add on its computer and nothing listens on the machine that holds your Gmail and GitHub logins. The viewer is one standard-library file, `ghaadd_viewer.py`, that you can run anywhere (a headless Debian server, a NAS, Docker). It lives in the `viewer` folder together with its Docker files, its token folder (`config`), its icon (`assets`, copies of the app's own) and its own README (`viewer/README.md`), so you can copy just that folder to the server.
 
 Set it up:
