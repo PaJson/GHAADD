@@ -11,8 +11,11 @@
 # otherwise leave the container looking at the old one. Copy this whole folder (viewer/) to the server.
 services:
   ghaadd-viewer:
+    # Always start it with "docker compose up -d --build": that builds the image first. A plain "up -d" with an
+    # image name that is not on this computer yet tries to pull it from Docker Hub first and prints a harmless
+    # "pull access denied" before it builds. --build is also how a new ghaadd_viewer.py gets into the image.
     build: .
-    image: ghaadd-viewer:local
+    image: ghaadd-viewer:latest
     container_name: ghaadd-viewer
     restart: unless-stopped
     ports:

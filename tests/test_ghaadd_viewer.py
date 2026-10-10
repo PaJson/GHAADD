@@ -749,6 +749,15 @@ class ViewerFolderTests(unittest.TestCase):
         self.assertNotIn(".env:/", compose)
         self.assertEqual(os.path.dirname(ghaadd_viewer.default_env_file()), os.path.join(os.path.dirname(os.path.abspath(ghaadd_viewer.__file__)), "config"))
 
+    def test_the_compose_file_builds_the_local_image_and_says_to_use_build(self) -> None:
+        compose = self.read("docker-compose.yml")
+        self.assertIn("    build: .", compose)
+        self.assertIn("    image: ghaadd-viewer:latest", compose)
+        # Without --build, a name that is not on the computer yet is first looked for on Docker Hub (a harmless
+        # "pull access denied" before the build); the file says how to avoid it, and so do the READMEs.
+        self.assertIn("docker compose up -d --build", compose)
+        self.assertIn("docker compose up -d --build", self.read("README.md"))
+
     def test_the_compose_file_mounts_the_icons_read_only_too(self) -> None:
         self.assertIn("./assets:/app/assets:ro", self.read("docker-compose.yml"))
 
