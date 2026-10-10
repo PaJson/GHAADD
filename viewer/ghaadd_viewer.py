@@ -8,8 +8,11 @@ stops sending (or says goodbye) is shown as lost (or stopped), never with its ol
 
     python ghaadd_viewer.py --token SECRET [--port 8888] [--host 0.0.0.0] [--lost-after 45]
 
-Settings can also come from the environment (GHAADD_VIEWER_TOKENS = comma separated, GHAADD_VIEWER_PORT,
-GHAADD_VIEWER_HOST, GHAADD_VIEWER_LOST_AFTER), which is how the Docker setup passes them.
+Tokens: a token is either plain (any daemon may use it) or ``name=token`` (only the daemon with that name may). They can
+be given with --token, in GHAADD_VIEWER_TOKENS (separated by comma, semicolon or new line) and in the file
+``config/.env`` beside this script: the only file it reads, re-read when it changes, so add or remove a token there and
+the viewer follows, no restart. (The Docker setup mounts its config folder at /app/config.) Other settings:
+GHAADD_VIEWER_PORT, GHAADD_VIEWER_HOST, GHAADD_VIEWER_LOST_AFTER (that is how the Docker setup passes them).
 """
 
 from __future__ import annotations
@@ -22,8 +25,9 @@ import re
 import sys
 import threading
 import time
+from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Iterable, Optional, Union
 
 VIEWER_VERSION = "1.0"
 SCHEMA = 1  # the daemon's message format this viewer understands
@@ -33,8 +37,17 @@ DEFAULT_LOST_AFTER_SECONDS = 45.0  # about three missed 15 s heartbeats
 MIN_TOKEN_LENGTH = 16
 MAX_BODY_BYTES = 5 * 1024 * 1024
 MAX_DAEMONS = 20
+MAX_REJECTED = 20  # distinct rejected senders remembered for the page
+REJECTED_SHOWN_SECONDS = 3600.0  # a rejected sender that has not tried again for this long is forgotten
 MAX_ROWS = 5000
 MAX_TEXT = 2000
+TOKENS_KEY = "GHAADD_VIEWER_TOKENS"
+TOKEN_FILE_CHECK_SECONDS = 2.0  # how often the token file is looked at (a change is picked up within this time)
+ANY_NAME = "*"  # a plain token is the same as "*=token"
+# The icon files in the assets folder beside this script, by the address they are served on. Fixed names only:
+# nothing a request says is ever used as a file name.
+ICONS = {"/favicon.ico": ("ghaadd.ico", "image/x-icon"), "/icon.png": ("ghaadd.png", "image/png")}
+ICON_CACHE_SECONDS = 86400
 
 EVENT_TABS = ("warnings", "completed", "limits")
 REPO_TEXT_FIELDS = ("repo", "folder", "status", "tag", "last_check", "step", "next_check", "files", "limit")
@@ -93,6 +106,178 @@ def clean_data(raw: Any) -> dict[str, Any]:
     }
 
 
+@dataclass(frozen=True)
+class TokenEntry:
+    """One accepted token and the daemon name it is for (lower-cased; ANY_NAME = every name)."""
+    name: str
+    token: bytes
+
+
+def split_items(text: str) -> list[str]:
+    """Split a list of tokens at commas, semicolons and line breaks; empty items are dropped."""
+    return [item.strip() for item in re.split(r"[,;\r\n]+", text) if item.strip()]
+
+
+def parse_entries(items: Iterable[str]) -> tuple[list[TokenEntry], list[str]]:
+    """Turn "token" / "name=token" items into entries; the second result lists what was wrong (never a token's text)."""
+    entries: list[TokenEntry] = []
+    problems: list[str] = []
+    for item in items:
+        name, separator, token = item.strip().partition("=")
+        if not separator:
+            name, token = ANY_NAME, item.strip()
+        name, token = name.strip(), token.strip()
+        if not name or re.search(r"\s", name):
+            problems.append("an entry has no usable name before the '=' (use name=token, or just the token)")
+        elif len(token) < MIN_TOKEN_LENGTH or re.search(r"\s", token):
+            who = "a token" if name == ANY_NAME else f"the token for '{name}'"
+            problems.append(f"{who} must be at least {MIN_TOKEN_LENGTH} characters without spaces")
+        else:
+            entries.append(TokenEntry(name.casefold() if name != ANY_NAME else ANY_NAME, token.encode("utf-8")))
+    return entries, problems
+
+
+def read_env_value(text: str, key: str) -> Optional[str]:
+    """Return the value of `key` in the text of a .env file (the last assignment wins), or None when it is not there.
+
+    Understands comments, an "export " prefix, quotes (also around a value that continues over several lines) and
+    a trailing " # comment" after an unquoted value.
+    """
+    value: Optional[str] = None
+    lines = text.splitlines()
+    index = 0
+    while index < len(lines):
+        line = lines[index].strip()
+        index += 1
+        if line.startswith("export "):
+            line = line[len("export "):].lstrip()
+        name, separator, rest = line.partition("=")
+        if not separator or line.startswith("#") or name.strip() != key:
+            continue
+        rest = rest.strip()
+        if rest[:1] in ("'", '"'):
+            quote, body = rest[0], rest[1:]
+            while quote not in body and index < len(lines):  # a quoted value may continue on the next lines
+                body += "\n" + lines[index]
+                index += 1
+            end = body.find(quote)
+            value = body if end < 0 else body[:end]
+        else:
+            comment = rest.find(" #")
+            value = (rest if comment < 0 else rest[:comment]).strip()
+    return value
+
+
+class TokenBook:
+    """The accepted tokens: those given at start plus those in a file that is re-read when it changes (thread-safe).
+
+    A token can be tied to one daemon name; checks never stop at the first match, so timing says nothing.
+    """
+
+    def __init__(
+        self, static: Iterable[str] = (), env_file: Optional[str] = None, clock: Callable[[], float] = time.monotonic
+    ) -> None:
+        """Parse the start-up items and, when there is a file, read it once; `clock` is injectable for the tests."""
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._static, self._static_problems = parse_entries(static)
+        self._file_problems: list[str] = []
+        self._file_entries: list[TokenEntry] = []
+        self._env_file = env_file
+        self._signature: Optional[tuple[int, int, int]] = None
+        self._checked_at = float("-inf")
+        self._file_warned = False
+        if env_file:
+            self._reload(first=True)
+
+    def _read_file(self) -> Optional[list[TokenEntry]]:
+        """The entries in the file (empty when it has no token setting), or None when it cannot be read right now."""
+        assert self._env_file is not None
+        try:
+            with open(self._env_file, encoding="utf-8") as handle:
+                text = handle.read()
+        except (OSError, UnicodeDecodeError):
+            return None
+        entries, problems = parse_entries(split_items(read_env_value(text, TOKENS_KEY) or ""))
+        for problem in problems:
+            print(f"Token file {self._env_file}: {problem}.", flush=True)
+        self._file_problems = problems  # only the latest reading counts: a fixed file has no problems any more
+        return entries
+
+    @property
+    def problems(self) -> list[str]:
+        """What is wrong with the tokens given at start and with the file as last read (never the tokens' text)."""
+        return self._static_problems + self._file_problems
+
+    def _reload(self, first: bool = False) -> None:
+        """Read the file when it is new or changed; a file that cannot be read keeps the tokens from before."""
+        assert self._env_file is not None
+        try:
+            stat = os.stat(self._env_file)
+        except OSError:
+            if first or self._signature is None:
+                return  # there never was a file: the tokens given at start are all there is
+            if not self._file_warned:
+                self._file_warned = True
+                print(f"Token file {self._env_file} cannot be read: keeping the tokens known so far.", flush=True)
+            return
+        signature = (stat.st_mtime_ns, stat.st_size, stat.st_ino)
+        if signature == self._signature:
+            return
+        entries = self._read_file()
+        if entries is None:
+            return
+        self._signature = signature
+        self._file_warned = False
+        before = {(entry.name, entry.token) for entry in self._file_entries}
+        after = {(entry.name, entry.token) for entry in entries}
+        self._file_entries = entries
+        if not first:
+            print(
+                f"Token file re-read: {len(after)} token(s), {len(after - before)} added, {len(before - after)} removed.",
+                flush=True,
+            )
+
+    def _refresh(self) -> None:
+        """Look at the file now and then (not on every request)."""
+        if not self._env_file:
+            return
+        now = self._clock()
+        with self._lock:
+            if now - self._checked_at < TOKEN_FILE_CHECK_SECONDS:
+                return
+            self._checked_at = now
+            self._reload()
+
+    def entries(self) -> list[TokenEntry]:
+        """Every token accepted right now."""
+        self._refresh()
+        with self._lock:
+            return self._static + self._file_entries
+
+    def check(self, token: str, name: str = "") -> str:
+        """Return "ok", "wrong_name" (a known token, but for another daemon) or "unknown".
+
+        Without a name only the token itself can be judged, so a token tied to some name counts as fine.
+        """
+        given = token.encode("utf-8")
+        wanted = name.strip().casefold()
+        matched = allowed = False
+        for entry in self.entries():
+            if hmac.compare_digest(given, entry.token):
+                matched = True
+                if not wanted or entry.name in (ANY_NAME, wanted):
+                    allowed = True
+        return "ok" if allowed else "wrong_name" if matched else "unknown"
+
+    def summary(self) -> str:
+        """One line for the start-up message: how many tokens, how many tied to a name (never the tokens)."""
+        entries = self.entries()
+        tied = sum(1 for entry in entries if entry.name != ANY_NAME)
+        file_note = f"; the file {self._env_file} is re-read when it changes" if self._env_file else ""
+        return f"{len(entries)} token(s), {tied} tied to a daemon name{file_note}"
+
+
 class _Daemon:
     """What the viewer remembers about one daemon: its latest snapshot and when it last made itself heard."""
 
@@ -115,6 +300,26 @@ class Store:
         self._clock = clock
         self._lock = threading.Lock()
         self._daemons: dict[str, _Daemon] = {}
+        # Senders whose token was refused, by (claimed name, address): shown on the page, never mixed with real daemons.
+        self._rejected: dict[tuple[str, str], dict[str, Any]] = {}
+
+    def note_rejection(self, name: str, address: str, reason: str) -> None:
+        """Remember that `name` at `address` was refused (the name is only what the sender claimed)."""
+        name = _CONTROL_CHARACTERS.sub("", name).strip()[:64] or "(no name)"
+        address = _CONTROL_CHARACTERS.sub("", address)[:64]
+        now = self._clock()
+        key = (name, address)
+        with self._lock:
+            record = self._rejected.get(key)
+            if record is None or record["reason"] != reason:  # new, or refused for a different reason: say so once
+                print(f"Rejected '{name}' from {address}: {reason}.", flush=True)
+                if key not in self._rejected and len(self._rejected) >= MAX_REJECTED:
+                    quietest = min(self._rejected, key=lambda other: self._rejected[other]["last"])
+                    del self._rejected[quietest]
+                record = {"name": name, "address": address, "reason": reason, "count": 0, "last": now}
+                self._rejected[key] = record
+            record["count"] += 1
+            record["last"] = now
 
     def receive(self, message: Any) -> dict[str, Any]:
         """Take one message (snapshot, heartbeat or goodbye); return the answer for the daemon, or raise ValueError."""
@@ -133,6 +338,9 @@ class Store:
         data = clean_data(message.get("data")) if kind == "snapshot" else None
         now = self._clock()
         with self._lock:
+            # A daemon that gets through again is no longer a rejected one (a fixed or restored token).
+            for key in [key for key in self._rejected if key[0] == name]:
+                del self._rejected[key]
             daemon = self._daemons.get(name)
             if kind == "snapshot":
                 if daemon is None:
@@ -181,10 +389,23 @@ class Store:
                         status["next_poll_in"] = None
                     entry["data"] = data
                 entries.append(entry)
-        return {"viewer_version": VIEWER_VERSION, "lost_after": self.lost_after, "daemons": entries}
+        rejected = self.rejected()
+        return {"viewer_version": VIEWER_VERSION, "lost_after": self.lost_after, "daemons": entries, "rejected": rejected}
+
+    def rejected(self) -> list[dict[str, Any]]:
+        """The senders refused lately, newest first; one that has not tried again for an hour is forgotten."""
+        now = self._clock()
+        with self._lock:
+            for key in [key for key, record in self._rejected.items() if now - record["last"] > REJECTED_SHOWN_SECONDS]:
+                del self._rejected[key]
+            records = sorted(self._rejected.values(), key=lambda record: record["last"], reverse=True)
+            return [
+                {"name": r["name"], "address": r["address"], "reason": r["reason"], "count": r["count"], "age": round(now - r["last"], 1)}
+                for r in records
+            ]
 
 
-def _make_handler(store: Store, tokens: list[bytes]) -> type[BaseHTTPRequestHandler]:
+def _make_handler(store: Store, book: TokenBook) -> type[BaseHTTPRequestHandler]:
     """Build the request handler class: the page and its data for everyone, snapshots only with a known token."""
 
     class Handler(BaseHTTPRequestHandler):
@@ -195,17 +416,17 @@ def _make_handler(store: Store, tokens: list[bytes]) -> type[BaseHTTPRequestHand
         def log_message(self, format: str, *args: Any) -> None:
             """Stay silent: the page asks every few seconds and would fill the log."""
 
-        def _send(self, code: int, body: bytes, content_type: str) -> None:
-            """Write a response with the headers every answer carries."""
+        def _send(self, code: int, body: bytes, content_type: str, cache_seconds: int = 0) -> None:
+            """Write a response with the headers every answer carries (only the icons may be cached)."""
             self.send_response(code)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
+            self.send_header("Cache-Control", f"public, max-age={cache_seconds}" if cache_seconds else "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Referrer-Policy", "no-referrer")
             self.send_header(
                 "Content-Security-Policy",
-                "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'",
+                "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self'",
             )
             self.end_headers()
             if self.command != "HEAD":
@@ -231,18 +452,24 @@ def _make_handler(store: Store, tokens: list[bytes]) -> type[BaseHTTPRequestHand
                 self._send(200, PAGE.encode("utf-8"), "text/html; charset=utf-8")
             elif path == "/healthz":
                 self._send(200, b"ok", "text/plain; charset=utf-8")
+            elif path in ICONS:
+                file_name, content_type = ICONS[path]
+                try:
+                    with open(os.path.join(assets_dir(), file_name), "rb") as handle:
+                        icon = handle.read()
+                except OSError:  # no assets folder (for example not mounted): the page just has no icon
+                    self._fail(404, "not found")
+                else:
+                    self._send(200, icon, content_type, ICON_CACHE_SECONDS)
             elif path == "/api/view":
                 self._json(store.view())
             else:
                 self._fail(404, "not found")
 
-        def _authorized(self) -> bool:
-            """Return True when the request carries one of the accepted tokens (compared in constant time)."""
+        def _token(self) -> str:
+            """The bearer token of the request ("" when there is none)."""
             header = self.headers.get("Authorization", "")
-            if not header.startswith("Bearer "):
-                return False
-            given = header[len("Bearer "):].strip().encode("utf-8")
-            return any([hmac.compare_digest(given, token) for token in tokens])
+            return header[len("Bearer "):].strip() if header.startswith("Bearer ") else ""
 
         def _read_body(self) -> Optional[bytes]:
             """Read the request body (at most MAX_BODY_BYTES); on a missing or oversized length answer and return None.
@@ -268,12 +495,27 @@ def _make_handler(store: Store, tokens: list[bytes]) -> type[BaseHTTPRequestHand
             if self.path.split("?", 1)[0] != "/api/snapshot":
                 self._fail(404, "not found")
                 return
-            if not self._authorized():
-                self._fail(401, "token rejected")
+            try:
+                message: Any = json.loads(body.decode("utf-8"))
+            except (ValueError, UnicodeDecodeError):
+                message = None  # judged below: the token is checked first, a bad body is only the business of a known sender
+            # The name is what the sender claims: it is only used to tie a token to a daemon and to tell who was refused.
+            claimed = _text(message.get("name")) if isinstance(message, dict) else ""
+            verdict = book.check(self._token(), claimed)
+            if verdict != "ok":
+                address = str(self.client_address[0])
+                if verdict == "unknown":
+                    store.note_rejection(claimed, address, "token not accepted")
+                    self._fail(401, "token rejected")
+                else:
+                    store.note_rejection(claimed, address, f"this token is not allowed for the name '{claimed}'")
+                    self._fail(403, "token not allowed for this name")
                 return
             try:
-                answer = store.receive(json.loads(body.decode("utf-8")))
-            except (ValueError, UnicodeDecodeError) as exc:  # includes JSON errors
+                if message is None:
+                    raise ValueError("the message is not valid JSON")
+                answer = store.receive(message)
+            except ValueError as exc:
                 self._fail(400, str(exc))
                 return
             self._json(answer)
@@ -295,23 +537,39 @@ class _Server(ThreadingHTTPServer):
     allow_reuse_address = os.name != "nt"  # on Windows SO_REUSEADDR would let a second server bind the same port
 
 
-def make_server(host: str, port: int, store: Store, tokens: list[str]) -> ThreadingHTTPServer:
-    """Create (but do not start) the server; raises OSError when the port cannot be opened."""
-    return _Server((host, port), _make_handler(store, [token.encode("utf-8") for token in tokens]))
+def make_server(host: str, port: int, store: Store, tokens: Union[TokenBook, Iterable[str]]) -> ThreadingHTTPServer:
+    """Create (but do not start) the server; `tokens` is a TokenBook or plain items ("token" / "name=token").
+
+    Raises OSError when the port cannot be opened.
+    """
+    book = tokens if isinstance(tokens, TokenBook) else TokenBook(tokens)
+    return _Server((host, port), _make_handler(store, book))
 
 
 def collect_tokens(given: list[str], environment: Optional[str]) -> list[str]:
-    """Merge the --token values and the comma-separated environment value into the list of accepted tokens."""
-    tokens = [token.strip() for token in given]
-    tokens += [token.strip() for token in (environment or "").split(",")]
-    return [token for token in dict.fromkeys(tokens) if token]
+    """Merge the --token values and the environment value (comma, semicolon or line separated) into one list."""
+    items = [item for value in given for item in split_items(value)] + split_items(environment or "")
+    return list(dict.fromkeys(items))
+
+
+def assets_dir() -> str:
+    """The folder with the icons: assets beside this script (mounted read-only in the Docker setup)."""
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+
+
+def default_env_file() -> str:
+    """The one token file: config/.env beside this script (not the current folder, so it is found from anywhere)."""
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "config", ".env")
 
 
 def parse_args(argv: list[str], environ: Optional[dict[str, str]] = None) -> argparse.Namespace:
     """Read the command line; the environment supplies the defaults (that is how the Docker setup configures it)."""
     environ = dict(os.environ) if environ is None else environ
     parser = argparse.ArgumentParser(description="Passive web viewer for a GHAADD daemon (read-only, no controls).")
-    parser.add_argument("--token", action="append", default=[], help="A token a daemon may send data with (repeatable).")
+    parser.add_argument(
+        "--token", action="append", default=[],
+        help="A token a daemon may send data with: TOKEN (any daemon) or NAME=TOKEN (only that daemon). Repeatable.",
+    )
     parser.add_argument("--port", type=int, default=int(environ.get("GHAADD_VIEWER_PORT") or DEFAULT_PORT))
     parser.add_argument("--host", default=environ.get("GHAADD_VIEWER_HOST") or DEFAULT_HOST, help="Address to listen on.")
     parser.add_argument(
@@ -326,19 +584,27 @@ def parse_args(argv: list[str], environ: Optional[dict[str, str]] = None) -> arg
 def main(argv: Optional[list[str]] = None) -> int:
     """Start the viewer and serve until interrupted; returns the exit status."""
     args = parse_args(sys.argv[1:] if argv is None else argv)
-    if not args.tokens:
-        print("No token given: use --token SECRET (or GHAADD_VIEWER_TOKENS). The daemon sends the same value as viewer.token.", file=sys.stderr)
+    env_file = default_env_file()
+    book = TokenBook(args.tokens, env_file=env_file)
+    if book.problems:
+        for problem in book.problems:
+            print(f"Token problem: {problem} (python main.py --new-viewer-token makes a good one).", file=sys.stderr)
         return 2
-    if any(len(token) < MIN_TOKEN_LENGTH for token in args.tokens):
-        print(f"A token must be at least {MIN_TOKEN_LENGTH} characters (python main.py --new-viewer-token makes a good one).", file=sys.stderr)
+    if not book.entries():
+        print(
+            f"No token given: use --token SECRET, {TOKENS_KEY}, or a {TOKENS_KEY}=... line in {env_file}. "
+            "The daemon sends the same value as viewer.token.",
+            file=sys.stderr,
+        )
         return 2
     store = Store(lost_after=args.lost_after)
     try:
-        server = make_server(args.host, args.port, store, args.tokens)
+        server = make_server(args.host, args.port, store, book)
     except OSError as exc:
         print(f"Cannot listen on {args.host}:{args.port}: {exc}", file=sys.stderr)
         return 1
     print(f"GHAADD viewer {VIEWER_VERSION} listening on {args.host}:{args.port} (read-only; daemons are 'lost' after {args.lost_after:g} s).", flush=True)
+    print(f"Accepting {book.summary()}.", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -354,6 +620,9 @@ PAGE = r"""<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GHAADD viewer</title>
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="icon" type="image/png" href="/icon.png">
+<link rel="apple-touch-icon" href="/icon.png">
 <style>
 :root {
   --bg: #f5f6f8; --panel: #ffffff; --text: #1b1f24; --muted: #5d6673; --line: #d9dde3;
@@ -382,7 +651,13 @@ nav button[aria-selected="true"] { border-bottom-color: var(--accent); color: va
 nav input { margin-left: auto; min-width: 160px; }
 .banner { padding: 14px 16px; border-radius: 8px; border: 1px solid var(--bad); color: var(--bad); background: var(--panel); font-weight: 600; margin: 8px 0; }
 .banner small { display: block; color: var(--muted); font-weight: 400; margin-top: 4px; }
-.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; }
+.rejected { padding: 10px 16px; border-radius: 8px; border: 1px solid var(--warn); background: var(--warnbg); margin: 8px 0; }
+.rejected h2 { margin: 0 0 4px; font-size: 13px; color: var(--warn); }
+.rejected div { padding: 2px 0; }
+.rejected small { color: var(--muted); }
+.cards { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
+.cards.second { margin-top: 12px; }
+@media (max-width: 1000px) { .cards { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); } }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
 .card h2 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
 .card .big { font-size: 20px; font-weight: 600; word-break: break-word; }
@@ -405,6 +680,7 @@ td.nowrap { white-space: nowrap; }
   <span class="pill down" id="pill">connecting…</span>
 </header>
 <main>
+  <div id="rejected"></div>
   <div id="banner"></div>
   <nav><span id="tabs"></span><input id="filter" type="search" placeholder="Filter…" hidden></nav>
   <div id="content"></div>
@@ -468,6 +744,21 @@ function banner(text, detail) {
 
 let navKey = "";
 
+function renderRejected(list) {
+  // Senders whose token was refused: shown apart from the daemons (what they claim to be is not trusted).
+  const box = $("rejected");
+  box.replaceChildren();
+  if (!list || !list.length) return;
+  const panel = el("div", null, "rejected");
+  panel.appendChild(el("h2", "Rejected connections"));
+  for (const item of list) {
+    const line = el("div", item.name + " (" + item.address + "): " + item.reason + " ");
+    line.appendChild(el("small", "— " + item.count + (item.count === 1 ? " attempt" : " attempts") + ", last " + duration(item.age) + " ago"));
+    panel.appendChild(line);
+  }
+  box.appendChild(panel);
+}
+
 function buildNav(data) {
   // The tab buttons are rebuilt only when their text changes, and the filter box is never rebuilt:
   // otherwise it would lose the focus every refresh while someone types in it.
@@ -501,26 +792,29 @@ function card(title, value) {
 
 function renderOverview(daemon, data) {
   const status = data.status;
-  const cards = el("div", null, "cards");
+  // Two rows on the same five-column grid: what the daemon is doing, then the sizes of the lists.
+  const doing = el("div", null, "cards");
+  const lists = el("div", null, "cards second");
   const [c1] = card("Daemon", daemon.name + (daemon.version ? " · GHAADD " + daemon.version : ""));
-  cards.appendChild(c1);
   if (status.started_at) c1.appendChild(el("div", "Started " + new Date(status.started_at * 1000).toLocaleString()));
   const polling = status.paused ? "Paused" : status.idle ? "Polling is off: only on Poll now" : "Polling";
   const [c2] = card("Polling", polling);
-  cards.appendChild(c2);
   if (status.next_poll_in !== null && status.next_poll_in !== undefined) {
     const next = el("div", null, null);
     next.id = "countdown";
     c2.appendChild(next);
   }
-  cards.appendChild(card("Working on", status.progress || "Nothing right now")[0]);
-  cards.appendChild(card("Queue", status.queue || "—")[0]);
+  doing.appendChild(c1);
+  doing.appendChild(card("Repositories", String(data.repos.length))[0]);
+  doing.appendChild(c2);
+  doing.appendChild(card("Working on", status.progress || "Nothing right now")[0]);
+  doing.appendChild(card("Queue", status.queue || "—")[0]);
   const counts = [
-    ["Repositories", data.repos.length], ["Warnings", data.tabs.warnings.length], ["Completed", data.tabs.completed.length],
+    ["Warnings", data.tabs.warnings.length], ["Completed", data.tabs.completed.length],
     ["Folder limits", data.tabs.limits.length], ["Unmapped", data.tabs.unmapped.length],
   ];
-  for (const [title, value] of counts) cards.appendChild(card(title, String(value))[0]);
-  $("content").replaceChildren(cards);
+  for (const [title, value] of counts) lists.appendChild(card(title, String(value))[0]);
+  $("content").replaceChildren(doing, lists);
   tickCountdown();
 }
 
@@ -577,10 +871,12 @@ function render() {
     setPill("viewer unreachable", "down");
     banner("Cannot reach the viewer.", "This page cannot get data from the server it came from. Retrying…");
     select.hidden = true;
+    renderRejected(null);
     buildNav(null); renderContent(null);
     return;
   }
   $("version").textContent = "viewer " + view.viewer_version;
+  renderRejected(view.rejected);
   const names = view.daemons.map((d) => d.name).join("\n");
   if (select.dataset.names !== names) {
     select.dataset.names = names;

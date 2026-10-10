@@ -123,7 +123,7 @@ class DescribePushTests(unittest.TestCase):
 
 
 class CheckViewerTests(unittest.TestCase):
-    def check(self, url: str = "http://nas:8888", token: str = TOKEN, answer: Any = None) -> Any:
+    def check(self, url: str = "http://nas:8888", token: str = TOKEN, answer: Any = None, name: str = "") -> Any:
         calls: list[tuple] = []
 
         def post(address: str, message: dict[str, Any], given: str, timeout: float) -> dict[str, Any]:
@@ -132,13 +132,18 @@ class CheckViewerTests(unittest.TestCase):
                 raise answer
             return {"ok": True}
 
-        result = gui_viewer.check_viewer(url, token, post=post)
+        result = gui_viewer.check_viewer(url, token, name, post=post)
         return result, calls
 
     def test_a_good_answer_is_a_success_and_only_a_ping_is_sent(self) -> None:
         result, calls = self.check(url=" http://nas:8888/ ")
         self.assertTrue(result.ok)
-        self.assertEqual(calls, [("http://nas:8888", {"schema": 1, "type": "ping"}, TOKEN)])  # nothing that could look like a daemon
+        # Only a ping (nothing that could look like a daemon); it carries the daemon's name so a token tied to a name is tested.
+        self.assertEqual(calls, [("http://nas:8888", {"schema": 1, "type": "ping", "name": gui_viewer.computer_name()}, TOKEN)])
+
+    def test_the_typed_name_is_what_the_viewer_is_asked_about(self) -> None:
+        _, calls = self.check(name="  home-pc ")
+        self.assertEqual(calls[0][1]["name"], "home-pc")
 
     def test_problems_are_said_plainly(self) -> None:
         result, _ = self.check(answer=PushError("the viewer rejected the token"))

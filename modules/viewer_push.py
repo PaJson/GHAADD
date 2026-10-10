@@ -49,6 +49,20 @@ class PushError(Exception):
     """A message could not be delivered (the text is safe to print: it never contains the token)."""
 
 
+def _say(text: str) -> None:
+    """Print a line for the console without ever raising.
+
+    A console that cannot show a character (an old code page) or has been closed must not be able to stop the sender.
+    """
+    try:
+        print(text, flush=True)
+    except (UnicodeError, OSError, ValueError):
+        try:
+            print(text.encode("ascii", "replace").decode("ascii"), flush=True)
+        except (OSError, ValueError):
+            pass  # nowhere to write: the status file still carries the state
+
+
 def redact_paths(text: str) -> str:
     """Replace every absolute path in a message with <path>."""
     return _PATH_PATTERN.sub("<path>", text or "")
@@ -128,8 +142,10 @@ def post_message(url: str, message: dict[str, Any], token: str, timeout: float) 
         )
     except requests.RequestException as exc:
         raise PushError(f"cannot reach the viewer ({exc.__class__.__name__})") from None
-    if response.status_code in (401, 403):
+    if response.status_code == 401:
         raise PushError("the viewer rejected the token")
+    if response.status_code == 403:
+        raise PushError("the viewer does not accept this token for this daemon name")
     if response.status_code != 200:
         raise PushError(f"the viewer answered HTTP {response.status_code}")
     try:
@@ -218,13 +234,13 @@ class ViewerPusher:
         want = configured if override is None else override
         if want and not self.active:
             if self.start():
-                print(
+                _say(
                     f"📡 Viewer push switched on ({self.settings['url']})" + (" (config default)." if override is None else ".")
                 )
             else:
-                print(f"📡 Viewer push cannot start: {self.error}.")
+                _say(f"📡 Viewer push cannot start: {self.error}.")
         elif not want and self.active:
-            print("📡 Viewer push switched off" + (" (config default)." if override is None else "."))
+            _say("📡 Viewer push switched off" + (" (config default)." if override is None else "."))
             self.stop()
         return self.active
 
@@ -260,7 +276,7 @@ class ViewerPusher:
             self._last_digest = digest
         self._need_snapshot = bool(answer.get("need_snapshot"))
         if self.error:
-            print("📡 Viewer push: the viewer is reachable again.")
+            _say("📡 Viewer push: the viewer is reachable again.")
         self._failures = 0
         self.error = ""
         self.last_ok = time.time()
@@ -278,7 +294,7 @@ class ViewerPusher:
     def _note_error(self, text: str) -> None:
         """Remember why pushing fails; the console hears about a new reason once, not on every attempt."""
         if text != self.error:
-            print(f"📡 Viewer push: {text}. Trying again shortly; polling is not affected.")
+            _say(f"📡 Viewer push: {text}. Trying again shortly; polling is not affected.")
         self.error = text
         self._publish()
 
@@ -293,5 +309,8 @@ class ViewerPusher:
             try:
                 self.push_once()
             except Exception as exc:  # the sender must never end by accident; it only reports
-                self._note_error(f"unexpected problem ({exc.__class__.__name__}: {exc})")
+                try:
+                    self._note_error(f"unexpected problem ({exc.__class__.__name__}: {exc})")
+                except Exception:  # not even a failing report may end it
+                    pass
             self._stop_event.wait(TICK_SECONDS)

@@ -2715,7 +2715,7 @@ class ViewerDialog(tk.Toplevel):
         ttk.Button(token_buttons, text="Copy", width=6, command=self._copy_token).grid(row=0, column=2)
         ttk.Label(
             send,
-            text="The same secret must be given to the viewer (--token, or GHAADD_VIEWER_TOKENS in Docker). "
+            text="The viewer needs the same token in its .env file, as name=token (only this daemon) or plain. "
             "It is stored in config.json, and so in backups.",
             foreground=COLOR_MUTED, wraplength=720, justify="left",
         ).grid(row=6, column=1, columnspan=2, sticky="w", pady=(2, 0))
@@ -2809,7 +2809,7 @@ class ViewerDialog(tk.Toplevel):
         def run() -> None:
             """Thread body: run the check and queue its result (an exception becomes a failed result)."""
             try:
-                self._answer.append(gui_viewer.check_viewer(values["url"], values["token"]))
+                self._answer.append(gui_viewer.check_viewer(values["url"], values["token"], values["name"]))
             except Exception as exc:  # shown in the window instead of vanishing
                 self._answer.append(connection_tests.ConnectionResult(ok=False, message=f"The test could not run: {exc}"))
 

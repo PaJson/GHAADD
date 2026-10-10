@@ -17,6 +17,9 @@ import main
 from modules import daemon_control, daemon_lock, db_manager
 
 
+_NO_VIEWER = {"enabled": False, "url": "", "token": "", "name": "test"}
+
+
 class PollingLoopStopTests(unittest.TestCase):
     def setUp(self) -> None:
         self._temp_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)  # the loop leaves its connection open
@@ -28,6 +31,8 @@ class PollingLoopStopTests(unittest.TestCase):
             (main, mock.patch.object(main, "is_dry_run", lambda: False)),
             (main, mock.patch.object(main, "get_destination_check_every_n_polls", lambda: 0)),
             (main, mock.patch.object(main, "run_scheduled_backup", lambda: None)),  # never write a real backup
+            # Never the real config.json: with the viewer switched on there, the loop would send to the real viewer.
+            (main, mock.patch.object(main, "get_viewer_settings", lambda: _NO_VIEWER)),
         ):
             replacement.start()
             self.addCleanup(replacement.stop)

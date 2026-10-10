@@ -15,6 +15,9 @@ import main
 from modules import daemon_control, db_manager
 
 
+_NO_VIEWER = {"enabled": False, "url": "", "token": "", "name": "test"}
+
+
 class FolderCheckTriggerTests(unittest.TestCase):
     def setUp(self) -> None:
         self._temp_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
@@ -30,6 +33,8 @@ class FolderCheckTriggerTests(unittest.TestCase):
             mock.patch.object(main, "check_folder_limits", self.limits),
             mock.patch.object(main, "clear_all_resolved_limit_warnings"),
             mock.patch.object(main, "run_scheduled_backup", lambda: None),  # never write a real backup
+            # Never the real config.json: with the viewer switched on there, the loop would send to the real viewer.
+            mock.patch.object(main, "get_viewer_settings", lambda: _NO_VIEWER),
         ):
             patcher.start()
             self.addCleanup(patcher.stop)

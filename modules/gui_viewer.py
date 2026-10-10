@@ -63,15 +63,18 @@ def describe_push(status: Mapping[str, Any], now: float) -> PushView:
     return PushView("The daemon is not sending to the viewer.", False, True, False)
 
 
-def check_viewer(url: str, token: str, post: Poster = post_message) -> ConnectionResult:
-    """Ask the viewer whether it is there and accepts the token (a "ping": nothing is stored or changed there)."""
+def check_viewer(url: str, token: str, name: str = "", post: Poster = post_message) -> ConnectionResult:
+    """Ask the viewer whether it is there and accepts the token for this daemon name (a "ping": nothing is changed there).
+
+    The name (the typed one, else the computer's name) matters because a token can be tied to one daemon name.
+    """
     address = gui_forms.normalize_viewer_url(url)
     if address is None:
         return ConnectionResult(ok=False, message="Enter the viewer address first (like http://192.168.0.100:8888).")
     if not token.strip():
         return ConnectionResult(ok=False, message="Enter the token first (Generate makes one).")
     try:
-        post(address, {"schema": SCHEMA, "type": "ping"}, token.strip(), 5.0)
+        post(address, {"schema": SCHEMA, "type": "ping", "name": name.strip() or computer_name()}, token.strip(), 5.0)
     except PushError as exc:
         text = str(exc)
         return ConnectionResult(ok=False, message=text[:1].upper() + text[1:] + ".")

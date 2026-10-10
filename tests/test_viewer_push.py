@@ -6,6 +6,7 @@ are fakes. Run from the project root: python -m unittest discover -s tests -t .
 import contextlib
 import io
 import json
+import threading
 import unittest
 from typing import Any, Optional
 from unittest import mock
@@ -305,6 +306,53 @@ class PushOnceTests(PusherTestCase):
         self.assertEqual(self.kinds(), ["snapshot"])
 
 
+class ConsoleTrouble(PusherTestCase):
+    """A console that cannot show the message must never be able to stop the sender (found in a live run)."""
+
+    def test_a_console_that_cannot_encode_the_message_is_survived(self) -> None:
+        narrow = io.TextIOWrapper(io.BytesIO(), encoding="ascii")  # strict: the emoji of the message cannot be written
+        self.answers.append(PushError("the viewer rejected the token"))
+        with contextlib.redirect_stdout(narrow):
+            self.pusher.push_once()  # must not raise
+        self.assertEqual(self.pusher.error, "the viewer rejected the token")  # and the state is still recorded
+
+    def test_a_closed_console_is_survived_too(self) -> None:
+        closed = io.StringIO()
+        closed.close()
+        self.answers.append(PushError("cannot reach the viewer (ConnectionError)"))
+        with contextlib.redirect_stdout(closed):
+            self.pusher.push_once()
+        self.assertTrue(self.pusher.error)
+
+    def test_the_thread_goes_on_even_when_reporting_a_problem_fails_as_well(self) -> None:
+        class ThreeTurns(threading.Event):
+            """A stop event that lets the loop turn three times and never really waits."""
+
+            turns = 0
+
+            def is_set(self) -> bool:
+                self.turns += 1
+                return self.turns > 3
+
+            def wait(self, timeout: Optional[float] = None) -> bool:
+                return False
+
+        class Broken(ViewerPusher):
+            """A sender whose look fails, and whose report of that failure fails as well."""
+
+            def push_once(self) -> None:
+                raise RuntimeError("look failed")
+
+            def _note_error(self, text: str) -> None:
+                raise OSError("report failed too")
+
+        pusher = Broken(SETTINGS, builder=self.builder, post=self.post, clock=self.clock)
+        ticks = ThreeTurns()
+        pusher._stop_event = ticks
+        pusher._run()  # returns normally: it died neither on the first failure nor on the failing report
+        self.assertEqual(ticks.turns, 4)
+
+
 class LifecycleTests(PusherTestCase):
     def test_it_will_not_start_without_an_address_or_a_token(self) -> None:
         for changes, expected in (({"url": ""}, "viewer.url"), ({"url": "ftp://x"}, "viewer.url"), ({"token": ""}, "viewer.token")):
@@ -385,9 +433,12 @@ class PostMessageTests(unittest.TestCase):
         self.assertEqual(self.post(FakeResponse(200, {"ok": True, "need_snapshot": True})), {"ok": True, "need_snapshot": True})
 
     def test_a_rejected_token_is_said_plainly(self) -> None:
-        for status in (401, 403):
-            with self.assertRaisesRegex(PushError, "rejected the token"):
-                self.post(FakeResponse(status))
+        with self.assertRaisesRegex(PushError, "rejected the token"):
+            self.post(FakeResponse(401))
+
+    def test_a_token_that_belongs_to_another_name_is_said_plainly(self) -> None:
+        with self.assertRaisesRegex(PushError, "does not accept this token for this daemon name"):
+            self.post(FakeResponse(403))
 
     def test_other_failures_become_push_errors_without_the_token(self) -> None:
         with self.assertRaisesRegex(PushError, "HTTP 500"):
