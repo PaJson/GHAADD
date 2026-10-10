@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable, Iterable, Optional, Union
 
-VIEWER_VERSION = "1.0"
+VIEWER_VERSION = "1.1"
 SCHEMA = 1  # the daemon's message format this viewer understands
 DEFAULT_PORT = 8888
 DEFAULT_HOST = "0.0.0.0"
@@ -620,9 +620,9 @@ PAGE = r"""<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GHAADD viewer</title>
-<link rel="icon" href="/favicon.ico" sizes="any">
-<link rel="icon" type="image/png" href="/icon.png">
-<link rel="apple-touch-icon" href="/icon.png">
+<link rel="icon" href="favicon.ico" sizes="any">
+<link rel="icon" type="image/png" href="icon.png">
+<link rel="apple-touch-icon" href="icon.png">
 <style>
 :root {
   --bg: #f5f6f8; --panel: #ffffff; --text: #1b1f24; --muted: #5d6673; --line: #d9dde3;
@@ -911,7 +911,7 @@ async function refresh() {
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 5000);
-    const response = await fetch("/api/view", { cache: "no-store", signal: controller.signal });
+    const response = await fetch("api/view", { cache: "no-store", signal: controller.signal });
     clearTimeout(timer);
     if (!response.ok) throw new Error("HTTP " + response.status);
     view = await response.json();

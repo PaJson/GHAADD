@@ -692,7 +692,7 @@ class IconTests(ServerTestCase):
 
     def test_the_page_links_the_icons(self) -> None:
         page = self.request("GET", "/", token=None)[2].decode("utf-8")
-        for link in ('href="/favicon.ico"', 'href="/icon.png"'):
+        for link in ('href="favicon.ico"', 'href="icon.png"'):
             self.assertIn(link, page)
 
     def test_without_the_assets_folder_there_is_just_no_icon_and_the_viewer_goes_on(self) -> None:
