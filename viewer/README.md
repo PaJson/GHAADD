@@ -74,6 +74,7 @@ icon. Only those two fixed files are ever served from there.
 | Port | `--port` | `GHAADD_VIEWER_PORT` | 8888 |
 | Address to listen on | `--host` | `GHAADD_VIEWER_HOST` | 0.0.0.0 |
 | Seconds of silence before "no data received" | `--lost-after` | `GHAADD_VIEWER_LOST_AFTER` | 45 |
+| Days before a lost or stopped daemon is forgotten (0 = never) | `--forget-after-days` | `GHAADD_VIEWER_FORGET_AFTER_DAYS` | 7 |
 
 Tokens from all sources count together. At least one valid token is required, and the viewer refuses to start while an
 entry in the start-up tokens or in the file is too short (it says which, never printing the token). Entries that become
@@ -90,6 +91,25 @@ restart the daemon. Or in the daemon's `config.json`:
 ```
 
 `python main.py --push-on` / `--push-off` switch the push of a running daemon.
+
+## Monitoring it (Homer, Uptime Kuma, a script)
+
+`GET /api/health` answers **200** when something is live and nothing was lost, otherwise **503**, with a small JSON body
+(counts and a one-line reason, never any data), so a plain up/down check can tell whether a daemon is really sending:
+
+```json
+{"ok": false, "problem": "lost: home-pc", "live": 0, "lost": 1, "stopped": 0, "total": 1}
+```
+
+- Healthy: at least one daemon is live and none is *lost* (silent without a goodbye).
+- A daemon that stopped cleanly (it said goodbye) is ignored while another one is live; if all of them stopped, or none
+  has ever sent data, it is 503.
+- `/api/health?name=home-pc` checks just that daemon, and it must be live.
+- HEAD and GET both work. In Homer: `type: Ping`, `url:` the viewer page, `endpoint: http://<viewer>:8888/api/health`.
+  `/healthz` stays a plain "the viewer process is up" check.
+
+A daemon that is lost or stopped is dropped from the list after `--forget-after-days` (default 7), so retired or
+renamed daemons do not pile up (the list holds at most 20) and do not keep the health check red.
 
 ## What the page tells you
 

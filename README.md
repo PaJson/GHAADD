@@ -428,7 +428,7 @@ Set it up:
 
 1. Make a token for each daemon on its computer: `python main.py --new-viewer-token`.
 2. Start the viewer where you want to look from (it listens on port 8888). The accepted tokens go in the file `viewer/config/.env` (copy `viewer/config/.env.example`; it is the only file the viewer reads), on one line: `GHAADD_VIEWER_TOKENS=home-pc=<token>; nas=<token>`. `name=token` accepts that token only from the daemon with that name, a plain `token` from any daemon; separate entries with commas, semicolons or new lines. **The viewer re-reads the file when it changes**: add a token to let a new daemon in, delete one to lock a daemon out, no restart.
-   - plain Python 3.10+, no packages: `python3 viewer/ghaadd_viewer.py` (options `--port`, `--host`, `--lost-after`, `--token`; or the environment variables `GHAADD_VIEWER_TOKENS`, `GHAADD_VIEWER_PORT`, `GHAADD_VIEWER_HOST`, `GHAADD_VIEWER_LOST_AFTER`), or
+   - plain Python 3.10+, no packages: `python3 viewer/ghaadd_viewer.py` (options `--port`, `--host`, `--lost-after`, `--forget-after-days`, `--token`; or the environment variables `GHAADD_VIEWER_TOKENS`, `GHAADD_VIEWER_PORT`, `GHAADD_VIEWER_HOST`, `GHAADD_VIEWER_LOST_AFTER`, `GHAADD_VIEWER_FORGET_AFTER_DAYS`), or
    - Docker: copy the `viewer` folder to the server, go into it, copy `config/.env.example` to `config/.env`, put the tokens in it and run `docker compose up -d --build`. The compose file mounts the `config` *folder* read-only at `/app/config`, where the viewer looks, and not the single file (an editor that saves by replacing the file would otherwise be missed by the container). The image holds only the viewer and runs as an unprivileged user with a read-only file system.
 3. Tell the daemon where the viewer is: in the GUI open **Settings → Viewer…**, tick "Send read-only snapshots", enter the address (`http://<viewer-host>:8888`) and the token (Generate makes one; Copy puts it on the clipboard for the viewer), press **Test connection** (it asks the viewer, without changing anything there, whether it is reachable and accepts the token) and Save. Or edit the `viewer` section of config.json by hand (see `config.example.json`). The daemon reads the address and token when it starts, so restart it afterwards (the GUI's Restart button appears by itself). In the same window **Start sending** / **Stop sending** switch the running daemon's push at once (the same as `python main.py --push-on` / `--push-off`), and a line shows what the daemon reports: sending, when it last got through, or why it cannot.
 4. Open `http://<viewer-host>:8888/` in a browser.
@@ -440,6 +440,9 @@ What you see and when:
 - **no data received**: nothing arrived for 45 seconds (about three missed heartbeats; `--lost-after` changes it): the daemon, its computer or the network is down, the push is off, or its token was removed. The viewer never shows old numbers: when the data is not current, it is not shown.
 - **Rejected connections**: a panel at the top lists every sender whose token was refused: the name it claimed, its address, why (the token is not accepted, or is not allowed for that name), how often it tried and when last. The daemon's own Viewer window shows the same reason. An entry disappears when that daemon gets through again, or an hour after its last attempt.
 - **viewer unreachable**: the page itself cannot get data from the viewer.
+- **forgotten**: a daemon that stays lost or stopped for 7 days (`--forget-after-days`, 0 = never) is dropped from the list.
+
+For a dashboard such as Homer, `http://<viewer-host>:8888/api/health` answers 200 while a daemon is live and none was lost, and 503 otherwise (`?name=home-pc` checks one daemon; see `viewer/README.md`). Use it as the Ping card's `endpoint`.
 
 Good to know:
 

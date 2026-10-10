@@ -6,13 +6,13 @@ snapshots of what its GUI shows; this program keeps only the latest one per daem
 that refreshes by itself. It cannot control or even reach the daemon, and it shows no stale data: a daemon that
 stops sending (or says goodbye) is shown as lost (or stopped), never with its old numbers.
 
-    python ghaadd_viewer.py --token SECRET [--port 8888] [--host 0.0.0.0] [--lost-after 45]
+    python ghaadd_viewer.py --token SECRET [--port 8888] [--host 0.0.0.0] [--lost-after 45] [--forget-after-days 7]
 
 Tokens: a token is either plain (any daemon may use it) or ``name=token`` (only the daemon with that name may). They can
 be given with --token, in GHAADD_VIEWER_TOKENS (separated by comma, semicolon or new line) and in the file
 ``config/.env`` beside this script: the only file it reads, re-read when it changes, so add or remove a token there and
 the viewer follows, no restart. (The Docker setup mounts its config folder at /app/config.) Other settings:
-GHAADD_VIEWER_PORT, GHAADD_VIEWER_HOST, GHAADD_VIEWER_LOST_AFTER (that is how the Docker setup passes them).
+GHAADD_VIEWER_PORT, GHAADD_VIEWER_HOST, GHAADD_VIEWER_LOST_AFTER, GHAADD_VIEWER_FORGET_AFTER_DAYS (that is how the Docker setup passes them).
 """
 
 from __future__ import annotations
@@ -28,12 +28,15 @@ import time
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable, Iterable, Optional, Union
+from urllib.parse import parse_qs
 
-VIEWER_VERSION = "1.1"
+VIEWER_VERSION = "1.2"
 SCHEMA = 1  # the daemon's message format this viewer understands
 DEFAULT_PORT = 8888
 DEFAULT_HOST = "0.0.0.0"
 DEFAULT_LOST_AFTER_SECONDS = 45.0  # about three missed 15 s heartbeats
+DEFAULT_FORGET_AFTER_DAYS = 7.0  # a daemon that is not live is dropped from the list after this long (0 = never)
+SECONDS_PER_DAY = 86400.0
 MIN_TOKEN_LENGTH = 16
 MAX_BODY_BYTES = 5 * 1024 * 1024
 MAX_DAEMONS = 20
@@ -294,9 +297,16 @@ class _Daemon:
 class Store:
     """Latest snapshot per daemon name, with the rules for what is live, lost or stopped (thread-safe)."""
 
-    def __init__(self, lost_after: float = DEFAULT_LOST_AFTER_SECONDS, clock: Callable[[], float] = time.monotonic) -> None:
-        """Set up an empty store; `clock` is injectable so tests need no real time."""
+    def __init__(
+        self, lost_after: float = DEFAULT_LOST_AFTER_SECONDS, clock: Callable[[], float] = time.monotonic,
+        forget_after: float = 0.0,
+    ) -> None:
+        """Set up an empty store; `clock` is injectable so tests need no real time.
+
+        `forget_after` (seconds, 0 = never) is how long a daemon that is not live stays in the list.
+        """
         self.lost_after = lost_after
+        self.forget_after = forget_after
         self._clock = clock
         self._lock = threading.Lock()
         self._daemons: dict[str, _Daemon] = {}
@@ -321,6 +331,21 @@ class Store:
             record["count"] += 1
             record["last"] = now
 
+    def _forget_old(self, now: float) -> None:
+        """Drop daemons that are lost or stopped and have been quiet for `forget_after` seconds (caller holds the lock)."""
+        if self.forget_after <= 0:
+            return
+        def not_live(daemon: _Daemon) -> bool:
+            """Whether the daemon is stopped or lost right now."""
+            return daemon.stopped or daemon.data is None or now - daemon.last_seen > self.lost_after
+
+        for name in [
+            name for name, daemon in self._daemons.items()
+            if now - daemon.last_seen > self.forget_after and not_live(daemon)
+        ]:
+            del self._daemons[name]
+            print(f"Daemon '{name}' has been quiet for a long time and is forgotten.", flush=True)
+
     def receive(self, message: Any) -> dict[str, Any]:
         """Take one message (snapshot, heartbeat or goodbye); return the answer for the daemon, or raise ValueError."""
         if not isinstance(message, dict):
@@ -341,6 +366,7 @@ class Store:
             # A daemon that gets through again is no longer a rejected one (a fixed or restored token).
             for key in [key for key in self._rejected if key[0] == name]:
                 del self._rejected[key]
+            self._forget_old(now)
             daemon = self._daemons.get(name)
             if kind == "snapshot":
                 if daemon is None:
@@ -371,6 +397,7 @@ class Store:
         now = self._clock()
         entries = []
         with self._lock:
+            self._forget_old(now)
             for name in sorted(self._daemons):
                 daemon = self._daemons[name]
                 age = now - daemon.last_seen
@@ -392,6 +419,31 @@ class Store:
         rejected = self.rejected()
         return {"viewer_version": VIEWER_VERSION, "lost_after": self.lost_after, "daemons": entries, "rejected": rejected}
 
+    def health(self, name: Optional[str] = None) -> tuple[bool, dict[str, Any]]:
+        """Return (healthy, summary) for a monitor: healthy = something is live and nothing was lost without a goodbye.
+
+        A daemon that said goodbye (a clean stop) is no problem while another one is live. With `name` only that daemon
+        counts, and it must be live. The summary holds counts and a one-line reason, never any data.
+        """
+        view = self.view()
+        entries = [entry for entry in view["daemons"] if name is None or entry["name"] == name]
+        states = [entry["state"] for entry in entries]
+        counts = {state: states.count(state) for state in ("live", "lost", "stopped")}
+        lost_names = [entry["name"] for entry in entries if entry["state"] == "lost"]
+        if name is not None and not entries:
+            problem = f"no daemon named '{name}' has sent data"
+        elif not entries:
+            problem = "no daemon has sent data"
+        elif name is not None and counts["live"] == 0:
+            problem = f"daemon '{name}' is {states[0]}"
+        elif lost_names:
+            problem = "lost: " + ", ".join(lost_names)
+        elif counts["live"] == 0:
+            problem = "no daemon is live (all stopped)"
+        else:
+            problem = ""
+        return not problem, {"ok": not problem, "problem": problem, **counts, "total": len(entries)}
+
     def rejected(self) -> list[dict[str, Any]]:
         """The senders refused lately, newest first; one that has not tried again for an hour is forgotten."""
         now = self._clock()
@@ -409,7 +461,7 @@ def _make_handler(store: Store, book: TokenBook) -> type[BaseHTTPRequestHandler]
     """Build the request handler class: the page and its data for everyone, snapshots only with a known token."""
 
     class Handler(BaseHTTPRequestHandler):
-        """Answers GET / /healthz /api/view and POST /api/snapshot."""
+        """Answers GET / /healthz /api/health /api/view and POST /api/snapshot."""
         server_version = "GHAADD-viewer"
         timeout = 15  # seconds a client may stall before its connection is dropped
 
@@ -447,11 +499,15 @@ def _make_handler(store: Store, book: TokenBook) -> type[BaseHTTPRequestHandler]
 
         def do_GET(self) -> None:
             """Serve the page, the health check and the current view."""
-            path = self.path.split("?", 1)[0]
+            path, _, query = self.path.partition("?")
             if path in ("/", "/index.html"):
                 self._send(200, PAGE.encode("utf-8"), "text/html; charset=utf-8")
             elif path == "/healthz":
                 self._send(200, b"ok", "text/plain; charset=utf-8")
+            elif path == "/api/health":
+                names = parse_qs(query).get("name")
+                healthy, summary = store.health(_CONTROL_CHARACTERS.sub("", names[0]).strip()[:64] if names else None)
+                self._json(summary, 200 if healthy else 503)
             elif path in ICONS:
                 file_name, content_type = ICONS[path]
                 try:
@@ -576,7 +632,14 @@ def parse_args(argv: list[str], environ: Optional[dict[str, str]] = None) -> arg
         "--lost-after", type=float, default=float(environ.get("GHAADD_VIEWER_LOST_AFTER") or DEFAULT_LOST_AFTER_SECONDS),
         help="Seconds without data before a daemon is shown as lost (default 45).",
     )
+    parser.add_argument(
+        "--forget-after-days", type=float,
+        default=float(environ.get("GHAADD_VIEWER_FORGET_AFTER_DAYS") or DEFAULT_FORGET_AFTER_DAYS),
+        help="Days after which a lost or stopped daemon is dropped from the list (default 7, 0 = never).",
+    )
     args = parser.parse_args(argv)
+    if args.forget_after_days < 0:
+        parser.error("--forget-after-days cannot be negative")
     args.tokens = collect_tokens(args.token, environ.get("GHAADD_VIEWER_TOKENS"))
     return args
 
@@ -597,7 +660,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             file=sys.stderr,
         )
         return 2
-    store = Store(lost_after=args.lost_after)
+    store = Store(lost_after=args.lost_after, forget_after=args.forget_after_days * SECONDS_PER_DAY)
     try:
         server = make_server(args.host, args.port, store, book)
     except OSError as exc:

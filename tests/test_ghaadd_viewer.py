@@ -850,3 +850,138 @@ class StartUpTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HealthTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.clock = FakeClock()
+        self.store = Store(lost_after=45.0, clock=self.clock)
+
+    def health(self, name: Optional[str] = None) -> tuple[bool, dict[str, Any]]:
+        return self.store.health(name)
+
+    def test_nothing_known_is_not_healthy(self) -> None:
+        healthy, summary = self.health()
+        self.assertFalse(healthy)
+        self.assertEqual((summary["total"], summary["problem"]), (0, "no daemon has sent data"))
+
+    def test_a_live_daemon_is_healthy(self) -> None:
+        quiet(self.store, message())
+        healthy, summary = self.health()
+        self.assertTrue(healthy)
+        self.assertEqual((summary["live"], summary["lost"], summary["stopped"], summary["problem"]), (1, 0, 0, ""))
+
+    def test_one_lost_daemon_makes_it_unhealthy_even_while_another_is_live(self) -> None:
+        quiet(self.store, message(name="a"))
+        quiet(self.store, message(name="b"))
+        self.clock.now += 30
+        quiet(self.store, message("heartbeat", name="a"))
+        self.clock.now += 30  # b is now 60 s silent, a only 30
+        healthy, summary = self.health()
+        self.assertFalse(healthy)
+        self.assertEqual((summary["live"], summary["lost"], summary["problem"]), (1, 1, "lost: b"))
+
+    def test_a_cleanly_stopped_daemon_is_ignored_while_another_is_live(self) -> None:
+        quiet(self.store, message(name="a"))
+        quiet(self.store, message(name="b"))
+        quiet(self.store, message("goodbye", name="b"))
+        healthy, summary = self.health()
+        self.assertTrue(healthy)
+        self.assertEqual((summary["live"], summary["stopped"]), (1, 1))
+
+    def test_when_every_daemon_stopped_cleanly_it_is_unhealthy(self) -> None:
+        quiet(self.store, message())
+        quiet(self.store, message("goodbye"))
+        healthy, summary = self.health()
+        self.assertFalse(healthy)
+        self.assertEqual(summary["problem"], "no daemon is live (all stopped)")
+
+    def test_a_name_checks_only_that_daemon_and_it_must_be_live(self) -> None:
+        quiet(self.store, message(name="a"))
+        quiet(self.store, message(name="b"))
+        quiet(self.store, message("goodbye", name="b"))
+        self.assertTrue(self.health("a")[0])
+        healthy, summary = self.health("b")
+        self.assertFalse(healthy)
+        self.assertEqual(summary["problem"], "daemon 'b' is stopped")
+        self.assertEqual(self.health("nobody")[1]["problem"], "no daemon named 'nobody' has sent data")
+
+    def test_the_summary_never_holds_data(self) -> None:
+        quiet(self.store, message())
+        self.assertEqual(set(self.health()[1]), {"ok", "problem", "live", "lost", "stopped", "total"})
+
+
+class ForgetTests(unittest.TestCase):
+    DAY = 86400.0
+
+    def setUp(self) -> None:
+        self.clock = FakeClock()
+        self.store = Store(lost_after=45.0, clock=self.clock, forget_after=7 * self.DAY)
+
+    def names(self) -> list[str]:
+        return [entry["name"] for entry in self.store.view()["daemons"]]
+
+    def test_a_lost_daemon_is_kept_for_a_while_and_then_forgotten(self) -> None:
+        quiet(self.store, message())
+        self.clock.now += 6 * self.DAY
+        self.assertEqual(self.names(), ["home-pc"])
+        self.clock.now += 2 * self.DAY
+        self.assertEqual(self.names(), [])
+
+    def test_a_stopped_daemon_is_forgotten_too(self) -> None:
+        quiet(self.store, message())
+        quiet(self.store, message("goodbye"))
+        self.clock.now += 8 * self.DAY
+        self.assertEqual(self.names(), [])
+
+    def test_a_live_daemon_is_never_forgotten(self) -> None:
+        store = Store(lost_after=45.0, clock=self.clock, forget_after=300.0)
+        quiet(store, message())
+        for _ in range(40):  # 20 minutes of heartbeats, four times the forget time
+            self.clock.now += 30
+            quiet(store, message("heartbeat"))
+        self.assertEqual([entry["name"] for entry in store.view()["daemons"]], ["home-pc"])
+
+    def test_zero_means_never(self) -> None:
+        store = Store(clock=self.clock, forget_after=0)
+        quiet(store, message())
+        self.clock.now += 400 * self.DAY
+        self.assertEqual([entry["name"] for entry in store.view()["daemons"]], ["home-pc"])
+
+    def test_forgotten_names_make_room_below_the_daemon_cap(self) -> None:
+        for number in range(ghaadd_viewer.MAX_DAEMONS):
+            quiet(self.store, message(name=f"old-{number}"))
+        self.clock.now += 8 * self.DAY
+        quiet(self.store, message(name="new"))
+        self.assertEqual(self.names(), ["new"])
+
+    def test_the_command_line_default_and_validation(self) -> None:
+        self.assertEqual(ghaadd_viewer.parse_args([], {}).forget_after_days, 7.0)
+        self.assertEqual(ghaadd_viewer.parse_args([], {"GHAADD_VIEWER_FORGET_AFTER_DAYS": "2"}).forget_after_days, 2.0)
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            ghaadd_viewer.parse_args(["--forget-after-days", "-1"], {})
+
+
+class HealthEndpointTests(ServerTestCase):
+    def health(self, query: str = "") -> tuple[int, dict[str, Any]]:
+        status, headers, body = self.request("GET", "/api/health" + query, token=None)
+        self.assertEqual(headers["cache-control"], "no-store")
+        return status, json.loads(body)
+
+    def test_503_until_a_daemon_is_live_and_200_while_it_is(self) -> None:
+        self.assertEqual(self.health()[0], 503)
+        self.post(message())
+        status, summary = self.health()
+        self.assertEqual((status, summary["ok"], summary["live"]), (200, True, 1))
+
+    def test_head_gives_the_same_status_without_a_body(self) -> None:
+        self.post(message())
+        self.assertEqual(self.request("HEAD", "/api/health", token=None)[0], 200)
+        self.post(message("goodbye"))
+        self.assertEqual(self.request("HEAD", "/api/health", token=None)[0], 503)
+
+    def test_the_name_in_the_query_picks_one_daemon(self) -> None:
+        self.post(message(name="a"))
+        self.assertEqual(self.health("?name=a")[0], 200)
+        self.assertEqual(self.health("?name=other")[0], 503)
+        self.assertEqual(self.health("?name=")[0], 200)  # an empty name means all, like no name

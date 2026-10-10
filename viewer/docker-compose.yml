@@ -24,6 +24,8 @@ services:
       GHAADD_VIEWER_PORT: "8888"
       # Seconds without data before the page says "no data received" (about three missed heartbeats).
       GHAADD_VIEWER_LOST_AFTER: "45"
+      # Days after which a lost or stopped daemon is dropped from the list (0 = never).
+      GHAADD_VIEWER_FORGET_AFTER_DAYS: "7"
     volumes:
       - ./config:/app/config:ro  # the one place the viewer reads its tokens from: config/.env
       - ./assets:/app/assets:ro  # the page's icon (a copy of the GUI's); the page works without it
