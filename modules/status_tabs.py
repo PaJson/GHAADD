@@ -26,6 +26,7 @@ from modules.repo_overview import format_tag
 
 DEFAULT_ROW_LIMIT = 500
 
+UNSEEN_DOT = "●"  # the black circle in a tab title
 KIND_EVENTS = "events"
 KIND_UNMAPPED = "unmapped"
 
@@ -48,6 +49,7 @@ class TabDef:
     categories: Optional[tuple[str, ...]] = None  # None = any category
     exclude_categories: tuple[str, ...] = ()
     counter: bool = True  # show an unread count in the title
+    dot: bool = False  # no count: only a dot in the title while there are rows newer than the read mark
     type_source: str = TYPE_CATEGORY
     type_text: str = ""  # used when type_source == TYPE_FIXED
     latest_per_repo: bool = False  # one row per repository (the newest), older ones are only counted
@@ -68,6 +70,7 @@ TAB_DEFS: tuple[TabDef, ...] = (
         event_types=("WARNING",),
         categories=("LIMIT",),
         counter=False,  # repeats while a folder stays over its limit: a list to consult, not an inbox
+        dot=True,  # but a dot says there is something new to look at
         latest_per_repo=True,  # only the newest warning per repository says anything new
         type_source=TYPE_FIXED,
         type_text="Limit",
@@ -112,6 +115,11 @@ _REPO_IN_TEXT = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 def format_title(title: str, unread: int) -> str:
     """"Warnings (3)" while there is something unread, plain "Warnings" otherwise."""
     return f"{title} ({unread})" if unread > 0 else title
+
+
+def format_dot_title(title: str, unseen: bool) -> str:
+    """"Folder limits ●" while something has not been seen, plain "Folder limits" otherwise."""
+    return f"{title} {UNSEEN_DOT}" if unseen else title
 
 
 def format_event_time(epoch: Any) -> str:
@@ -271,9 +279,17 @@ class StatusTabsModel:
         """Return how many rows of the tab are unread."""
         return len(self.unread_rows(key))
 
+    def has_unseen(self, key: str) -> bool:
+        """Whether the tab holds a row newer than its read mark (the dot of tabs without a counter)."""
+        seen = self.seen_id(key)
+        return any(row.id > seen for row in self._states[key].rows)
+
     def title(self, key: str) -> str:
-        """Return the tab title with its unread count, e.g. "Warnings (3)"."""
-        return format_title(self._defs[key].title, self.unread(key))
+        """Return the tab title with its unread count, e.g. "Warnings (3)", or its dot, e.g. "Folder limits ●"."""
+        tab = self._defs[key]
+        if tab.dot:
+            return format_dot_title(tab.title, self.has_unseen(key))
+        return format_title(tab.title, self.unread(key))
 
     def clear(self, key: str) -> None:
         """Forget the rows of a tab whose events were deleted (newer events still arrive normally)."""

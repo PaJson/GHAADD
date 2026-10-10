@@ -113,6 +113,8 @@ renamed daemons do not pile up (the list holds at most 20) and do not keep the h
 
 ## What the page tells you
 
+In the header, left of the status pill, a small green dot flashes once each time the page gets an answer from the viewer (every 3 seconds). It turns amber when the viewer cannot be reached, and it stops blinking if the page freezes. It shows that the page itself is working; whether a daemon is sending is what the pill says.
+
 - **live**: data arrives and everything shown is current. Several daemons: a selector appears in the header.
 - **daemon stopped**: the daemon said goodbye (a clean stop).
 - **no data received**: nothing arrived for 45 seconds: the daemon, its computer or the network is down, the push is off,

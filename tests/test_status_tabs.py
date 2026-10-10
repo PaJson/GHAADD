@@ -169,13 +169,31 @@ class ModelTests(unittest.TestCase):
         self.assertEqual([r.message for r in model.rows("limits")], ["over limit"])
         self.assertEqual([r.message for r in model.rows("completed")], ["done"])
 
-    def test_folder_limits_tab_has_no_counter(self) -> None:
+    def test_folder_limits_tab_has_a_dot_instead_of_a_counter(self) -> None:
+        model = self.model()
+        model.refresh()
+        self.assertEqual(model.title("limits"), "Folder limits")
+        self.events.add("WARNING", "LIMIT")
+        model.refresh()
+        self.assertEqual((model.unread("limits"), model.title("limits")), (0, "Folder limits ●"))  # no number
+        self.assertEqual(len(model.rows("limits")), 1)
+        model.mark_read("limits")  # opening the tab
+        self.assertEqual(model.title("limits"), "Folder limits")
+        self.events.add("WARNING", "LIMIT")
+        model.refresh()
+        self.assertEqual(model.title("limits"), "Folder limits ●")  # a later warning lights it again
+
+    def test_the_dot_survives_a_restart_until_the_tab_was_opened(self) -> None:
         model = self.model()
         model.refresh()
         self.events.add("WARNING", "LIMIT")
         model.refresh()
-        self.assertEqual((model.unread("limits"), model.title("limits")), (0, "Folder limits"))
-        self.assertEqual(len(model.rows("limits")), 1)
+        restarted = self.model()  # same store: the tab was never opened, so the warning is still unseen
+        restarted.refresh()
+        self.assertEqual(restarted.title("limits"), "Folder limits ●")
+
+    def test_only_the_limits_tab_has_a_dot(self) -> None:
+        self.assertEqual([tab.key for tab in status_tabs.TAB_DEFS if tab.dot], ["limits"])
 
     def test_only_new_rows_are_fetched_and_the_list_is_capped(self) -> None:
         model = self.model(limit=3)

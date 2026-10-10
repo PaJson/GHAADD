@@ -30,7 +30,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable, Iterable, Optional, Union
 from urllib.parse import parse_qs
 
-VIEWER_VERSION = "1.2"
+VIEWER_VERSION = "1.3"
 SCHEMA = 1  # the daemon's message format this viewer understands
 DEFAULT_PORT = 8888
 DEFAULT_HOST = "0.0.0.0"
@@ -704,6 +704,8 @@ h1 { margin: 0; font-size: 18px; }
 .version { color: var(--muted); font-size: 12px; }
 .spacer { flex: 1; }
 .pill { padding: 2px 10px; border-radius: 999px; font-weight: 600; font-size: 12px; border: 1px solid currentColor; }
+.refresh { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); opacity: .2; }
+.refresh.bad { background: var(--warn); opacity: 1; }
 .pill.live { color: var(--ok); } .pill.paused { color: var(--warn); } .pill.lost, .pill.stopped, .pill.down { color: var(--bad); }
 select, input { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; }
 main { padding: 12px 16px 32px; max-width: 1500px; margin: 0 auto; }
@@ -740,6 +742,7 @@ td.nowrap { white-space: nowrap; }
   <h1>GHAADD</h1><span class="version" id="version"></span>
   <select id="daemon" hidden></select>
   <span class="spacer"></span>
+  <span class="refresh" id="refresh"></span>
   <span class="pill down" id="pill">connecting…</span>
 </header>
 <main>
@@ -764,6 +767,7 @@ const COLUMNS = {
 };
 const $ = (id) => document.getElementById(id);
 let view = null;          // the last answer of /api/view (null = the viewer itself cannot be reached)
+const REFRESH_MS = 3000;  // how long after one answer the page asks again
 let fetchedAt = 0;        // performance.now() when it arrived, for the countdown
 let tab = (location.hash || "#overview").slice(1);
 let chosen = "";          // daemon name picked in the selector
@@ -970,6 +974,13 @@ function render() {
   }
 }
 
+function blink() {
+  // One short flash per answer: it stops when the answers stop, so a frozen page cannot look alive.
+  const node = $("refresh");
+  node.className = view ? "refresh" : "refresh bad";
+  if (view) node.animate([{ opacity: 1 }, { opacity: 0.2 }], { duration: 1000, easing: "ease-out" });
+}
+
 async function refresh() {
   try {
     const controller = new AbortController();
@@ -984,6 +995,8 @@ async function refresh() {
   }
   drawn = view ? drawn : "";
   render();
+  blink();
+  setTimeout(refresh, REFRESH_MS);  // chained, so a slow answer never overlaps the next request
 }
 
 $("filter").oninput = (event) => { filter = event.target.value; drawn = ""; if (current() && current().data) renderContent(current().data); };
@@ -993,7 +1006,6 @@ window.addEventListener("hashchange", () => {
   if (TABS.some((t) => t[0] === wanted)) { tab = wanted; render(); }
 });
 setInterval(tickCountdown, 1000);
-setInterval(refresh, 3000);
 refresh();
 </script>
 </body>

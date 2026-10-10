@@ -349,6 +349,13 @@ class PageSafetyTests(unittest.TestCase):
         for risky in ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval(", "new Function"):
             self.assertNotIn(risky, ghaadd_viewer.PAGE, risky)
 
+    def test_the_header_dot_blinks_per_answer_and_requests_never_overlap(self) -> None:
+        page = ghaadd_viewer.PAGE
+        self.assertIn('id="refresh"', page)
+        self.assertIn("const REFRESH_MS = 3000;", page)
+        self.assertIn("setTimeout(refresh, REFRESH_MS)", page)  # chained after each answer
+        self.assertNotIn("setInterval(refresh", page)
+
     def test_the_page_names_the_connection_problems(self) -> None:
         for text in ("no data received", "daemon stopped", "Cannot reach the viewer", "No daemon has connected yet"):
             self.assertIn(text, ghaadd_viewer.PAGE)
