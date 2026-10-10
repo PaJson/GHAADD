@@ -118,5 +118,11 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config_manager.get_config_fingerprint(config_manager.load_config()), before)
 
 
+class OwnTabTypesTests(unittest.TestCase):
+    def test_types_with_their_own_tab_are_known_and_silent_by_default(self) -> None:
+        self.assertTrue(set(warning_types.OWN_TAB_TYPES) <= set(warning_types.KNOWN_TYPES))
+        self.assertTrue(set(warning_types.OWN_TAB_TYPES) <= set(warning_types.DEFAULT_SILENCED))
+
+
 if __name__ == "__main__":
     unittest.main()

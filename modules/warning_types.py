@@ -26,13 +26,16 @@ WARNING_TYPES: tuple[tuple[str, str], ...] = (
     ("DESTINATION", "A repository's destination is missing or unusable, so the default folder was used."),
     ("MAPPING", "A mapped destination folder no longer exists, or mapping.json was upgraded to the 2.0 key names."),
     ("MAILBOX", "Emails could not be marked as read or moved to the Trash."),
-    ("LIMIT", "A repository has more release folders than its limit (this also has its own notification)."),
+    ("LIMIT", "A repository has more release folders than its limit. Shown in the Folder limits tab, not here: its pop-up and the red dot are always on."),
     ("BACKUP", "A scheduled backup of state.db and the settings files could not be made."),
     ("PARTIAL_MOVE", "A superseded release was moved to the Partial folder (shown as \"Partial move\" in the Warnings tab)."),
 )
 
 # Silent by default: API is routine when a release is replaced, and LIMIT already has a notification of its own.
 DEFAULT_SILENCED: tuple[str, ...] = ("API", "LIMIT")
+
+# Types that have a tab of their own: the Warnings tab never lists them, so a choice here would change nothing.
+OWN_TAB_TYPES: tuple[str, ...] = ("LIMIT",)
 
 KNOWN_TYPES: tuple[str, ...] = tuple(code for code, _meaning in WARNING_TYPES)
 

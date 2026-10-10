@@ -147,22 +147,29 @@ def icon_state(running: bool, paused: bool) -> str:
     return STATE_PAUSED if paused else STATE_RUNNING
 
 
-def tooltip_text(app_name: str, state: str, unread_warnings: int, unmapped: int, countdown: str = "") -> str:
-    """The hover text of the tray icon, e.g. "GHAADD: running (next poll in 4:20), 2 warnings"."""
+def tooltip_text(
+    app_name: str, state: str, unread_warnings: int, unmapped: int, countdown: str = "", over_limit: int = 0
+) -> str:
+    """The hover text of the tray icon, e.g. "GHAADD: running (next poll in 4:20), 2 unread warnings, 1 over limit"."""
     first = {STATE_RUNNING: "running", STATE_PAUSED: "paused", STATE_STOPPED: "daemon not running"}[state]
     if state == STATE_RUNNING and countdown:
         first += f" (next poll in {countdown})"
     parts = [f"{app_name}: {first}"]
     if unread_warnings:
         parts.append(f"{unread_warnings} unread warning{'s' if unread_warnings != 1 else ''}")
+    if over_limit:
+        parts.append(f"{over_limit} over limit")
     if unmapped:
         parts.append(f"{unmapped} unmapped")
     return ", ".join(parts)
 
 
-def needs_attention(unread_warnings: int, unmapped: int, failed_unseen: int = 0) -> bool:
-    """True when the icon should show its attention dot (unread warnings, unmapped or failed jobs)."""
-    return unread_warnings > 0 or unmapped > 0 or failed_unseen > 0
+def needs_attention(unread_warnings: int, unmapped: int, failed_unseen: int = 0, over_limit: int = 0) -> bool:
+    """True when the icon should show its attention dot (unread warnings, unmapped, failed jobs or over-limit folders).
+
+    Unmapped and over-limit repositories keep the dot lit until they are fixed: they are not "unread" things.
+    """
+    return unread_warnings > 0 or unmapped > 0 or failed_unseen > 0 or over_limit > 0
 
 
 def draw_icon(state: str, attention: bool, size: int = 64, base_image_path: Optional[str] = None) -> Any:

@@ -85,6 +85,7 @@ class IconStateTests(unittest.TestCase):
         self.assertTrue(gui_tray.needs_attention(1, 0))
         self.assertTrue(gui_tray.needs_attention(0, 2))
         self.assertTrue(gui_tray.needs_attention(0, 0, 1))
+        self.assertTrue(gui_tray.needs_attention(0, 0, 0, 2))  # over-limit folders light the dot too
 
     def test_tooltip_texts(self) -> None:
         self.assertEqual(gui_tray.tooltip_text("GHAADD", gui_tray.STATE_RUNNING, 0, 0), "GHAADD: running")
@@ -92,6 +93,10 @@ class IconStateTests(unittest.TestCase):
         text = gui_tray.tooltip_text("GHAADD", gui_tray.STATE_PAUSED, 1, 3)
         self.assertEqual(text, "GHAADD: paused, 1 unread warning, 3 unmapped")
         self.assertIn("2 unread warnings", gui_tray.tooltip_text("GHAADD", gui_tray.STATE_RUNNING, 2, 0))
+        self.assertEqual(
+            gui_tray.tooltip_text("GHAADD", gui_tray.STATE_RUNNING, 0, 2, over_limit=3),
+            "GHAADD: running, 3 over limit, 2 unmapped",
+        )
 
     @unittest.skipUnless(gui_tray.tray_available(), "pystray and Pillow are not installed")
     def test_every_state_can_be_drawn(self) -> None:

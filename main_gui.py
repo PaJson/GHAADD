@@ -2146,16 +2146,19 @@ class WarningTypesDialog(tk.Toplevel):
         ttk.Label(
             body,
             text="Tick the kinds of warning that may pop up a notification. The Warnings tab and its unread counter "
-            "always show every warning.",
+            "always show every warning. Folder limits and Unmapped have their own tabs: the title counts them, and "
+            "they always light the red dot on the tray icon until they are fixed.",
             foreground=COLOR_MUTED,
             wraplength=700,
         ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 8))
         self.vars: dict[str, tk.BooleanVar] = {}
         for index, (code, meaning) in enumerate(warning_types.WARNING_TYPES, start=1):
-            self.vars[code] = tk.BooleanVar(value=code not in silenced)
-            ttk.Checkbutton(body, text=code, variable=self.vars[code]).grid(
-                row=index, column=0, sticky="w", pady=2, padx=(0, 16)
-            )
+            own_tab = code in warning_types.OWN_TAB_TYPES  # shown elsewhere, so there is nothing to choose
+            self.vars[code] = tk.BooleanVar(value=code not in silenced and not own_tab)
+            check = ttk.Checkbutton(body, text=code, variable=self.vars[code])
+            if own_tab:
+                check.state(["disabled"])
+            check.grid(row=index, column=0, sticky="w", pady=2, padx=(0, 16))
             ttk.Label(body, text=meaning, foreground=COLOR_MUTED, wraplength=520).grid(
                 row=index, column=1, sticky="w", pady=2
             )
@@ -2179,8 +2182,11 @@ class WarningTypesDialog(tk.Toplevel):
         self.grab_set()
 
     def _chosen_silenced(self) -> set[str]:
-        """Return the codes left unchecked, plus unknown codes that were already in the config."""
-        return {code for code, var in self.vars.items() if not var.get()} | self._unknown
+        """Return the codes left unchecked, plus unknown codes and the fixed rows exactly as they were in the config."""
+        fixed = {code for code in warning_types.OWN_TAB_TYPES if code in self._initial}
+        return {
+            code for code, var in self.vars.items() if not var.get() and code not in warning_types.OWN_TAB_TYPES
+        } | fixed | self._unknown
 
     def _close_request(self) -> None:
         """Cancel, Escape and the window's X: ask first when the ticks differ from what is saved."""
@@ -2194,13 +2200,15 @@ class WarningTypesDialog(tk.Toplevel):
 
     def _set_all(self, value: bool) -> None:
         """Tick or untick every box."""
-        for var in self.vars.values():
-            var.set(value)
+        for code, var in self.vars.items():
+            if code not in warning_types.OWN_TAB_TYPES:
+                var.set(value)
 
     def _set_defaults(self) -> None:
         """Set the boxes to the built-in default (API and LIMIT silent)."""
         for code, var in self.vars.items():
-            var.set(code not in warning_types.DEFAULT_SILENCED)
+            if code not in warning_types.OWN_TAB_TYPES:
+                var.set(code not in warning_types.DEFAULT_SILENCED)
 
     def _save(self) -> None:
         """Write the choice to config.json now; the window stays open (with the reason) if that fails."""
@@ -4292,9 +4300,11 @@ class MainWindow(tk.Tk):
             (row.kind for row in model.unread_rows("warnings")), self._silenced_warning_types
         )
         unmapped = len(self._unmapped_rows or [])
+        over_limit = len(model.rows("limits"))  # one row per repository, kept until the folders are fixed
         state = gui_tray.icon_state(self._snapshot.running, self._snapshot.paused)
-        attention = gui_tray.needs_attention(unread, unmapped, self._failed_unseen)
-        self._tray.update(state, attention, gui_tray.tooltip_text(APP_NAME, state, unread, unmapped))  # type: ignore[union-attr]
+        attention = gui_tray.needs_attention(unread, unmapped, self._failed_unseen, over_limit)
+        text = gui_tray.tooltip_text(APP_NAME, state, unread, unmapped, over_limit=over_limit)
+        self._tray.update(state, attention, text)  # type: ignore[union-attr]
         self._sync_tray_menu()
 
     def _send_notice(self, notice: Optional[gui_tray.Notice]) -> None:
