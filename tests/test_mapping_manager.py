@@ -139,7 +139,8 @@ class RepositoryWriterTests(MappingWriteTestCase):
         entry = self.read_mapping()[0]
         self.assertEqual(entry["repository"], "owner/repo")
         self.assertEqual(entry["last_notification"], "2026-01-01_00-00")
-        self.assertIs(entry["active"], True)
+        self.warning_mock.assert_called_once()
+        self.assertEqual(self.warning_mock.call_args.args[0], "UNMAPPED")
         self.warning_mock.assert_called_once()
 
     def test_upsert_existing_updates_stamp_only_when_changed(self) -> None:

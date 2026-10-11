@@ -23,6 +23,7 @@ from datetime import datetime
 from typing import Any, Callable, Iterable, Mapping, Optional, Protocol, Sequence
 
 from modules.repo_overview import format_tag
+from modules.warning_types import OWN_TAB_TYPES
 
 DEFAULT_ROW_LIMIT = 500
 
@@ -60,7 +61,7 @@ TAB_DEFS: tuple[TabDef, ...] = (
         key="warnings",
         title="Warnings",
         event_types=("WARNING", "PARTIAL_MOVE"),
-        exclude_categories=("LIMIT",),  # those have their own tab
+        exclude_categories=OWN_TAB_TYPES,  # those have their own tab (LIMIT, UNMAPPED)
     ),
     TabDef(key="completed", title="Completed", event_types=("COMPLETED_MOVE",), type_source=TYPE_TAG),
     TabDef(

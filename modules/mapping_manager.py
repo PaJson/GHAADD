@@ -720,7 +720,7 @@ def upsert_repository_mapping(
     created, updated = update_mapping(_apply)
     if created:
         log_warning(
-            "MAPPING",
+            "UNMAPPED",
             f"Repository '{repo}' was added without a configured destination; it will use default routing until mapped.",
         )
     return (created, updated)

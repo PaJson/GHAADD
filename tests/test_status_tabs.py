@@ -10,6 +10,7 @@ from contextlib import closing
 from unittest import mock
 
 from modules import config_manager, db_manager, gui_data, mapping_manager, status_tabs
+from modules.warning_types import OWN_TAB_TYPES
 from modules.status_tabs import StatusTabsModel, TabDef, find_repo, format_title, unmapped_rows
 
 
@@ -319,6 +320,12 @@ class DatabaseQueryTests(unittest.TestCase):
         self.assertEqual(len(newer), 3)
         self.assertEqual(len(db_manager.get_events_for_tab(self.connection, ("WARNING",), limit=2)), 2)
         self.assertEqual(db_manager.get_events_for_tab(self.connection, ("WARNING",), after_id=db_manager.get_max_event_id(self.connection)), [])
+
+        self.add("WARNING", "UNMAPPED", "new repo")
+        self.assertEqual(
+            [e["message"] for e in db_manager.get_events_for_tab(self.connection, ("WARNING",), exclude_categories=OWN_TAB_TYPES)],
+            ["last", "uncategorised", "first"],
+        )
 
     def test_purge_removes_exactly_what_the_tab_lists(self) -> None:
         self.add("WARNING", "API")

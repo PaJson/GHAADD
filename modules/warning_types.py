@@ -24,18 +24,19 @@ WARNING_TYPES: tuple[tuple[str, str], ...] = (
     ("FOLDER_RENAMED_MOVE", "...and the old staging folder could not be moved to the Partial folder."),
     ("FOLDER_RENAMED_MOVED", "...and the old staging folder was moved to the Partial folder."),
     ("DESTINATION", "A repository's destination is missing or unusable, so the default folder was used."),
-    ("MAPPING", "A mapped destination folder no longer exists, or mapping.json was upgraded to the 2.0 key names."),
+    ("MAPPING", "A mapped destination folder no longer exists, mapping.json could not be read, or it was upgraded to the 2.0 key names."),
+    ("UNMAPPED", "A new repository was added without a destination. Shown in the Unmapped tab, not here: its pop-up and the red dot are always on."),
     ("MAILBOX", "Emails could not be marked as read or moved to the Trash."),
     ("LIMIT", "A repository has more release folders than its limit. Shown in the Folder limits tab, not here: its pop-up and the red dot are always on."),
     ("BACKUP", "A scheduled backup of state.db and the settings files could not be made."),
     ("PARTIAL_MOVE", "A superseded release was moved to the Partial folder (shown as \"Partial move\" in the Warnings tab)."),
 )
 
-# Silent by default: API is routine when a release is replaced, and LIMIT already has a notification of its own.
-DEFAULT_SILENCED: tuple[str, ...] = ("API", "LIMIT")
+# Silent by default: API is routine when a release is replaced; LIMIT and UNMAPPED already have a notification of their own.
+DEFAULT_SILENCED: tuple[str, ...] = ("API", "LIMIT", "UNMAPPED")
 
 # Types that have a tab of their own: the Warnings tab never lists them, so a choice here would change nothing.
-OWN_TAB_TYPES: tuple[str, ...] = ("LIMIT",)
+OWN_TAB_TYPES: tuple[str, ...] = ("LIMIT", "UNMAPPED")
 
 KNOWN_TYPES: tuple[str, ...] = tuple(code for code, _meaning in WARNING_TYPES)
 

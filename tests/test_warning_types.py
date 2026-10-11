@@ -78,9 +78,9 @@ class ConfigTests(unittest.TestCase):
         with open(self.path, "w", encoding="utf-8") as handle:
             json.dump(data, handle)
 
-    def test_the_default_is_api_and_limit(self) -> None:
+    def test_the_default_is_api_limit_and_unmapped(self) -> None:
         self.write({})
-        self.assertEqual(config_manager.get_gui_silenced_warning_types(), ["API", "LIMIT"])
+        self.assertEqual(config_manager.get_gui_silenced_warning_types(), ["API", "LIMIT", "UNMAPPED"])
 
     def test_an_empty_list_means_everything_notifies(self) -> None:
         self.write({"gui": {"silenced_warning_types": []}})
@@ -93,7 +93,7 @@ class ConfigTests(unittest.TestCase):
     def test_a_value_that_is_not_a_list_of_strings_gives_the_default(self) -> None:
         for bad in ("API", 3, [1, 2], None, {"API": True}):
             self.write({"gui": {"silenced_warning_types": bad}})
-            self.assertEqual(config_manager.get_gui_silenced_warning_types(), ["API", "LIMIT"], bad)
+            self.assertEqual(config_manager.get_gui_silenced_warning_types(), ["API", "LIMIT", "UNMAPPED"], bad)
 
     def test_the_settings_form_carries_it_and_saving_round_trips(self) -> None:
         self.write({"gui": {"silenced_warning_types": ["MAILBOX"]}})
@@ -105,7 +105,7 @@ class ConfigTests(unittest.TestCase):
         self.write({"gui": {}})
         config_manager.add_missing_defaults()
         with open(self.path, encoding="utf-8") as handle:
-            self.assertEqual(json.load(handle)["gui"]["silenced_warning_types"], ["API", "LIMIT"])
+            self.assertEqual(json.load(handle)["gui"]["silenced_warning_types"], ["API", "LIMIT", "UNMAPPED"])
         self.write({"gui": {"silenced_warning_types": []}})
         config_manager.add_missing_defaults()
         with open(self.path, encoding="utf-8") as handle:

@@ -2205,7 +2205,7 @@ class WarningTypesDialog(tk.Toplevel):
                 var.set(value)
 
     def _set_defaults(self) -> None:
-        """Set the boxes to the built-in default (API and LIMIT silent)."""
+        """Set the boxes to the built-in default (API silent; the own-tab types stay as they are)."""
         for code, var in self.vars.items():
             if code not in warning_types.OWN_TAB_TYPES:
                 var.set(code not in warning_types.DEFAULT_SILENCED)
