@@ -13,7 +13,9 @@ import time
 from dataclasses import dataclass
 from typing import Callable, Optional
 
+from modules.app_info import __version__
 from modules import config_manager, daemon_control, daemon_launcher, daemon_lock
+from modules import gui_tooltips
 from modules.file_cache import StatCache
 
 CONTROL_READ_INTERVAL_SECONDS = 3.0  # how often the control table in state.db is read
@@ -107,6 +109,8 @@ class DaemonSnapshot:
     restart_needed: bool = False  # config.json settings differ from the ones the daemon started with
     polling_idle: bool = False  # polling.enabled was off when it started: it polls only on Poll now
     progress: Optional[QueueProgress] = None  # the queue job in progress, while a cycle runs
+    daemon_version: Optional[str] = None  # the version the daemon says it runs (None: older than 2.5.8)
+    version_mismatch: bool = False  # a running daemon that is not the version of this app: restart to use the new code
 
 
 @dataclass(frozen=True)
@@ -125,6 +129,7 @@ class ControlBarView:
     restart_visible: bool = False
     restart_enabled: bool = False
     check_enabled: bool = False
+    restart_tip: str = ""  # hover text of the Restart button when it is not the settings that changed
 
 
 def _compute_settings() -> tuple[Optional[str], Optional[bool]]:
@@ -211,6 +216,10 @@ class SnapshotReader:
         published = status.get("config_fingerprint")
         restart_needed = published is not None and fingerprint is not None and published != fingerprint
 
+        # A daemon that does not publish its version predates 2.5.8, so it is older than this app by definition.
+        daemon_version = status.get("app_version")
+        app_version = __version__
+
         current_job = status.get("current_job")
         return DaemonSnapshot(
             running=True,
@@ -222,6 +231,8 @@ class SnapshotReader:
             restart_needed=restart_needed,
             polling_idle=bool(status.get("polling_idle")),
             progress=parse_progress(status.get("queue_progress")),
+            daemon_version=daemon_version,
+            version_mismatch=daemon_version != app_version,
         )
 
 
@@ -236,6 +247,14 @@ def format_countdown(seconds: float) -> str:
     hours, remainder = divmod(seconds, 3600)
     minutes, secs = divmod(remainder, 60)
     return f"{hours}:{minutes:02d}:{secs:02d}" if hours else f"{minutes:02d}:{secs:02d}"
+
+
+def _version_tip(snapshot: DaemonSnapshot) -> str:
+    """Return the Restart button's hover text for a daemon that runs another version than the app."""
+    return gui_tooltips.CONTROL_HELP["restart_version"].format(
+        daemon=f"version {snapshot.daemon_version}" if snapshot.daemon_version else "an older version",
+        app=__version__,
+    )
 
 
 def build_view(
@@ -288,6 +307,8 @@ def build_view(
         status_text = f"Daemon paused{pid_text}"
     else:
         status_text = f"Daemon running{pid_text}"
+    if snapshot.version_mismatch and not stopping:
+        status_text += f" – v{snapshot.daemon_version}" if snapshot.daemon_version else " – older version"
 
     if snapshot.paused:
         countdown = "Polling paused"
@@ -316,8 +337,9 @@ def build_view(
         check_enabled=not stopping,  # a folder check is allowed while paused: it only reads folders
         log_enabled=not stopping,
         log_checked=snapshot.log_on,
-        restart_visible=snapshot.restart_needed,
+        restart_visible=snapshot.restart_needed or snapshot.version_mismatch,
         restart_enabled=not stopping,
+        restart_tip=_version_tip(snapshot) if snapshot.version_mismatch and not snapshot.restart_needed else "",
     )
 
 

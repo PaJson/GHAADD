@@ -70,6 +70,29 @@ class BuildViewTests(unittest.TestCase):
         view = build_view(running(restart_needed=True), NOW)
         self.assertTrue(view.restart_visible and view.restart_enabled)
 
+    def test_version_mismatch_shows_the_versions_and_the_restart_button(self) -> None:
+        view = build_view(running(version_mismatch=True, daemon_version="2.5.6"), NOW)
+        self.assertIn("v2.5.6", view.status_text)
+        self.assertTrue(view.restart_visible and view.restart_enabled)
+        self.assertIn("version 2.5.6", view.restart_tip)
+        self.assertIn(gui_daemon.__version__, view.restart_tip)
+
+        older = build_view(running(version_mismatch=True, daemon_version=None), NOW)
+        self.assertIn("older version", older.status_text)
+        self.assertIn("an older version", older.restart_tip)
+
+        same = build_view(running(), NOW)
+        self.assertEqual((same.status_text, same.restart_visible, same.restart_tip), ("Daemon running (PID 42)", False, ""))
+
+    def test_changed_settings_keep_the_settings_text_even_with_a_version_mismatch(self) -> None:
+        view = build_view(running(restart_needed=True, version_mismatch=True, daemon_version="2.5.6"), NOW)
+        self.assertTrue(view.restart_visible)
+        self.assertEqual(view.restart_tip, "")  # the GUI then shows CONTROL_HELP["restart"]
+
+    def test_the_version_is_not_shown_while_stopping(self) -> None:
+        view = build_view(running(version_mismatch=True, daemon_version="2.5.6"), NOW, stopping_since=NOW - 2)
+        self.assertNotIn("v2.5.6", view.status_text)
+
     def test_restart_button_is_disabled_while_stopping(self) -> None:
         view = build_view(running(restart_needed=True), NOW, stopping_since=NOW - 2)
         self.assertTrue(view.restart_visible)
@@ -199,6 +222,15 @@ class ReadSnapshotTests(unittest.TestCase):
         self.assertFalse(same.restart_needed)
         self.assertTrue(different.restart_needed)
         self.assertFalse(unknown.restart_needed)
+
+    def test_version_mismatch_compares_the_published_version_with_the_app(self) -> None:
+        control = {"paused": False, "poll_now_request": None, "log_override": None}
+        same = self.snapshot({**self.STATUS, "app_version": gui_daemon.__version__}, control)
+        other = self.snapshot({**self.STATUS, "app_version": "0.0.1"}, control)
+        older = self.snapshot({**self.STATUS, "app_version": None}, control)  # a daemon from before 2.5.8
+        self.assertFalse(same.version_mismatch)
+        self.assertEqual((other.version_mismatch, other.daemon_version), (True, "0.0.1"))
+        self.assertTrue(older.version_mismatch)
 
     def test_locked_database_falls_back_to_the_status_file(self) -> None:
         snap = self.snapshot({**self.STATUS, "paused": True}, sqlite3.OperationalError("database is locked"))

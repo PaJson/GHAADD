@@ -10,7 +10,7 @@ from typing import NotRequired, Optional, TypedDict
 
 from filelock import FileLock, Timeout
 
-from modules.app_info import MAPPING_FORMAT
+from modules.app_info import MAPPING_FORMAT, __version__
 
 _LOCK_FILE_NAME = "ghaadd.lock"
 # True only inside acquire_daemon_lock(): status fields may be published only by the lock holder.
@@ -32,6 +32,7 @@ class DaemonStatus(TypedDict):
     mapping_format: Optional[int]  # app_info.MAPPING_FORMAT the daemon understands (None: an older daemon)
     polling_idle: bool  # started with polling switched off: it only polls on "Poll now"
     queue_progress: Optional[dict]  # {"index", "total", "repo", "tag", "release_type", "commit", "since"} while a queue cycle runs
+    app_version: NotRequired[Optional[str]]  # app_info.__version__ the daemon runs (None: a daemon older than 2.5.8)
     viewer_push: NotRequired[Optional[dict]]  # {"active", "last_ok", "error"} of the push to the web viewer (None: never on)
 
 
@@ -81,7 +82,9 @@ def _write_status_payload(payload: dict) -> None:
 
 def _write_daemon_status() -> None:
     """Record this process's PID and start time for status probes."""
-    _write_status_payload({"pid": os.getpid(), "started_at": time.time(), "mapping_format": MAPPING_FORMAT})
+    _write_status_payload(
+        {"pid": os.getpid(), "started_at": time.time(), "mapping_format": MAPPING_FORMAT, "app_version": __version__}
+    )
 
 
 def update_daemon_status(**fields) -> None:
@@ -135,6 +138,7 @@ def get_daemon_status() -> DaemonStatus:
             "polling_idle": False,
             "queue_progress": None,
             "viewer_push": None,
+            "app_version": None,
         }
     return read_published_status()
 
@@ -159,6 +163,7 @@ def read_published_status() -> DaemonStatus:
         "polling_idle": payload.get("polling_idle") is True,
         "queue_progress": payload.get("queue_progress") if isinstance(payload.get("queue_progress"), dict) else None,
         "viewer_push": payload.get("viewer_push") if isinstance(payload.get("viewer_push"), dict) else None,
+        "app_version": payload.get("app_version") if isinstance(payload.get("app_version"), str) else None,
     }
 
 

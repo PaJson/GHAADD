@@ -150,6 +150,9 @@ CONTROL_HELP = {
     "restart": "Settings changed since the daemon started.\n"
                "Click to restart it: the job in progress finishes, the daemon stops,\n"
                "then starts again with the new settings.",
+    "restart_version": "The daemon runs {daemon}, this app is {app}.\n"
+                       "Click to restart it: the job in progress finishes, the daemon stops,\n"
+                       "then starts again with the new version.",
     "check_folders": "Check now that every mapped destination exists, count the folders of each repository with a "
                      "limit (the \"12 / 15\" in the table) and warn about repositories over their limit. "
                      "It does not poll the mailbox.",

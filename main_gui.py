@@ -323,6 +323,7 @@ class ControlBar(ttk.Frame):
         self.doctor_button.bind("<Enter>", lambda event: self._doctor_tip.schedule(self._doctor_tip_text, event.x_root + 12, event.y_root + 18))
         self.doctor_button.bind("<Leave>", lambda _event: self._doctor_tip.hide())
         self.doctor_button.bind("<ButtonPress>", lambda _event: self._doctor_tip.hide())
+        self._restart_text = ""  # set per view: the version mismatch has its own text
         self._restart_tip = Tooltip(self.restart_button)
         self.restart_button.bind("<Enter>", self._show_restart_tip)
         self.restart_button.bind("<Leave>", lambda _event: self._restart_tip.hide())
@@ -369,7 +370,7 @@ class ControlBar(ttk.Frame):
 
     def _show_restart_tip(self, event: tk.Event) -> None:  # type: ignore[type-arg]
         """Show the Restart button's hover help."""
-        self._restart_tip.schedule(gui_tooltips.CONTROL_HELP["restart"], event.x_root, event.y_root)
+        self._restart_tip.schedule(self._restart_text or gui_tooltips.CONTROL_HELP["restart"], event.x_root, event.y_root)
 
     def apply_view(self, view: gui_daemon.ControlBarView) -> None:
         """Show the given status text/colors and enable only the buttons that make sense."""
@@ -388,6 +389,7 @@ class ControlBar(ttk.Frame):
         ):
             widget.state(["!disabled"] if enabled else ["disabled"])
         self.detailed_log.set(view.log_checked)
+        self._restart_text = view.restart_tip
         if view.restart_visible:
             self.restart_button.grid()  # restores the remembered grid position
             self.restart_button.state(["!disabled"] if view.restart_enabled else ["disabled"])

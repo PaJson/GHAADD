@@ -180,6 +180,8 @@ class WritingTests(UpgradeTestCase):
                 mock.patch.object(daemon_lock, "get_daemon_status_path", lambda: os.path.join(folder, "status.json")):
             daemon_lock._write_daemon_status()
             self.assertEqual(daemon_lock._read_status_payload()["mapping_format"], mapping_manager.MAPPING_FORMAT)
+            self.assertEqual(daemon_lock._read_status_payload()["app_version"], daemon_lock.__version__)
+            self.assertEqual(daemon_lock.read_published_status().get("app_version"), daemon_lock.__version__)
 
     def test_ensure_mapping_file_upgrades_an_old_file(self) -> None:
         self.write_legacy(LEGACY_ENTRY)
