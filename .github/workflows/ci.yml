@@ -50,7 +50,7 @@ jobs:
         if: failure() && runner.os == 'Linux'
         run: |
           xvfb-run -a python -m unittest discover -s tests -t . > unittest.log 2>&1 || true
-          msg="$(awk '/^(ERROR|FAIL): /{name=$0; next} name != "" && /^[A-Za-z_.]*(Error|Exception|Failure)[:( ]/{print name " => " $0; name=""}' unittest.log | head -80 | sed -e 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')"
+          msg="$(awk 'function flush() { if (name != "" && last != "") print last "\t" name; name = ""; last = "" } /^={30,}/ { flush(); next } /^(ERROR|FAIL): / { name = $0; last = ""; next } name != "" && /^[A-Za-z_][A-Za-z0-9_.]*(Error|Exception|Failure)(:|\()/ { last = $0 } END { flush() }' unittest.log | awk -F'\t' '{ c[$1]++; if (!($1 in ex)) ex[$1] = $2 } END { for (k in c) print c[k] "x " k "   e.g. " ex[k] }' | sort -rn | head -40 | sed -e 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')"
           echo "::error title=Failing tests (Python ${{ matrix.python }})::${msg}"
 
       - name: Internal smoke tests
