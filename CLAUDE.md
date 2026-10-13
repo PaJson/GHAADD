@@ -4,7 +4,7 @@
 
 ## System Profile
 - **Project Name:** GHAADD (GitHub Asset/Asset Downloader Daemon)
-- **Tech Stack:** Python 3.10+ (Typing annotations required; `vermin` reports a code minimum of 3.9, 3.10 declared because 3.9 is EOL; developed and tested on 3.14), SQLite (WAL mode enabled), JSON Configs, Cross-platform Filelocks.
+- **Tech Stack:** Python 3.11+ (Typing annotations required; `typing.NotRequired` in `daemon_control.py` and `daemon_lock.py` needs 3.11, found by the CI on 2026-10-13, and 3.10 reaches EOL in October 2026, so 3.11 is the declared minimum; `vermin` does not catch names imported from `typing`; developed and tested on 3.14; the CI runs 3.11 and 3.14 on Windows, macOS and Linux), SQLite (WAL mode enabled), JSON Configs, Cross-platform Filelocks.
 - **Dependencies:** `requests`, `python-dotenv`, `imapclient`, `filelock` (pinned lower bounds in `requirements.txt`).
 - **Version:** see `modules/app_info.py` (the single source, used by `main.py` and the GUI window title; do not copy the number here)
 - **Architecture:** Monolithic entry points (`main.py`, `main_gui.py`) orchestrating isolated, highly specific functional files within the `/modules` directory.

@@ -60,7 +60,7 @@ Start it with `python main_gui.py` (add `--theme clam` for coloured table headin
 
 ## Requirements
 
-- Python 3.10+ (code minimum per `vermin` is 3.9; 3.9 is end-of-life, developed and tested on 3.14)
+- Python 3.11+ (the daemon uses `typing.NotRequired`; 3.10 reaches end-of-life in October 2026; developed and tested on 3.14, and the CI runs 3.11 and 3.14)
 - Gmail App Password for IMAP access
 - GitHub PAT (recommended to avoid rate limits)
 
