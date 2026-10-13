@@ -45,6 +45,14 @@ jobs:
         if: runner.os != 'Linux'
         run: python -m unittest discover -s tests -t .
 
+      # TEMPORARY diagnostics: lists each failing test and its error as one annotation.
+      - name: Explain test failures (temporary)
+        if: failure() && runner.os == 'Linux'
+        run: |
+          xvfb-run -a python -m unittest discover -s tests -t . > unittest.log 2>&1 || true
+          msg="$(awk '/^(ERROR|FAIL): /{name=$0; next} name != "" && /^[A-Za-z_.]*(Error|Exception|Failure)[:( ]/{print name " => " $0; name=""}' unittest.log | head -80 | sed -e 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')"
+          echo "::error title=Failing tests (Python ${{ matrix.python }})::${msg}"
+
       - name: Internal smoke tests
         run: python main.py --smoke-test
 
