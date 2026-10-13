@@ -1,0 +1,65 @@
+name: Release
+
+# Runs when a version tag (vX.Y or vX.Y.Z) is pushed and creates the GitHub release from it:
+# the title is "GHAADD X.Y" and the release notes are the message of the ANNOTATED tag.
+# Write the notes as Markdown in a file outside the repository and tag with:
+#   git tag -a vX.Y -F ../notes.md --cleanup=verbatim
+#   git push origin vX.Y
+# --cleanup=verbatim matters: without it git deletes every line that starts with # (the Markdown headings).
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Create the GitHub release
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      # actions/checkout can turn an annotated tag into a plain one, which would lose the release notes.
+      - name: Fetch the real tag object
+        run: git fetch --force origin "+refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
+
+      - name: Check the tag
+        run: |
+          set -eu
+          tag="${GITHUB_REF_NAME}"
+
+          if [ "$(git cat-file -t "refs/tags/${tag}")" != "tag" ]; then
+            echo "::error::${tag} is a lightweight tag. Make an annotated one: git tag -a ${tag} -F ../notes.md --cleanup=verbatim"
+            exit 1
+          fi
+
+          if [ -z "$(git tag -l --format='%(contents)' "${tag}" | tr -d '[:space:]')" ]; then
+            echo "::error::The message of ${tag} is empty, so there would be no release notes."
+            exit 1
+          fi
+
+          version="$(python3 - <<'PY'
+          import re
+          text = open("modules/app_info.py", encoding="utf-8").read()
+          match = re.search(r'^__version__\s*=\s*["\']([^"\']+)["\']', text, re.M)
+          print(match.group(1) if match else "")
+          PY
+          )"
+          echo "tag=${tag#v} __version__=${version}"
+          if [ "${tag#v}" != "${version}" ]; then
+            echo "::error::Tag ${tag} does not match __version__ = \"${version}\" in modules/app_info.py"
+            exit 1
+          fi
+
+      - name: Create the release
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "GHAADD ${GITHUB_REF_NAME#v}" \
+            --notes-from-tag \
+            --verify-tag
