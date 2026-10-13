@@ -44,3 +44,6 @@ htmlcov/
 
 # --- 8. Claude Code personal settings ---
 .claude/settings.local.json
+
+# --- 9. Release notes (the text of the next tag; see .github/workflows/release.yml) ---
+GHAADD_RELEASE_NOTES.md

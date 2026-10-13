@@ -2,8 +2,8 @@ name: Release
 
 # Runs when a version tag (vX.Y or vX.Y.Z) is pushed and creates the GitHub release from it:
 # the title is "GHAADD X.Y" and the release notes are the message of the ANNOTATED tag.
-# Write the notes as Markdown in a file outside the repository and tag with:
-#   git tag -a vX.Y -F ../notes.md --cleanup=verbatim
+# Write the notes as Markdown in GHAADD_RELEASE_NOTES.md (gitignored) and tag with:
+#   git tag -a vX.Y -F GHAADD_RELEASE_NOTES.md --cleanup=verbatim
 #   git push origin vX.Y
 # --cleanup=verbatim matters: without it git deletes every line that starts with # (the Markdown headings).
 on:
@@ -35,7 +35,7 @@ jobs:
           tag="${GITHUB_REF_NAME}"
 
           if [ "$(git cat-file -t "refs/tags/${tag}")" != "tag" ]; then
-            echo "::error::${tag} is a lightweight tag. Make an annotated one: git tag -a ${tag} -F ../notes.md --cleanup=verbatim"
+            echo "::error::${tag} is a lightweight tag. Make an annotated one: git tag -a ${tag} -F GHAADD_RELEASE_NOTES.md --cleanup=verbatim"
             exit 1
           fi
 
