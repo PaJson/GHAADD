@@ -93,12 +93,21 @@ class FolderCheckTriggerTests(unittest.TestCase):
         self.destinations.assert_not_called()
 
     def test_a_request_during_the_countdown_runs_the_check_and_keeps_waiting(self) -> None:
-        cycle, _ = self.stop_after(10**6)  # never stops by itself
-        timer = threading.Timer(0.4, daemon_control.request_check_folders)
-        stopper = threading.Timer(2.5, daemon_control.request_stop)
-        for timer_ in (timer, stopper):
-            timer_.start()
-            self.addCleanup(timer_.cancel)
+        # The timers start from inside the first poll, i.e. after the daemon's watcher has taken its baseline:
+        # started from the test itself, a slow runner could send the request before the loop was ready, and the
+        # request would then count as already seen.
+        timers: list[threading.Timer] = []
+
+        def cycle(connection, token, should_pause=None):
+            if timers:
+                return
+            timers.extend((
+                threading.Timer(0.4, daemon_control.request_check_folders),
+                threading.Timer(2.5, daemon_control.request_stop),
+            ))
+            for timer_ in timers:
+                timer_.start()
+                self.addCleanup(timer_.cancel)
 
         output = self.run_loop(0, cycle)  # no automatic checks, so any call comes from the request
 
