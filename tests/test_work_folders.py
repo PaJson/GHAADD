@@ -42,6 +42,34 @@ class WorkFoldersTests(unittest.TestCase):
                 os.utime(os.path.join(root, "Complete"), ns=(1, 1))  # force a visible mtime change on coarse clocks
                 self.assertEqual(cache.get()["complete"], 1)
 
+    def test_move_is_refused_only_while_a_job_runs(self) -> None:
+        self.assertEqual(work_folders.move_blocked_reason(None, False), "")
+        self.assertEqual(work_folders.move_blocked_reason("o/app", False), "")
+        self.assertIn("busy with o/app", work_folders.move_blocked_reason("o/app", True))
+        self.assertIn("busy", work_folders.move_blocked_reason(None, True))
+
+    def test_move_result_text(self) -> None:
+        text = work_folders.move_result_text
+        self.assertEqual(text({"moved_release_folders": 0}), "Nothing was moved.")
+        self.assertEqual(text({"moved_release_folders": 1, "moved_repositories": 1}), "Moved 1 item for 1 repository.")
+        self.assertEqual(
+            text({"moved_release_folders": 5, "moved_repositories": 2, "missing_destination_warnings": 1}),
+            "Moved 5 items for 2 repositories. 1 destination does not exist (see Warnings).",
+        )
+
+    def test_movable_cache_counts_repositories_and_follows_the_folders(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = {"paths": {"default_download_dir": tmp}}
+            with mock.patch.object(work_folders.config_manager, "load_config", return_value=config), \
+                    mock.patch.object(work_folders.asset_downloader, "count_movable_complete_repos",
+                                      side_effect=[0, 2]) as counter:
+                cache = work_folders.movable_cache()
+                self.assertEqual(cache.get(), 0)
+                self.assertEqual(cache.get(), 0)
+                self.assertEqual(counter.call_count, 1)  # nothing changed: not asked again
+                os.makedirs(os.path.join(tmp, "GHAADD", "Complete"))  # the folder appears: asked again
+                self.assertEqual(cache.get(), 2)
+
     def test_open_target_falls_back_to_existing_parent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(work_folders.open_target(tmp), os.path.normpath(tmp))

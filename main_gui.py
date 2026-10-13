@@ -22,6 +22,7 @@ from tkinter import filedialog, messagebox, ttk
 from typing import Any, Callable, Iterable, Literal, Optional
 
 from modules import (
+    asset_downloader,
     autostart,
     backup_manager,
     config_manager,
@@ -302,6 +303,7 @@ class ControlBar(ttk.Frame):
         folders_box = ttk.LabelFrame(groups, text="Folders", padding=box_padding, labelanchor="n")
         tools_box = ttk.LabelFrame(groups, text="Tools", padding=box_padding, labelanchor="n")
         self.folder_buttons = {key: ttk.Button(folders_box, text=label) for key, label in work_folders.FOLDER_BUTTONS}
+        self.move_button = ttk.Button(folders_box, text="↻", width=3)  # shown only while Complete holds movable repos
         self.start_button = ttk.Button(daemon_box, text="Start")
         self.stop_button = ttk.Button(daemon_box, text="Stop")
         self.pause_button = ttk.Button(daemon_box, text="Pause")
@@ -332,7 +334,7 @@ class ControlBar(ttk.Frame):
         for box, widgets in (
             (daemon_box, (self.start_button, self.stop_button, self.pause_button, self.restart_button)),
             (polling_box, (self.poll_button, self.single_button, self.check_button)),
-            (folders_box, tuple(self.folder_buttons.values())),
+            (folders_box, (self.move_button, *self.folder_buttons.values())),
             (tools_box, (self.log_check, self.doctor_button, self.stats_button, self.settings_button)),
         ):
             box.pack(side="left", padx=(0, 10))
@@ -345,6 +347,8 @@ class ControlBar(ttk.Frame):
         attach_tooltip(self.stats_button, gui_tooltips.CONTROL_HELP["stats"])
         for key, button in self.folder_buttons.items():
             attach_tooltip(button, gui_tooltips.CONTROL_HELP[f"folder_{key}"])
+        attach_tooltip(self.move_button, gui_tooltips.CONTROL_HELP["move_complete"])
+        self.move_button.grid_remove()
         # The light/dark switch sits at the right edge of the header, clear of the centred groups.
         self.theme_button = ttk.Button(self, text=gui_theme.button_text(False), width=8)
         self.theme_button.place(relx=1.0, x=-2, y=0, anchor="ne")
@@ -357,6 +361,15 @@ class ControlBar(ttk.Frame):
             text = work_folders.button_text(label, counts.get(key, 0))
             if str(self.folder_buttons[key].cget("text")) != text:
                 self.folder_buttons[key].configure(text=text)
+
+    def set_movable(self, count: int) -> None:
+        """Show the small move button (left of Complete) while `count` repositories could be moved, else hide it."""
+        shown = self.move_button.winfo_manager() != ""
+        if count > 0:
+            if not shown:
+                self.move_button.grid()  # restores the remembered grid options
+        elif shown:
+            self.move_button.grid_remove()
 
     def set_doctor_attention(self, reasons: list[str], highlight: bool) -> None:
         """Highlight the Doctor button (and say why in its tooltip) when something needed is missing."""
@@ -3535,6 +3548,9 @@ class MainWindow(tk.Tk):
         self._refresh_ms = int(config_manager.get_gui_refresh_seconds(config) * 1000)
         self._status_message_ms = int(config_manager.get_gui_status_message_seconds(config) * 1000)
         self._folder_counts = work_folders.folder_count_cache()
+        self._movable = work_folders.movable_cache()
+        self._move_result: list[object] = []  # filled by the move thread: a summary dict or an Exception
+        self._moving = False
         self._icon_image: Optional[tk.PhotoImage] = None  # keep a reference or Tk drops the icon
         self._set_icon()
         self.minsize(*self.MIN_SIZE)
@@ -3591,6 +3607,7 @@ class MainWindow(tk.Tk):
         self.control_bar.stats_button.configure(command=self._open_stats)
         for key, button in self.control_bar.folder_buttons.items():
             button.configure(command=lambda key=key: self._open_work_folder(key))
+        self.control_bar.move_button.configure(command=self._on_move_complete)
         self.control_bar.theme_button.configure(command=self._toggle_dark_mode)
         self.control_bar.theme_button.configure(text=gui_theme.button_text(self._dark))
         ttk.Separator(self).pack(fill="x")
@@ -3769,6 +3786,50 @@ class MainWindow(tk.Tk):
             self.control_bar.set_folder_counts(self._folder_counts.get())  # re-lists only a changed folder
         except Exception:  # a hiccup in a slow or missing drive must not disturb the refresh loop
             pass
+        try:
+            self.control_bar.set_movable(0 if self._moving else self._movable.get())
+        except Exception:
+            pass
+
+    def _on_move_complete(self) -> None:
+        """Move now button: move what waits in Complete to the repositories' destinations (not while a job runs)."""
+        if self._moving:
+            return
+        snapshot = self._snapshot
+        job_running = snapshot.running and (snapshot.current_repo is not None or snapshot.progress is not None)
+        busy_repo = snapshot.current_repo or (snapshot.progress.repo if snapshot.progress else None)
+        reason = work_folders.move_blocked_reason(busy_repo, job_running)
+        if reason:
+            self.set_status(reason)
+            return
+        self._moving = True
+        self.control_bar.set_movable(0)
+        self.set_status("Moving the finished downloads from Complete to their destinations…")
+
+        def run() -> None:
+            """Thread body: do the move (it can take a while on a big folder) and queue the outcome."""
+            try:
+                self._move_result.append(asset_downloader.move_complete_folders_to_mapped_destinations())
+            except Exception as exc:  # shown in the footer instead of vanishing
+                self._move_result.append(exc)
+
+        threading.Thread(target=run, daemon=True).start()
+        self.after(200, self._poll_move_result)
+
+    def _poll_move_result(self) -> None:
+        """Show the outcome of the move thread in the footer once it is there; until then look again soon."""
+        if not self._move_result:
+            self.after(200, self._poll_move_result)
+            return
+        outcome = self._move_result.pop()
+        self._moving = False
+        self._movable.invalidate()
+        self._folder_counts.invalidate()
+        if isinstance(outcome, Exception):
+            self.set_status(f"Moving from Complete failed: {describe_error(outcome)}")
+        elif isinstance(outcome, dict):
+            self.set_status(work_folders.move_result_text(outcome))
+        self._update_folder_counts()
 
     def _open_repo_folder(self, repo: str) -> None:
         """Open a repository's folder like the Mappings tab's "Open folder" button does."""

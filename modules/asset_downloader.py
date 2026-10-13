@@ -25,7 +25,7 @@ from modules.config_manager import (
     load_config,
 )
 from email.utils import parsedate_tz, mktime_tz
-from modules.lifecycle_logger import clear_limit_warnings, log_warning, repos_with_limit_warnings
+from modules.lifecycle_logger import clear_limit_warnings, log_relocated_move, log_warning, repos_with_limit_warnings
 from modules.mapping_manager import (
     build_default_folder,
     get_repository_limit_release_type_folders,
@@ -428,8 +428,15 @@ def _warn_if_destination_limit_exceeded(repo: Optional[str], repo_destination_ro
     return 1
 
 
-def _move_complete_repo_tree(source_repo_dir: str, target_repo_root: str) -> int:
-    """Move one repository subtree from Complete into mapped destination root."""
+def _move_complete_repo_tree(
+    source_repo_dir: str,
+    target_repo_root: str,
+    moved_to: Optional[list[str]] = None,
+) -> int:
+    """Move one repository subtree from Complete into mapped destination root.
+
+    Every new path is appended to `moved_to` when given (the caller logs one event per release).
+    """
     moved_release_folders = 0
     os.makedirs(target_repo_root, exist_ok=True)
 
@@ -453,6 +460,8 @@ def _move_complete_repo_tree(source_repo_dir: str, target_repo_root: str) -> int
                         target_path = _resolve_directory_name_collision(target_path)
                         shutil.move(release_entry.path, target_path)
                         moved_release_folders += 1
+                        if moved_to is not None:
+                            moved_to.append(target_path)
             except OSError:
                 continue
 
@@ -466,6 +475,8 @@ def _move_complete_repo_tree(source_repo_dir: str, target_repo_root: str) -> int
         target_path = _resolve_directory_name_collision(target_path)
         shutil.move(source_path, target_path)
         moved_release_folders += 1
+        if moved_to is not None:
+            moved_to.append(target_path)
 
     try:
         os.rmdir(source_repo_dir)
@@ -473,6 +484,40 @@ def _move_complete_repo_tree(source_repo_dir: str, target_repo_root: str) -> int
         pass
 
     return moved_release_folders
+
+
+def count_movable_complete_repos() -> int:
+    """Return how many repositories wait in Complete and could be moved now (read-only; the small move button).
+
+    Same test as the mover: the repository has a destination that exists and a folder under Complete.
+    """
+    try:
+        config = load_config()
+        folder_settings = get_folder_settings(config)
+        repositories = load_mapping().get("repositories", [])
+        download_roots = get_all_download_dirs(config)
+    except Exception:  # a broken config or mapping file means "nothing to offer", never an error in the GUI
+        return 0
+
+    waiting = 0
+    for download_root in download_roots:
+        complete_root = os.path.join(download_root, folder_settings["ghaadd_root"], folder_settings["complete"])
+        if not os.path.isdir(complete_root):
+            continue
+        for entry in repositories:
+            if not isinstance(entry, dict):
+                continue
+            repo_name = str(entry.get("repository") or "").strip()
+            if not repo_name or not str(entry.get("destination") or "").strip():
+                continue
+            if not os.path.isdir(os.path.join(complete_root, _build_repo_parent_folder(repo_name))):
+                continue
+            _target, uses_mapping_destination, fallback_warning = _resolve_finalized_base_directory(
+                repo_name, complete_root
+            )
+            if uses_mapping_destination and not fallback_warning:
+                waiting += 1
+    return waiting
 
 
 def move_complete_folders_to_mapped_destinations() -> dict[str, int]:
@@ -485,6 +530,7 @@ def move_complete_folders_to_mapped_destinations() -> dict[str, int]:
 
     scanned_repo_roots = 0
     moved_release_folders = 0
+    moved_repositories = 0
     missing_destination_warnings = 0
     skipped_without_destination = 0
 
@@ -493,6 +539,7 @@ def move_complete_folders_to_mapped_destinations() -> dict[str, int]:
         return {
             "scanned_repo_roots": scanned_repo_roots,
             "moved_release_folders": moved_release_folders,
+            "moved_repositories": moved_repositories,
             "missing_destination_warnings": missing_destination_warnings,
             "skipped_without_destination": skipped_without_destination,
         }
@@ -540,9 +587,13 @@ def move_complete_folders_to_mapped_destinations() -> dict[str, int]:
                 skipped_without_destination += 1
                 continue
 
-            moved_now = _move_complete_repo_tree(source_repo_dir, target_repo_root)
+            moved_to: list[str] = []
+            moved_now = _move_complete_repo_tree(source_repo_dir, target_repo_root, moved_to)
+            for new_path in moved_to:
+                log_relocated_move(repo_name, os.path.basename(new_path), new_path)
             if moved_now > 0:
                 moved_release_folders += moved_now
+                moved_repositories += 1
                 print(
                     "✅ Deferred move completed for "
                     f"{repo_name}: moved {moved_now} item(s) to '{target_repo_root}'."
@@ -560,6 +611,7 @@ def move_complete_folders_to_mapped_destinations() -> dict[str, int]:
     return {
         "scanned_repo_roots": scanned_repo_roots,
         "moved_release_folders": moved_release_folders,
+        "moved_repositories": moved_repositories,
         "missing_destination_warnings": missing_destination_warnings,
         "skipped_without_destination": skipped_without_destination,
     }

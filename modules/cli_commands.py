@@ -289,7 +289,7 @@ def parse_cli_args(args: list[str], version: str) -> argparse.Namespace:
     )
     lifecycle_group.add_argument(
         "--lifecycle-type",
-        choices=("COMPLETED_MOVE", "PARTIAL_MOVE", "WARNING", "CYCLE_SUMMARY"),
+        choices=("COMPLETED_MOVE", "COMPLETED_RELOCATED", "PARTIAL_MOVE", "WARNING", "CYCLE_SUMMARY"),
         help="Filter lifecycle events by type.",
     )
     lifecycle_group.add_argument(
@@ -309,7 +309,7 @@ def parse_cli_args(args: list[str], version: str) -> argparse.Namespace:
     )
     purge_group.add_argument(
         "--purge-type",
-        choices=("COMPLETED_MOVE", "PARTIAL_MOVE", "WARNING", "CYCLE_SUMMARY"),
+        choices=("COMPLETED_MOVE", "COMPLETED_RELOCATED", "PARTIAL_MOVE", "WARNING", "CYCLE_SUMMARY"),
         help="Limit --purge to one lifecycle event type. Omit to match every type.",
     )
     purge_group.add_argument(

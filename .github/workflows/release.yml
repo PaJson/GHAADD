@@ -1,7 +1,8 @@
 name: Release
 
 # Runs when a version tag (vX.Y or vX.Y.Z) is pushed and creates the GitHub release from it:
-# the title is "GHAADD X.Y" and the release notes are the message of the ANNOTATED tag.
+# the title is "GHAADD X.Y", the release notes are the message of the ANNOTATED tag and a zip with only the
+# files needed to run the app (the list is in the "Build the zip" step) is attached.
 # Write the notes as Markdown in GHAADD_RELEASE_NOTES.md (gitignored) and tag with:
 #   git tag -a vX.Y -F GHAADD_RELEASE_NOTES.md --cleanup=verbatim
 #   git push origin vX.Y
@@ -57,9 +58,24 @@ jobs:
             exit 1
           fi
 
+      # Only what is needed to run the daemon, the GUI and the viewer, taken from the tagged commit (git archive
+      # knows only tracked files, so config.json, .env, state.db and the like can never end up in it).
+      - name: Build the zip
+        run: |
+          set -eu
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p dist
+          git archive --format=zip --prefix="GHAADD-${version}/" \
+            -o "dist/GHAADD-${version}.zip" "refs/tags/${GITHUB_REF_NAME}" -- \
+            main.py main_gui.py modules assets viewer \
+            requirements.txt requirements-optional.txt config.example.json mapping.example.json \
+            README.md LICENSE
+          unzip -l "dist/GHAADD-${version}.zip" | tail -n 1
+
       - name: Create the release
         run: |
           gh release create "${GITHUB_REF_NAME}" \
+            "dist/GHAADD-${GITHUB_REF_NAME#v}.zip" \
             --title "GHAADD ${GITHUB_REF_NAME#v}" \
             --notes-from-tag \
             --verify-tag
