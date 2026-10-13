@@ -28,7 +28,7 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
           cache: pip
-          cache-dependency-path: requirements-dev.txt
+          cache-dependency-path: requirements*.txt
 
       - name: Install Tk and a virtual display (Linux only)
         if: runner.os == 'Linux'
@@ -58,7 +58,7 @@ jobs:
         with:
           python-version: "3.14"
           cache: pip
-          cache-dependency-path: requirements-dev.txt
+          cache-dependency-path: requirements*.txt
 
       - name: Install dependencies
         run: python -m pip install -r requirements-dev.txt
