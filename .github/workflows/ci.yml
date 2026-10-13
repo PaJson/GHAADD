@@ -25,11 +25,11 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        python: ["3.10", "3.14"]
+        python: ["3.11", "3.14"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
           cache: pip
@@ -50,14 +50,6 @@ jobs:
         if: runner.os != 'Linux'
         run: python -m unittest discover -s tests -t .
 
-      # TEMPORARY diagnostics: lists each failing test and its error as one annotation.
-      - name: Explain test failures (temporary)
-        if: failure() && runner.os == 'Linux'
-        run: |
-          xvfb-run -a python -m unittest discover -s tests -t . > unittest.log 2>&1 || true
-          msg="$(awk 'function flush() { if (name != "" && last != "") print last "\t" name; name = ""; last = "" } /^={30,}/ { flush(); next } /^(ERROR|FAIL): / { name = $0; last = ""; next } name != "" && /^[A-Za-z_][A-Za-z0-9_.]*(Error|Exception|Failure)(:|\()/ { last = $0 } END { flush() }' unittest.log | awk -F'\t' '{ c[$1]++; if (!($1 in ex)) ex[$1] = $2 } END { for (k in c) print c[k] "x " k "   e.g. " ex[k] }' | sort -rn | head -40 | sed -e 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')"
-          echo "::error title=Failing tests (Python ${{ matrix.python }})::${msg}"
-
       - name: Internal smoke tests
         run: python main.py --smoke-test
 
@@ -65,9 +57,9 @@ jobs:
     name: Pyright
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.14"
           cache: pip
