@@ -158,6 +158,9 @@ CONTROL_HELP = {
                      "It does not poll the mailbox.",
     "folder_complete": "Open the Complete folder: finished downloads of repositories without a destination wait here. "
                        "The number is how many items it holds.",
+    "move_complete": "Finished downloads of repositories that now have a destination are still waiting in Complete. "
+                     "Click to move them there. It does not run while the "
+                     "daemon is busy with a job. Each moved release is listed in the Completed tab as \"Moved\".",
     "folder_logs": "Open the Logs folder with the terminal log files. The number is how many files it holds.",
     "folder_partial": "Open the Partial folder: downloads that did not finish completely. "
                       "The number is how many items it holds.",

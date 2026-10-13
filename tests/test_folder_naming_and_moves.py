@@ -373,6 +373,46 @@ class DeferredMoveTests(MoveTestCase):
         self.assertEqual(self.read(taken, "keep.txt"), "old")
         self.assertEqual(self.read(taken + " (2)", "app.zip"), "payload")
 
+    def test_every_moved_release_is_recorded_as_a_relocated_event(self) -> None:
+        self.write_mapping(destination=self.destination, folder="My App", subfolder="")
+        self.make_release(REPO_FOLDER, "Release", "rel1", root=self.complete)
+        self.make_release(REPO_FOLDER, "Pre-release", "rel2", root=self.complete)
+
+        stats = self.run_quietly(asset_downloader.move_complete_folders_to_mapped_destinations)
+
+        connection = db_manager.open_database()
+        try:
+            events = db_manager.get_lifecycle_events(connection, event_type="COMPLETED_RELOCATED")
+        finally:
+            connection.close()
+        self.assertEqual(stats["moved_repositories"], 1)
+        self.assertEqual(sorted(event["destination_path"] for event in events), sorted([
+            os.path.join(self.destination, "My App", "Release", "rel1"),
+            os.path.join(self.destination, "My App", "Pre-release", "rel2"),
+        ]))
+        self.assertTrue(all(event["repo"] == REPO for event in events))
+
+    def test_nothing_is_recorded_when_nothing_moved(self) -> None:
+        self.write_mapping()
+        self.make_release(REPO_FOLDER, "Release", "rel1", root=self.complete)
+        self.run_quietly(asset_downloader.move_complete_folders_to_mapped_destinations)
+        connection = db_manager.open_database()
+        try:
+            self.assertEqual(db_manager.get_lifecycle_events(connection, event_type="COMPLETED_RELOCATED"), [])
+        finally:
+            connection.close()
+
+    def test_the_movable_count_matches_what_the_move_would_do(self) -> None:
+        self.make_release(REPO_FOLDER, "Release", "rel1", root=self.complete)
+        self.write_mapping()  # no destination yet
+        self.assertEqual(asset_downloader.count_movable_complete_repos(), 0)
+        self.write_mapping(destination=os.path.join(self.root, "not-there"), folder="My App")
+        self.assertEqual(asset_downloader.count_movable_complete_repos(), 0)  # the destination folder is missing
+        self.write_mapping(destination=self.destination, folder="My App")
+        self.assertEqual(asset_downloader.count_movable_complete_repos(), 1)
+        self.run_quietly(asset_downloader.move_complete_folders_to_mapped_destinations)
+        self.assertEqual(asset_downloader.count_movable_complete_repos(), 0)  # emptied: the button goes away
+
     def test_nothing_to_do_without_a_complete_folder(self) -> None:
         self.write_mapping(destination=self.destination, folder="My App")
         stats = self.run_quietly(asset_downloader.move_complete_folders_to_mapped_destinations)

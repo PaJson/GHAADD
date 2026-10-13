@@ -27,6 +27,9 @@ from modules.warning_types import OWN_TAB_TYPES
 
 DEFAULT_ROW_LIMIT = 500
 
+# lifecycle_logger.RELOCATED_EVENT_TYPE (a test keeps the two equal): this module must not import the database layer.
+RELOCATED_EVENT_TYPE = "COMPLETED_RELOCATED"
+
 KIND_EVENTS = "events"
 KIND_UNMAPPED = "unmapped"
 
@@ -63,7 +66,12 @@ TAB_DEFS: tuple[TabDef, ...] = (
         event_types=("WARNING", "PARTIAL_MOVE"),
         exclude_categories=OWN_TAB_TYPES,  # those have their own tab (LIMIT, UNMAPPED)
     ),
-    TabDef(key="completed", title="Completed", event_types=("COMPLETED_MOVE",), type_source=TYPE_TAG),
+    TabDef(
+        key="completed",
+        title="Completed",
+        event_types=("COMPLETED_MOVE", RELOCATED_EVENT_TYPE),
+        type_source=TYPE_TAG,
+    ),
     TabDef(
         key="limits",
         title="Folder limits",
@@ -312,7 +320,9 @@ class StatusTabsModel:
         """Convert one stored event into a display row (the tab decides what goes in the Type column)."""
         message = str(event.get("message") or "")
         if tab.type_source == TYPE_TAG:
-            kind = format_tag(event.get("tag"), release_type_from_path(event.get("destination_path")))
+            # A release moved later from Complete has no tag to show: it reads "(R) Moved".
+            tag = "Moved" if event.get("event_type") == RELOCATED_EVENT_TYPE else event.get("tag")
+            kind = format_tag(tag, release_type_from_path(event.get("destination_path")))
         elif tab.type_source == TYPE_FIXED:
             kind = tab.type_text
         else:

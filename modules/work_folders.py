@@ -6,7 +6,7 @@ Toolkit-independent: paths come from config.json, counts from one directory list
 import os
 from typing import Any, Dict, NamedTuple, Optional
 
-from modules import config_manager
+from modules import asset_downloader, config_manager, mapping_manager
 from modules.file_cache import StatCache
 
 
@@ -53,6 +53,47 @@ def folder_count_cache() -> StatCache[dict[str, int]]:
         paths=lambda: [item.path for item in work_folders()],
         compute=lambda: {item.key: count_entries(item.path) for item in work_folders()},
     )
+
+
+def movable_cache() -> StatCache[int]:
+    """Return a cache of how many repositories wait in Complete with a destination that is ready now.
+
+    Watches mapping.json and every Complete folder; a destination folder that appears later is caught by the
+    cache's periodic safety refresh.
+    """
+    def watched() -> list[str]:
+        """List mapping.json and the Complete folder of every download root."""
+        config = config_manager.load_config()
+        settings = config_manager.get_folder_settings(config)
+        roots = [
+            os.path.join(root, settings["ghaadd_root"], settings["complete"])
+            for root in config_manager.get_all_download_dirs(config)
+        ]
+        return [mapping_manager._mapping_file_path(), *roots]
+
+    return StatCache(paths=watched, compute=asset_downloader.count_movable_complete_repos)
+
+
+def move_blocked_reason(busy_repo: Optional[str], job_running: bool) -> str:
+    """Return why the move button must wait ("" when it may run): the daemon is in the middle of a job."""
+    if not job_running:
+        return ""
+    where = f" with {busy_repo}" if busy_repo else ""
+    return f"The daemon is busy{where}: try again when the job has finished."
+
+
+def move_result_text(summary: Dict[str, int]) -> str:
+    """Return the status line for a finished move: how many items moved for how many repositories."""
+    items = int(summary.get("moved_release_folders", 0))
+    repos = int(summary.get("moved_repositories", 0))
+    problems = int(summary.get("missing_destination_warnings", 0))
+    if items == 0:
+        text = "Nothing was moved."
+    else:
+        text = f"Moved {items} item{'s' if items != 1 else ''} for {repos} repositor{'ies' if repos != 1 else 'y'}."
+    if problems:
+        text += f" {problems} destination{'s do' if problems != 1 else ' does'} not exist (see Warnings)."
+    return text
 
 
 def button_text(label: str, count: int) -> str:

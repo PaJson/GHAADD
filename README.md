@@ -241,7 +241,7 @@ CLI options:
 - --mapping-validate: Validate mapping.json schema and print errors/warnings.
 	- Add --json to output the validation result as JSON.
 	- Includes an advisory warning when two or more repositories resolve to the same destination+folder+subfolder path (often left over after a repository rename).
-- --move-complete-to-destination: Retry moving repository folders from `Complete` to configured mapping destinations.
+- --move-complete-to-destination: Retry moving repository folders from `Complete` to configured mapping destinations (the GUI's small "↻" button next to Complete does the same). Each moved release is recorded as a `COMPLETED_RELOCATED` event and shows in the Completed tab as "Moved".
 	- Useful when destination storage was unavailable earlier (for example NAS/network issues).
 	- Add --json to output a machine-readable summary.
 - --queue-status: Print queue counts, due-now count, next pending job, and recent jobs.
@@ -269,10 +269,10 @@ CLI options:
 - --lifecycle-log: Print recent lifecycle events (completed moves, superseded partial moves, typed warnings) recorded in state.db.
 	- Add --json to output the events as JSON.
 	- Add --lifecycle-limit N to control how many events are printed (default 20, 0 means all).
-	- Add --lifecycle-type TYPE to filter by event type (COMPLETED_MOVE, PARTIAL_MOVE, WARNING, CYCLE_SUMMARY).
+	- Add --lifecycle-type TYPE to filter by event type (COMPLETED_MOVE, COMPLETED_RELOCATED, PARTIAL_MOVE, WARNING, CYCLE_SUMMARY).
 	- Add --lifecycle-repo-filter TEXT to filter by repository substring (case-insensitive).
 - --purge: Delete lifecycle events (completed moves, superseded partial moves, warnings, cycle summaries) from state.db. This only clears the lifecycle_events table - job_queue/asset_state are untouched. Requires --purge-age.
-	- Add --purge-type TYPE to limit the purge to one event type (COMPLETED_MOVE, PARTIAL_MOVE, WARNING, CYCLE_SUMMARY). Omit to match every type.
+	- Add --purge-type TYPE to limit the purge to one event type (COMPLETED_MOVE, COMPLETED_RELOCATED, PARTIAL_MOVE, WARNING, CYCLE_SUMMARY). Omit to match every type.
 	- Add --purge-repository TEXT to limit the purge to a repository substring (case-insensitive). Omit to match every repository.
 	- --purge-age DAYS is required: only events at least DAYS old are removed. Use --purge-age 0 to remove every matching event regardless of age - this is a deliberate guard against accidentally wiping everything, since omitting the flag entirely is an error instead of silently defaulting to "all".
 	- Add --dry-run to preview the matching count without deleting anything.

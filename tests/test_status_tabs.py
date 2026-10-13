@@ -9,7 +9,7 @@ import unittest
 from contextlib import closing
 from unittest import mock
 
-from modules import config_manager, db_manager, gui_data, mapping_manager, status_tabs
+from modules import config_manager, db_manager, gui_data, lifecycle_logger, mapping_manager, status_tabs
 from modules.warning_types import OWN_TAB_TYPES
 from modules.status_tabs import StatusTabsModel, TabDef, find_repo, format_title, unmapped_rows
 
@@ -34,10 +34,11 @@ class FakeEvents:
         self.events: list[dict] = []
         self.fetches = 0
 
-    def add(self, event_type, category=None, repo=None, tag=None, message="m", created_at=1_000_000.0) -> int:
+    def add(self, event_type, category=None, repo=None, tag=None, message="m", created_at=1_000_000.0,
+            destination_path=None) -> int:
         event_id = len(self.events) + 1
         self.events.append(dict(id=event_id, event_type=event_type, category=category, repo=repo,
-                                tag=tag, message=message, created_at=created_at))
+                                tag=tag, message=message, created_at=created_at, destination_path=destination_path))
         return event_id
 
     def fetch(self, tab: TabDef, after_id, limit):
@@ -218,6 +219,18 @@ class ModelTests(unittest.TestCase):
         self.assertEqual((completed.kind, completed.repo), ("v9", "o/app"))  # Type column = tag
         limit = model.rows("limits")[0]
         self.assertEqual((limit.kind, limit.repo), ("Limit", ""))  # unknown repo: left empty
+
+    def test_a_release_moved_later_from_complete_shows_in_the_completed_tab_as_moved(self) -> None:
+        self.assertEqual(status_tabs.RELOCATED_EVENT_TYPE, lifecycle_logger.RELOCATED_EVENT_TYPE)
+        self.events.add(
+            "COMPLETED_RELOCATED", repo="o/app", message="Moved from Complete [o/app x] to [y]",
+            destination_path=os.path.join("dest", "App", "Pre-release", "2026-10-06_13-24, Big, v1"),
+        )
+        model = self.model()
+        model.refresh()
+        row = model.rows("completed")[0]
+        self.assertEqual((row.kind, row.repo), ("(P) Moved", "o/app"))
+        self.assertEqual(model.rows("warnings"), [])
 
     def test_a_reset_event_table_resets_the_read_marks(self) -> None:
         self.store.data = {"warnings": 5000, "completed": 5000, "limits": 5000}  # ids from an old database

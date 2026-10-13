@@ -14,6 +14,9 @@ from modules.db_manager import (
 from modules.dry_run_mode import is_dry_run
 from modules.payload_types import IngestCycleStats, QueueCycleStats
 
+# A release moved later from Complete to its destination (the small move button); the Completed tab shows it too.
+RELOCATED_EVENT_TYPE = "COMPLETED_RELOCATED"
+
 
 def _record_lifecycle_event(
     event_type: str,
@@ -95,6 +98,17 @@ def log_completed_move(
         repo=repo,
         tag=tag,
         commit_hash=commit,
+        destination_path=destination_path,
+    )
+
+
+def log_relocated_move(repo: str, release_folder: str, destination_path: str) -> None:
+    """Record that a finished release waiting in Complete was moved to its repository's destination."""
+    message = f"Moved from Complete [{repo} {release_folder}] to [{destination_path}]"
+    _record_lifecycle_event(
+        RELOCATED_EVENT_TYPE,
+        message,
+        repo=repo,
         destination_path=destination_path,
     )
 
