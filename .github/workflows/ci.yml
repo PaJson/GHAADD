@@ -16,6 +16,11 @@ jobs:
   test:
     name: Tests (${{ matrix.os }}, Python ${{ matrix.python }})
     runs-on: ${{ matrix.os }}
+    # modules/mailbox_listener.py refuses to load without these. On a development PC they come from .env;
+    # on the runner there is no .env. Dummy values: the tests fake IMAP, nothing real is contacted.
+    env:
+      GMAIL_USER: ci@example.invalid
+      GMAIL_APP_PASSWORD: dummy-password-for-ci-only
     strategy:
       fail-fast: false
       matrix:
