@@ -3368,7 +3368,7 @@ class StatsDialog(tk.Toplevel):
     def _rebuild(self) -> None:
         """Build the report for the chosen window from the loaded data and show it."""
         if self._data is not None:
-            self._show(stats.report_from(self._data, top=None, date_range=self._range))
+            self._show(stats.report_from(self._data, top=None, date_range=self._range, whole_history=True))
 
     def _show(self, report: dict) -> None:
         """Fill the summary line, the overview and the tables from the report."""

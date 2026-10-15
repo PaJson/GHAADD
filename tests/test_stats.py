@@ -280,6 +280,13 @@ class BuildRangeTests(unittest.TestCase):
         self.assertEqual(len(report["daily"]), stats.DAILY_DAYS)
         self.assertEqual([row["key"] for row in report["periods"]], [key for key, _label, _days in stats.PERIODS])
 
+    def test_whole_history_covers_every_day_since_the_first_job(self) -> None:
+        report = self.build(None, whole_history=True)
+        first_day = datetime.fromtimestamp(min(job[3] for job in jobs_fixture())).date()
+        last_day = datetime.fromtimestamp(NOW).date()
+        self.assertEqual(len(report["daily"]), (last_day - first_day).days + 1)
+        self.assertIn("all time", stats.daily_title(report))
+
     def test_busiest_counts_only_jobs_in_the_window(self) -> None:
         report = self.build(stats.date_range(date(2026, 10, 1), date(2026, 10, 5)))
         self.assertEqual([(row["repo"], row["jobs"]) for row in report["busiest_repositories"]],
