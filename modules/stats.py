@@ -271,6 +271,8 @@ def daily_title(report: Mapping[str, Any], unit: str = "day") -> str:
     count = len(report["daily"])
     if report.get("range"):
         return f"Jobs per {unit}, {report['range']}, {count} days"
+    if report.get("daily_all_time"):
+        return f"Jobs per {unit}, all time, {count} days"
     return f"Jobs per {unit}, last {count} days"
 
 
@@ -322,8 +324,12 @@ def build(
     top: Optional[int] = TOP_COUNT,
     date_range: Optional[DateRange] = None,
     job_sizes: Sequence[tuple[str, str, float, int, int]] = (),
+    whole_history: bool = False,
 ) -> dict[str, Any]:
     """Assemble the report from already loaded data (no file or database access; this is what the tests feed).
+
+    Without a window the Per day series is the last 30 days; `whole_history` (the GUI's "All time") makes it cover
+    every day since the first job instead.
 
     With a `date_range` the Busiest, Biggest and Per day figures cover only that window and the Activity table gets
     one more row for it. Sizes come from `job_sizes` (repo, tag, created_at, bytes, files: the finished folder of each
@@ -375,7 +381,9 @@ def build(
         "biggest_releases": len(ranked_sizes),
     }
     today = _day(now)
-    if date_range is None:
+    if date_range is None and whole_history and first_job:
+        daily = _daily(jobs, _day(first_job), today)
+    elif date_range is None:
         daily = _daily(jobs, today - timedelta(days=DAILY_DAYS - 1), today)
     else:
         first_day = _day(date_range.start) if date_range.start is not None else (_day(first_job) if first_job else today)
@@ -416,6 +424,7 @@ def build(
         },
         "periods": _period_rows(jobs, cycles, release_first_job, dated_sizes, now, first_job, date_range),
         "range": None if date_range is None else date_range.label,
+        "daily_all_time": date_range is None and whole_history and bool(first_job),
         "daily": daily,
         "busiest_repositories": busiest_repositories,
         "biggest_repositories": biggest_repos,
@@ -458,11 +467,12 @@ def report_from(
     now: Optional[float] = None,
     top: Optional[int] = TOP_COUNT,
     date_range: Optional[DateRange] = None,
+    whole_history: bool = False,
 ) -> dict[str, Any]:
     """Build the report from load()'s data; the GUI calls this again for every new window or "now"."""
     report = build(
         data["entries"], data["jobs"], data["cycles"], data["sizes"], data["folder_counts"],
-        time.time() if now is None else now, top, date_range, data.get("job_sizes", ()),
+        time.time() if now is None else now, top, date_range, data.get("job_sizes", ()), whole_history,
     )
     report["storage"] = data["storage"]
     return report
