@@ -508,10 +508,23 @@ def period_rows(report: Mapping[str, Any]) -> list[tuple[str, ...]]:
     ]
 
 
+def busiest_headers(report: Mapping[str, Any]) -> tuple[str, ...]:
+    """Return the Busiest headings; the third column is "30 days" normally and "Per day" with a chosen range."""
+    if report.get("range"):
+        return BUSIEST_HEADERS[:2] + ("Per day",) + BUSIEST_HEADERS[3:]
+    return BUSIEST_HEADERS
+
+
 def busiest_rows(report: Mapping[str, Any]) -> list[tuple[str, ...]]:
-    """Turn the busiest repositories into table rows of display strings."""
+    """Turn the busiest repositories into table rows of display strings.
+
+    The third column is the last 30 days normally; with a chosen range it is the average jobs per day over that range
+    (a fixed 30-day count would mix the range with the present day).
+    """
+    days = max(len(report["daily"]), 1) if report.get("range") else 0
     return [
-        (r["repo"], f"{r['jobs']:,}", f"{r['jobs_30d']:,}", f"{r['failed']:,}", format_bytes(r["bytes"]), r["last_job"])
+        (r["repo"], f"{r['jobs']:,}", f"{r['jobs'] / days:.2g}" if days else f"{r['jobs_30d']:,}", f"{r['failed']:,}",
+         format_bytes(r["bytes"]), r["last_job"])
         for r in report["busiest_repositories"]
     ]
 
@@ -608,7 +621,7 @@ def format_report(report: Mapping[str, Any]) -> str:
 
     busiest, biggest, releases = busiest_rows(report), biggest_rows(report), release_rows(report)
     busiest_title, biggest_title, releases_title = list_titles(report)
-    lines += ["", busiest_title, *_table(BUSIEST_HEADERS, busiest)]
+    lines += ["", busiest_title, *_table(busiest_headers(report), busiest)]
     lines += ["", biggest_title, *_table(BIGGEST_HEADERS, biggest)]
     lines += ["", releases_title, *_table(RELEASE_HEADERS, releases)]
 

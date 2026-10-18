@@ -396,6 +396,15 @@ class TextReportTests(unittest.TestCase):
         self.assertEqual(len(stats.release_rows(self.report)[0]), len(stats.RELEASE_HEADERS))
         self.assertEqual(len(stats.period_rows(self.report)[0]), len(stats.PERIOD_HEADERS))
 
+    def test_the_third_busiest_column_follows_the_chosen_range(self) -> None:
+        repo = {"repo": "o/r", "jobs": 10, "jobs_30d": 7, "failed": 0, "bytes": 0, "last_job": "x"}
+        plain = {"range": None, "daily": [{}] * 30, "busiest_repositories": [repo]}
+        ranged = {"range": "a to b", "daily": [{}] * 2, "busiest_repositories": [repo]}
+        self.assertEqual(stats.busiest_headers(plain)[2], "30 days")
+        self.assertEqual(stats.busiest_rows(plain)[0][2], "7")
+        self.assertEqual(stats.busiest_headers(ranged)[2], "Per day")
+        self.assertEqual(stats.busiest_rows(ranged)[0][2], "5")
+
     def test_the_report_can_be_turned_into_json(self) -> None:
         self.assertEqual(json.loads(json.dumps(self.report))["version"], self.report["version"])
 
