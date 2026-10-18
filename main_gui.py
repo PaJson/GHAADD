@@ -3403,6 +3403,8 @@ class StatsDialog(tk.Toplevel):
         self.busiest_title.configure(text=busiest_title)
         self.biggest_title.configure(text=biggest_title)
         self.releases_title.configure(text=releases_title)
+        for column, heading in zip(stats.BUSIEST_HEADERS, stats.busiest_headers(report)):
+            self.busiest.heading(column, text=heading)
         self._fill(self.busiest, stats.busiest_rows(report))
         self._fill(self.biggest, stats.biggest_rows(report))
         self._fill(self.releases, stats.release_rows(report))
