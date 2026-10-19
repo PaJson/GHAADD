@@ -24,6 +24,7 @@ STATUS_FAILED = "Failed"
 STATUS_RUNNING = "Running"
 
 NO_VALUE = "-"
+SKIPPED_MARK = "(skipped)"  # after the tag of a notification that was not downloaded because the repo is inactive
 
 
 @dataclass(frozen=True)
@@ -191,6 +192,25 @@ def build_rows(
 
         files = format_files(summary)
 
+        # A skipped notification (the repository was inactive) is shown when it is newer than any job of the repo:
+        # the tag it announced, marked "(skipped)", and when the daemon saw it. No files were fetched for it.
+        skipped_tag = summary.get("skipped_tag") if summary else None
+        show_skipped = bool(
+            summary and skipped_tag
+            and (summary.get("latest_tag") is None or float(summary.get("skipped_at") or 0) > float(summary.get("latest_updated_at") or 0))
+        )
+        if show_skipped and summary:
+            tag_text = f"{format_tag(skipped_tag, summary.get('skipped_release_type'))} {SKIPPED_MARK}"
+            last_check_text = format_timestamp(summary.get("skipped_at"))
+            files = files_total = NO_VALUE
+        elif summary:
+            tag_text = format_tag(summary.get("latest_tag"), summary.get("latest_release_type")) or NO_VALUE
+            last_check_text = format_timestamp(summary.get("latest_updated_at"))
+            files_total = format_total_files(summary)
+        else:
+            tag_text, last_check_text, files_total = NO_VALUE, NO_VALUE, NO_VALUE
+        last_activity = max(float(summary.get("last_activity") or 0), float(summary.get("skipped_at") or 0)) if summary else 0.0
+
         folder = str(entry.get("folder") or "").strip() or repo
         limit_text, over, limit_note = format_limit(entry.get("limit"), (folder_counts or {}).get(repo.lower()))
         rows.append(
@@ -199,15 +219,14 @@ def build_rows(
                 folder=folder,
                 destination=str(entry.get("destination") or ""),
                 status=status,
-                tag=format_tag(summary.get("latest_tag"), summary.get("latest_release_type")) or NO_VALUE
-                if summary else NO_VALUE,
-                last_check=format_timestamp(summary.get("latest_updated_at") if summary else None),
+                tag=tag_text,
+                last_check=last_check_text,
                 step=step,
                 next_check=format_timestamp(pending_check),
                 files=files,
-                files_total=format_total_files(summary),
+                files_total=files_total,
                 limit=limit_text,
-                last_activity=float(summary.get("last_activity") or 0) if summary else 0.0,
+                last_activity=last_activity,
                 limit_warning=over or repo.lower() in limit_warned,
                 limit_note=limit_note,
                 pending_count=pending_count,

@@ -951,7 +951,7 @@ class MappingsTab(ttk.Frame):
         entry = self._table.entries[repo]
         return {
             "name": repo,
-            "folder": str(entry.get("folder") or ""),
+            "folder": gui_forms.folder_display_name(repo, entry),
             "destination": str(entry.get("destination") or ""),
             "subfolder": str(entry.get("subfolder") or ""),
             "release_folders": gui_forms.format_list(entry.get("limit_folders")),
@@ -3713,7 +3713,8 @@ class MainWindow(tk.Tk):
         ("kind", "Tag", 175, "w", False),
         ("message", "Message", 420, "w", True),
     )
-    FILTERABLE_TABS = ("warnings", "completed")
+    FOLDER_TABS = ("completed", "skipped")  # these show the Name (folder) and the tag columns
+    FILTERABLE_TABS = ("warnings", "completed", "skipped")
     UNMAPPED_COLUMNS: tuple[StatusTab.Column, ...] = (
         ("repo", "Repository (owner/repo)", 280, "w", True),
         ("folder", "Name (folder)", 280, "w", True),
@@ -3722,6 +3723,7 @@ class MainWindow(tk.Tk):
     EMPTY_TEXTS = {
         "warnings": "No warnings.",
         "completed": "Nothing has been completed yet.",
+        "skipped": "Nothing has been skipped: no inactive repository has announced a release.",
         "limits": "No folder is over its limit.",
         "unmapped": "Every repository has a destination.",
     }
@@ -3736,7 +3738,7 @@ class MainWindow(tk.Tk):
             )
         return StatusTab(
             self.notebook,
-            self.COMPLETED_COLUMNS if definition.key == "completed" else self.EVENT_COLUMNS,
+            self.COMPLETED_COLUMNS if definition.key in self.FOLDER_TABS else self.EVENT_COLUMNS,
             self.EMPTY_TEXTS.get(definition.key, "Nothing to show."), self._show_repo,
             hint="Double-click a row to open its repository in the Mappings tab.",
             on_open_folder=self._open_repo_folder,  # every event tab; Unmapped has no folder to open
@@ -3853,7 +3855,7 @@ class MainWindow(tk.Tk):
     def _show_event_rows(self, key: str, highlight_after: Optional[int]) -> None:
         """Fill an event tab with its rows (the Completed tab also gets folder names and tags)."""
         rows = self.status_feed.model.rows(key)
-        if key == "completed":
+        if key in self.FOLDER_TABS:
             entries = {
                 str(entry.get("repository", "")).lower(): entry
                 for entry in mapping_manager.load_mapping().get("repositories", [])
