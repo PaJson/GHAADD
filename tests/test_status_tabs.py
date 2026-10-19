@@ -232,6 +232,19 @@ class ModelTests(unittest.TestCase):
         self.assertEqual((row.kind, row.repo), ("(P) Moved", "o/app"))
         self.assertEqual(model.rows("warnings"), [])
 
+    def test_skipped_notifications_have_their_own_tab(self) -> None:
+        self.assertEqual(status_tabs.SKIPPED_EVENT_TYPE, lifecycle_logger.SKIPPED_INACTIVE_EVENT_TYPE)
+        self.events.add("SKIPPED_INACTIVE", "Pre-release", repo="o/off", tag="nightly", message="Skipped [o/off nightly]")
+        self.events.add("SKIPPED_INACTIVE", "Pre-release", repo="o/off", tag="nightly", message="Skipped [o/off nightly]")
+        model = self.model()
+        model.refresh()
+
+        rows = model.rows("skipped")
+        self.assertEqual([(r.repo, r.kind) for r in rows], [("o/off", "(P) nightly")] * 2)  # full history
+        self.assertEqual(model.unread("skipped"), 0)  # first sight: everything counts as read
+        self.assertEqual(model.rows("warnings"), [])
+        self.assertEqual(model.rows("completed"), [])
+
     def test_a_reset_event_table_resets_the_read_marks(self) -> None:
         self.store.data = {"warnings": 5000, "completed": 5000, "limits": 5000}  # ids from an old database
         self.events.add("WARNING", "API")
@@ -300,6 +313,14 @@ class HelperTests(unittest.TestCase):
         self.assertEqual([r.repo for r in rows], ["c/new", "b/old", "d/nodate"])
         self.assertEqual(rows[0].first_seen, "2026-10-06 04:47")
         self.assertEqual(rows[1].folder, "Old")
+
+    def test_unmapped_rows_leaves_out_inactive_entries(self) -> None:
+        entries = [
+            {"repository": "a/off", "destination": "", "active": False},
+            {"repository": "b/on", "destination": "", "active": True},
+        ]
+
+        self.assertEqual([r.repo for r in unmapped_rows(entries)], ["b/on"])
 
 
 class DatabaseQueryTests(unittest.TestCase):

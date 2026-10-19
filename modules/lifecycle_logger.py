@@ -18,6 +18,10 @@ from modules.payload_types import IngestCycleStats, QueueCycleStats
 RELOCATED_EVENT_TYPE = "COMPLETED_RELOCATED"
 
 
+# A notification of a repository switched off (active false) that was not queued; the Mappings table shows its tag.
+SKIPPED_INACTIVE_EVENT_TYPE = "SKIPPED_INACTIVE"
+
+
 def _record_lifecycle_event(
     event_type: str,
     message: str,
@@ -110,6 +114,18 @@ def log_relocated_move(repo: str, release_folder: str, destination_path: str) ->
         message,
         repo=repo,
         destination_path=destination_path,
+    )
+
+
+def log_inactive_skip(repo: str, tag: str, release_type: Optional[str]) -> None:
+    """Record that a notification of an inactive repository was not queued (the release type goes in `category`)."""
+    label = release_type or "Release"
+    _record_lifecycle_event(
+        SKIPPED_INACTIVE_EVENT_TYPE,
+        f"Skipped [{repo} {tag} ({label})]: the repository is inactive",
+        category=label,
+        repo=repo,
+        tag=tag,
     )
 
 

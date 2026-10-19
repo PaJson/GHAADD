@@ -32,7 +32,13 @@ from modules.asset_downloader import (
     move_processing_folder_to_complete,
     move_processing_folder_to_partial,
 )
-from modules.lifecycle_logger import log_completed_move, log_cycle_summary, log_partial_move, log_warning
+from modules.lifecycle_logger import (
+    log_completed_move,
+    log_cycle_summary,
+    log_inactive_skip,
+    log_partial_move,
+    log_warning,
+)
 from modules.mailbox_listener import (
     get_pending_notifications,
     mark_as_read_and_delete,
@@ -620,6 +626,7 @@ def ingest_notifications_once(
                 print(
                     f"⊘ Repository is inactive; moved unread notification to Trash and skipped queueing {repo} {tag}."
                 )
+                log_inactive_skip(repo, tag, release_type)
                 inactive_emails_to_trash.extend(email_ids)
                 inactive_count += 1
                 continue

@@ -29,6 +29,8 @@ DEFAULT_ROW_LIMIT = 500
 
 # lifecycle_logger.RELOCATED_EVENT_TYPE (a test keeps the two equal): this module must not import the database layer.
 RELOCATED_EVENT_TYPE = "COMPLETED_RELOCATED"
+# lifecycle_logger.SKIPPED_INACTIVE_EVENT_TYPE (kept equal by a test), same reason.
+SKIPPED_EVENT_TYPE = "SKIPPED_INACTIVE"
 
 KIND_EVENTS = "events"
 KIND_UNMAPPED = "unmapped"
@@ -37,6 +39,7 @@ KIND_UNMAPPED = "unmapped"
 TYPE_CATEGORY = "category"
 TYPE_TAG = "tag"
 TYPE_FIXED = "fixed"
+TYPE_TAG_CATEGORY = "tag_category"  # the event's tag with its release type, which is stored in the category
 
 
 @dataclass(frozen=True)
@@ -71,6 +74,12 @@ TAB_DEFS: tuple[TabDef, ...] = (
         title="Completed",
         event_types=("COMPLETED_MOVE", RELOCATED_EVENT_TYPE),
         type_source=TYPE_TAG,
+    ),
+    TabDef(
+        key="skipped",
+        title="Skipped",
+        event_types=(SKIPPED_EVENT_TYPE,),  # notifications of inactive repositories: nothing was downloaded
+        type_source=TYPE_TAG_CATEGORY,
     ),
     TabDef(
         key="limits",
@@ -156,11 +165,14 @@ def find_repo(message: str, known: Mapping[str, str]) -> str:
 
 
 def unmapped_rows(entries: Iterable[Mapping[str, Any]]) -> list[UnmappedRow]:
-    """Mapping entries without a destination (the daemon adds these when an unknown repo notifies)."""
+    """Active mapping entries without a destination (the daemon adds these when an unknown repo notifies).
+
+    An entry switched off (active false) is left out: that was a deliberate choice, so it needs no warning.
+    """
     rows = []
     for entry in entries:
         name = str(entry.get("repository") or "").strip()
-        if not name or str(entry.get("destination") or "").strip():
+        if not name or str(entry.get("destination") or "").strip() or entry.get("active") is False:
             continue
         stamp = str(entry.get("last_notification") or "")
         rows.append(
@@ -323,6 +335,8 @@ class StatusTabsModel:
             # A release moved later from Complete has no tag to show: it reads "(R) Moved".
             tag = "Moved" if event.get("event_type") == RELOCATED_EVENT_TYPE else event.get("tag")
             kind = format_tag(tag, release_type_from_path(event.get("destination_path")))
+        elif tab.type_source == TYPE_TAG_CATEGORY:
+            kind = format_tag(event.get("tag"), event.get("category"))
         elif tab.type_source == TYPE_FIXED:
             kind = tab.type_text
         else:

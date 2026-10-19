@@ -135,12 +135,11 @@ class RepoFormTests(unittest.TestCase):
 
     def test_bad_values_are_reported(self) -> None:
         result = gui_forms.build_repo_changes(
-            self.valid_form(destination=" ", limit="ten", recheck="5, x, -3")
+            self.valid_form(limit="ten", recheck="5, x, -3")
         )
 
         self.assertFalse(result.ok)
         joined = " ".join(result.errors)
-        self.assertIn("Destination", joined)
         self.assertIn("Limit", joined)
         self.assertIn("'x'", joined)
         self.assertIn("'-3'", joined)
@@ -152,12 +151,28 @@ class RepoFormTests(unittest.TestCase):
         self.assertTrue(result.ok)
         self.assertEqual(len(result.warnings), 1)
 
+    def test_empty_destination_is_only_a_warning_when_editing(self) -> None:
+        result = gui_forms.build_repo_changes(self.valid_form(destination=" ", active=False))
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.warnings, [gui_forms.NO_DESTINATION_WARNING])
+        self.assertEqual(result.changes["destination"], "")
+        self.assertIs(result.changes["active"], False)
+
+    def test_empty_folder_name_is_an_error(self) -> None:
+        result = gui_forms.build_repo_changes(self.valid_form(folder=" "))
+
+        self.assertFalse(result.ok)
+        self.assertIn("Name (folder)", " ".join(result.errors))
+
     def test_new_repo_needs_owner_slash_repo_and_destination(self) -> None:
         self.assertTrue(gui_forms.build_new_repo("owner/repo", tempfile.gettempdir()).ok)
         for bad in ("repo", "a/b/c", "a/ b", "/b", ""):
             with self.subTest(name=bad):
                 self.assertFalse(gui_forms.build_new_repo(bad, tempfile.gettempdir()).ok)
-        self.assertFalse(gui_forms.build_new_repo("owner/repo", "").ok)
+        empty = gui_forms.build_new_repo("owner/repo", "")
+        self.assertTrue(empty.ok)
+        self.assertEqual(empty.warnings, [gui_forms.NO_DESTINATION_WARNING])
 
 
 class SettingsFormTests(unittest.TestCase):
@@ -335,6 +350,30 @@ class RepoJobSummaryTests(unittest.TestCase):
         entries = [{"repository": "Owner/Repo", "limit": 25}, {"repository": "o/other", "limit": 5}]
         rows = repo_overview.build_rows(entries, {}, 0.0, lambda entry: 5, limit_warned={"owner/repo"})
         self.assertEqual({row.repo: row.limit_warning for row in rows}, {"Owner/Repo": True, "o/other": False})
+
+    def test_skipped_notifications_of_inactive_repos_are_summarised(self) -> None:
+        for tag in ("v1", "v1", "v2"):  # every notification is a row: no de-duplication
+            db_manager.insert_lifecycle_event(
+                self.connection, "SKIPPED_INACTIVE", "skipped", category="Pre-release", repo="O/Off", tag=tag
+            )
+        summaries = db_manager.get_repo_job_summaries(self.connection)
+
+        off = summaries["o/off"]
+        self.assertEqual((off["skipped_tag"], off["skipped_release_type"]), ("v2", "Pre-release"))
+        self.assertIsNone(off["latest_tag"])
+        (row,) = repo_overview.build_rows([{"repository": "O/Off", "active": False}], summaries, 0.0, lambda e: 5)
+        self.assertEqual((row.tag, row.status, row.files), ("(P) v2 (skipped)", "Inactive", "-"))
+        self.assertNotEqual(row.last_check, "-")
+
+    def test_a_newer_job_replaces_the_skipped_tag_in_the_row(self) -> None:
+        summary = {
+            "last_activity": 500, "latest_tag": "v5", "latest_release_type": "Release", "latest_status": "COMPLETED",
+            "latest_updated_at": 500, "latest_downloaded": 3, "latest_skipped": 0, "latest_total": 3,
+            "pending_next_check": None, "pending_attempts": 0, "pending_count": 0, "pending_jobs": [],
+            "skipped_tag": "v4", "skipped_release_type": "Release", "skipped_at": 100,
+        }
+        (row,) = repo_overview.build_rows([{"repository": "o/r"}], {"o/r": summary}, 0.0, lambda e: 5)
+        self.assertEqual((row.tag, row.files), ("(R) v5", "3"))
 
     def test_empty_database_gives_empty_summary(self) -> None:
         self.assertEqual(db_manager.get_repo_job_summaries(self.connection), {})

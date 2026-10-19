@@ -191,6 +191,8 @@ class IngestTests(WorkerTestCase):
         self.assertEqual(stats["notifications_skipped_inactive"], 1)
         self.assertEqual(self.calls["trashed"], [[7]])
         self.assertEqual(self.calls["deleted"], [])  # not marked read: it stays visible as unread in the Trash
+        events = db_manager.get_lifecycle_events(self.connection, event_type="SKIPPED_INACTIVE")
+        self.assertEqual([(e["repo"], e["tag"]) for e in events], [(REPO, "v1")])
 
     def test_the_skiplist_blocks_queueing_and_logs_a_skipped_warning(self) -> None:
         self.write_mapping({"repository": REPO, "skiplist": ["Pre-release"]})

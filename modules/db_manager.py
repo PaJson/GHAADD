@@ -832,6 +832,41 @@ def get_repo_job_summaries(connection):
     for summary in summaries.values():
         summary["pending_jobs"].reverse()  # earliest check time first, the one the row's Recheck cells describe
 
+    # The newest notification of a repository that was switched off (no job exists for it); repos that have
+    # never had a job get a summary of their own so the table can show what they announced.
+    skipped_rows = connection.execute(
+        """
+        SELECT repo, tag, category, created_at
+        FROM lifecycle_events
+        WHERE id IN (
+            SELECT MAX(id) FROM lifecycle_events WHERE event_type = 'SKIPPED_INACTIVE' GROUP BY LOWER(repo)
+        )
+        """
+    ).fetchall()
+    for row in skipped_rows:
+        if not row["repo"]:
+            continue
+        summary = summaries.setdefault(
+            row["repo"].lower(),
+            {
+                "last_activity": row["created_at"],
+                "latest_tag": None,
+                "latest_release_type": None,
+                "latest_status": None,
+                "latest_updated_at": None,
+                "latest_downloaded": 0,
+                "latest_skipped": 0,
+                "latest_total": 0,
+                "pending_next_check": None,
+                "pending_attempts": 0,
+                "pending_count": 0,
+                "pending_jobs": [],
+            },
+        )
+        summary["skipped_tag"] = row["tag"]
+        summary["skipped_release_type"] = row["category"]
+        summary["skipped_at"] = row["created_at"]
+
     return summaries
 
 

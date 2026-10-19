@@ -211,6 +211,9 @@ def github_url(repo: str) -> Optional[str]:
     return f"https://github.com/{repo}" if _REPO_NAME.match(repo) else None
 
 
+NO_DESTINATION_WARNING = "No destination: the repository is unmapped, so its finished files stay in Completed."
+
+
 def _directory_warning(label: str, path: str) -> Optional[str]:
     """Return a warning when a typed directory does not exist (yet), else None; it is not an error."""
     if path and not os.path.isdir(path):
@@ -227,11 +230,14 @@ def build_repo_changes(form: Mapping[str, Any]) -> FormResult:
     result = FormResult()
     destination = str(form.get("destination", "")).strip()
     if not destination:
-        result.errors.append("Destination must not be empty.")
+        # A warning, not an error: downloads go on (only Active decides that), the files stay in Completed.
+        result.warnings.append(NO_DESTINATION_WARNING)
     else:
         warning = _directory_warning("Destination", destination)
         if warning:
             result.warnings.append(warning)
+    if not str(form.get("folder", "")).strip():
+        result.errors.append("Name (folder) must not be empty.")
 
     limit = parse_int(form.get("limit", ""), "Limit", result.errors, minimum=0)
     recheck = parse_int_list(str(form.get("recheck", "")), "Recheck", result.errors)
@@ -260,7 +266,7 @@ def build_new_repo(name: str, destination: str) -> FormResult:
         result.errors.append("Repository must look like 'owner/repo'.")
     dest = str(destination or "").strip()
     if not dest:
-        result.errors.append("Destination must not be empty.")
+        result.warnings.append(NO_DESTINATION_WARNING)
     else:
         warning = _directory_warning("Destination", dest)
         if warning:
