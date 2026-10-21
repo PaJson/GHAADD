@@ -6,6 +6,7 @@ folders (config.json, mapping.json and state.db are replaced for each test).
 Run from the project root: python -m unittest discover -s tests -t .
 """
 import contextlib
+import datetime
 import io
 import json
 import os
@@ -295,9 +296,37 @@ class SuccessfulDownloadTests(DownloadTestCase):
         self.assertEqual(result["working_dir"], self.release_dir)
         self.assertEqual(
             self.files_in_release_dir(),
-            sorted(["app.exe", "app.zip", "app-v1.0-Source_code (source).zip",
-                    "app-v1.0-Source_code (source).tar.gz"]),
+            sorted(["app.exe", "app.zip", "app-1.0 (source).zip",
+                    "app-1.0 (source).tar.gz"]),
         )
+
+    def test_a_tag_with_a_slash_does_not_make_the_source_name_a_sub_path(self) -> None:
+        tag = "version/1.0"
+        self.github.release["tag_name"] = tag
+        with contextlib.redirect_stdout(io.StringIO()):
+            result = cast(dict[str, Any], asset_downloader.download_release(REPO, tag, "Release", include_stats=True))
+        self.assertEqual(result["status"], "SUCCESS")
+        names = sorted(os.listdir(result["working_dir"]))
+        self.assertIn("app-version-1.0 (source).zip", names)
+        self.assertIn("app-version-1.0 (source).tar.gz", names)
+
+    def test_the_source_name_is_the_one_github_sends_for_the_archive_link(self) -> None:
+        archive = f"https://github.com/{REPO}/archive/refs/tags/{TAG}.zip"
+        self.github.files[archive] = b""
+        self.github.file_headers[archive] = {"Content-Disposition": "attachment; filename=their-name.zip"}
+        self.run_download()
+        names = self.files_in_release_dir()
+        self.assertIn("their-name (source).zip", names)
+        self.assertIn("app-1.0 (source).tar.gz", names)  # no answer for this one: GitHub's naming rule
+
+    def test_source_files_get_the_creation_time_of_the_release(self) -> None:
+        self.github.release["created_at"] = "2026-10-06T13:10:00Z"
+        for url in (f"{BASE}/dl/source.zip", f"{BASE}/dl/source.tar.gz"):
+            self.github.file_headers[url] = {"Last-Modified": None}
+        self.run_download()
+        expected = datetime.datetime(2026, 10, 6, 13, 10, tzinfo=datetime.timezone.utc).timestamp()
+        path = os.path.join(self.release_dir, "app-1.0 (source).zip")
+        self.assertEqual(int(os.path.getmtime(path)), int(expected))
 
     def test_the_file_content_and_the_remote_timestamp_are_kept(self) -> None:
         self.run_download()
