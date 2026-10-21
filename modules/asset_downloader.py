@@ -35,7 +35,7 @@ from modules.mapping_manager import (
 from modules.payload_types import DownloadReleaseResult, DownloadResultPayload, ReleaseAssetQueueItem, SkippedItemPayload
 from requests.exceptions import ChunkedEncodingError, ConnectionError, Timeout
 from typing import Literal, Optional, cast
-from urllib.parse import urljoin
+from urllib.parse import quote, urljoin
 
 # Load environment variables from .env.
 load_dotenv()
@@ -800,6 +800,26 @@ def _resolve_source_file_name(file_name: str) -> str:
     return _insert_source_marker(file_name)
 
 
+def _github_archive_name(repo_name: str, tag: str, extension: str) -> str:
+    """Return the name GitHub gives a tag archive: the repository and the tag, a slash as a dash, no leading "v"."""
+    version = re.sub(r"^v(?=\d)", "", tag).replace("/", "-")
+    return f"{repo_name}-{version}.{extension}"
+
+
+def _probe_archive_name(session, repo: str, tag: str, extension: str, fallback: str) -> str:
+    """Return the file name GitHub sends for the release page's own archive link, else the fallback."""
+    url = f"https://github.com/{repo}/archive/refs/tags/{quote(tag, safe='/')}.{extension}"
+    try:
+        response = session.head(url, allow_redirects=True, timeout=(10, 30))
+        if response.status_code >= 400:
+            return fallback
+        found = re.findall(r'filename="?([^";]+)"?', response.headers.get("Content-Disposition", ""))
+    except requests.RequestException:
+        return fallback
+    name = sanitize_folder_name(os.path.basename(found[0].strip())) if found else ""
+    return name if name and name != "unknown" else fallback
+
+
 def sanitize_folder_name(text):
     """Return a Windows-safe folder name using JS-compatible rules."""
     if not text:
@@ -1006,7 +1026,6 @@ def download_all_assets(
         headers_api["Authorization"] = f"Bearer {GITHUB_TOKEN}"
 
     repo_name = repo.split('/')[-1]
-
     download_queue: list[ReleaseAssetQueueItem] = []
     for asset in release_data.get("assets", []):
         download_queue.append({
@@ -1020,7 +1039,7 @@ def download_all_assets(
     if "zipball_url" in release_data:
         download_queue.append({
             "key": "source:zipball",
-            "name": f"{repo_name}-{tag}-Source_code.zip",
+            "name": _github_archive_name(repo_name, tag, "zip"),
             "url": release_data["zipball_url"],
             "expected_size": None,
             "expected_updated_at": release_data.get("target_commitish"),
@@ -1028,7 +1047,7 @@ def download_all_assets(
     if "tarball_url" in release_data:
         download_queue.append({
             "key": "source:tarball",
-            "name": f"{repo_name}-{tag}-Source_code.tar.gz",
+            "name": _github_archive_name(repo_name, tag, "tar.gz"),
             "url": release_data["tarball_url"],
             "expected_size": None,
             "expected_updated_at": release_data.get("target_commitish"),
@@ -1085,6 +1104,14 @@ def download_all_assets(
     else:
         fallback_timestamp = time.time()
 
+    # Source archives carry no Last-Modified: the release's creation time (when its tag's commit existed, and
+    # what the release page shows) suits them better than the time it was published.
+    source_created = release_data.get("created_at")
+    if source_created:
+        source_fallback_timestamp = datetime.datetime.fromisoformat(source_created.replace("Z", "+00:00")).timestamp()
+    else:
+        source_fallback_timestamp = fallback_timestamp
+
     total_files = len(ordered_download_queue)
     per_file_retries = 3
     per_file_retry_delay = 2
@@ -1140,6 +1167,9 @@ def download_all_assets(
                 download_url = item["url"]
 
                 if file_name is not None and is_source_item:
+                    # The name GitHub gives the archive of the release page; the queue's name is the fallback.
+                    file_name = _probe_archive_name(
+                        session, repo, tag, "zip" if file_name.endswith(".zip") else "tar.gz", file_name)
                     resolved_source_name = _resolve_source_file_name(file_name)
                     if resolved_source_name != file_name:
                         print(
@@ -1298,6 +1328,7 @@ def download_all_assets(
 
                             os.replace(temp_file_path, file_path)
 
+                            item_fallback = source_fallback_timestamp if is_source_item else fallback_timestamp
                             if 'Last-Modified' in response.headers:
                                 last_modified_str = response.headers['Last-Modified']
                                 parsed_date = parsedate_tz(last_modified_str)
@@ -1305,9 +1336,9 @@ def download_all_assets(
                                     timestamp = mktime_tz(parsed_date)
                                     os.utime(file_path, (timestamp, timestamp))
                                 else:
-                                    os.utime(file_path, (fallback_timestamp, fallback_timestamp))
+                                    os.utime(file_path, (item_fallback, item_fallback))
                             else:
-                                os.utime(file_path, (fallback_timestamp, fallback_timestamp))
+                                os.utime(file_path, (item_fallback, item_fallback))
 
                             if state_db is not None:
                                 save_state_entry(
