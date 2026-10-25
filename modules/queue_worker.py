@@ -6,7 +6,7 @@ import sys
 import time
 import os
 
-from modules.config_manager import get_folder_settings, get_max_emails_to_process, get_recheck_intervals_minutes
+from modules.config_manager import get_folder_settings, get_max_emails_to_process
 from modules.daemon_lock import clear_queue_progress, publish_queue_progress, publishing_current_job
 from modules.dry_run_mode import is_dry_run
 from modules.db_manager import (

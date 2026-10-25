@@ -9,7 +9,6 @@ from typing import Any
 import os
 import tempfile
 import unittest
-from contextlib import closing
 from unittest import mock
 
 from modules import db_manager

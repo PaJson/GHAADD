@@ -13,7 +13,7 @@ import unittest
 from typing import Any, cast
 from unittest import mock
 
-from modules import config_manager, mapping_manager
+from modules import mapping_manager
 
 
 class LookupTestCase(unittest.TestCase):

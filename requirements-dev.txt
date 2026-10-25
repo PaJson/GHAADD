@@ -4,3 +4,4 @@
 -r requirements-optional.txt
 coverage>=7.0
 pyright>=1.1.400
+ruff>=0.8

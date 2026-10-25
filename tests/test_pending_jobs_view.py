@@ -3,7 +3,6 @@
 A temporary state.db is used. Run from the project root: python -m unittest discover -s tests -t .
 """
 from typing import Any
-import contextlib
 import os
 import tempfile
 import unittest

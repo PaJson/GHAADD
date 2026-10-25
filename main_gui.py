@@ -3387,7 +3387,6 @@ class StatsDialog(tk.Toplevel):
         self._fit_overview()
         self._fill(self.periods, stats.period_rows(report))
         self._show_lists()
-        daily = report["daily"]
         self.daily_title.configure(text=stats.daily_title(report))
         self._draw_chart()
         self.footer.configure(text="  |  ".join(stats.storage_lines(report)) + "   (data sizes are those of the releases on record)")

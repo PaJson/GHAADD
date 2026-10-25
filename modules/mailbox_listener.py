@@ -105,7 +105,7 @@ def get_pending_notifications(limit: Optional[int] = None) -> list[Any]:
                     subject = envelope.subject if hasattr(envelope, 'subject') else None  # type: ignore
                     
                     if subject is None:
-                        print(f" ⚠️ Could not extract subject from envelope")
+                        print(" ⚠️ Could not extract subject from envelope")
                         continue
                     
                     if isinstance(subject, bytes):

@@ -14,7 +14,6 @@ import os
 import tempfile
 import time
 import unittest
-from contextlib import closing
 from typing import Any, Optional
 from unittest import mock
 
@@ -445,7 +444,7 @@ class ProcessQueueTests(WorkerTestCase):
         self.assertNotIn("PREMATURE_FINALIZE", self.warning_kinds())
 
     def test_a_pause_stops_before_the_next_job_and_leaves_it_due(self) -> None:
-        first, second = self.job(tag="a"), self.job(tag="b")
+        _first, second = self.job(tag="a"), self.job(tag="b")
         checks = iter([False, True])
         stats = self.process(should_pause=lambda: next(checks))
         self.assertEqual(len(self.calls["download"]), 1)
@@ -465,7 +464,7 @@ class ProcessQueueTests(WorkerTestCase):
         self.assertEqual(len(self.calls["download"]), 2)
 
     def test_duplicate_pending_jobs_are_tidied_before_processing(self) -> None:
-        first, duplicate = self.job(), self.job()
+        _first, duplicate = self.job(), self.job()
         self.process()
         self.assertEqual(self.row(duplicate)["last_result"], "SUPERSEDED_DUPLICATE_PENDING")
         self.assertEqual(len(self.calls["download"]), 1)
