@@ -2,6 +2,7 @@
 
 Run from the project root: python -m unittest discover -s tests -t .
 """
+from typing import Any
 import json
 import os
 import tempfile
@@ -15,14 +16,14 @@ from modules.status_tabs import StatusTabsModel, TabDef, find_repo, format_title
 
 
 class MemoryStore:
-    def __init__(self, initial=None) -> None:
+    def __init__(self, initial: Any = None) -> None:
         self.data = dict(initial or {})
         self.saves = 0
 
-    def load(self):
+    def load(self) -> Any:
         return dict(self.data)
 
-    def save(self, seen) -> None:
+    def save(self, seen: Any) -> None:
         self.data = dict(seen)
         self.saves += 1
 
@@ -34,14 +35,14 @@ class FakeEvents:
         self.events: list[dict] = []
         self.fetches = 0
 
-    def add(self, event_type, category=None, repo=None, tag=None, message="m", created_at=1_000_000.0,
-            destination_path=None) -> int:
+    def add(self, event_type: Any, category: Any = None, repo: Any = None, tag: Any = None, message: str = "m", created_at: float = 1_000_000.0,
+            destination_path: Any = None) -> int:
         event_id = len(self.events) + 1
         self.events.append(dict(id=event_id, event_type=event_type, category=category, repo=repo,
                                 tag=tag, message=message, created_at=created_at, destination_path=destination_path))
         return event_id
 
-    def fetch(self, tab: TabDef, after_id, limit):
+    def fetch(self, tab: TabDef, after_id: Any, limit: Any) -> Any:
         self.fetches += 1
         matching = [
             e for e in self.events
@@ -61,7 +62,7 @@ class ModelTests(unittest.TestCase):
         self.events = FakeEvents()
         self.store = MemoryStore()
 
-    def model(self, **kwargs) -> StatusTabsModel:
+    def model(self, **kwargs: Any) -> StatusTabsModel:
         return StatusTabsModel(status_tabs.TAB_DEFS, self.events.fetch, self.events.max_id, self.store, **kwargs)
 
     def test_titles_show_unread_counts_only_when_there_are_some(self) -> None:
@@ -334,7 +335,7 @@ class DatabaseQueryTests(unittest.TestCase):
         self.connection = db_manager.open_database()
         self.addCleanup(self.connection.close)
 
-    def add(self, event_type, category=None, message="m") -> None:
+    def add(self, event_type: Any, category: Any = None, message: str = "m") -> None:
         db_manager.insert_lifecycle_event(self.connection, event_type, message, category=category)
 
     def test_filters_orders_and_limits(self) -> None:
@@ -377,7 +378,7 @@ class DatabaseQueryTests(unittest.TestCase):
         self.assertEqual({(e["event_type"], e["category"]) for e in left}, {("WARNING", "LIMIT"), ("COMPLETED_MOVE", None)})
 
     def test_purge_for_one_repository_matches_its_own_warnings_only(self) -> None:
-        def limit(repo):
+        def limit(repo: Any) -> None:
             self.add("WARNING", "LIMIT", f"Folder limit warning: {repo} currently has 30 folder(s) in 'x' (limit=25).")
         limit("o/my_app")
         limit("O/MY_APP")
@@ -421,7 +422,7 @@ class FeedTests(unittest.TestCase):
         self.daemon = db_manager.open_database()  # stays open, like the daemon's connection
         self.addCleanup(self.daemon.close)
 
-    def event(self, event_type, category=None, message="m", repo=None) -> None:
+    def event(self, event_type: Any, category: Any = None, message: str = "m", repo: Any = None) -> None:
         db_manager.insert_lifecycle_event(self.daemon, event_type, message, category=category, repo=repo)
 
     def test_events_flow_from_state_db_to_tab_titles(self) -> None:

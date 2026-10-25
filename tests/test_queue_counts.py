@@ -3,6 +3,7 @@
 A temporary state.db is used and the re-check intervals are fixed. Run from the project root:
 python -m unittest discover -s tests -t .
 """
+from typing import Any
 import contextlib
 import os
 import tempfile
@@ -57,7 +58,7 @@ class QueueCountTests(unittest.TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
 
-    def add_job(self, next_check: float, attempt: int = 0, age_minutes: float = 0.0, status: str = "PENDING", repo="o/r") -> None:
+    def add_job(self, next_check: float, attempt: int = 0, age_minutes: float = 0.0, status: str = "PENDING", repo: str = "o/r") -> None:
         with contextlib.closing(db_manager.open_database()) as connection:
             job_id = db_manager.enqueue_job(connection, repo, f"v{next_check}{attempt}{age_minutes}", "Release", next_check_time=next_check)
             connection.execute(

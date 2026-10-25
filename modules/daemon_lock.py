@@ -6,7 +6,7 @@ import sys
 import tempfile
 import time
 from contextlib import contextmanager
-from typing import NotRequired, Optional, TypedDict
+from typing import Any, Iterator, NotRequired, Optional, TypedDict
 
 from filelock import FileLock, Timeout
 
@@ -87,7 +87,7 @@ def _write_daemon_status() -> None:
     )
 
 
-def update_daemon_status(**fields) -> None:
+def update_daemon_status(**fields: Any) -> None:
     """Merge fields (e.g. paused, next_poll_at) into the status sidecar, best-effort.
 
     Only the daemon that holds the singleton lock may call this.
@@ -191,7 +191,7 @@ def clear_queue_progress() -> None:
 
 
 @contextmanager
-def publishing_current_job(repo: str, tag: str):
+def publishing_current_job(repo: str, tag: str) -> Iterator[None]:
     """Publish the job being processed so the GUI can show it as "Running".
 
     A no-op unless this process holds the daemon lock (tests, dry-run and
@@ -208,7 +208,7 @@ def publishing_current_job(repo: str, tag: str):
 
 
 @contextmanager
-def acquire_daemon_lock():
+def acquire_daemon_lock() -> Iterator[None]:
     """Acquire the singleton daemon lock, exiting the process if already held.
 
     Guards only mutating run modes (default single run, --once, --poll,

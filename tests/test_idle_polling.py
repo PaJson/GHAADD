@@ -3,6 +3,7 @@
 Nothing real is touched: the database, the watcher and the cycle are replaced. Run from the project root:
 python -m unittest discover -s tests -t .
 """
+from typing import Any, Iterator
 import contextlib
 import unittest
 from unittest import mock
@@ -14,7 +15,7 @@ from modules import cli_commands, daemon_lock, gui_daemon
 class FakeWatcher:
     """Answers each wait() from a list and records how it was called."""
 
-    def __init__(self, results, **_kwargs) -> None:
+    def __init__(self, results: Any, **_kwargs: Any) -> None:
         self.results = list(results)
         self.calls: list[dict] = []
         self.stop_requested = False
@@ -28,7 +29,7 @@ class FakeWatcher:
     def checkpoint(self) -> bool:
         return False
 
-    def wait(self, seconds, on_change=None, idle=False):
+    def wait(self, seconds: Any, on_change: Any = None, idle: bool = False) -> Any:
         self.calls.append({"seconds": seconds, "idle": idle})
         result = self.results.pop(0)
         if isinstance(result, BaseException):  # a result can also be something that goes wrong in the wait
@@ -41,13 +42,13 @@ class FakeViewerPusher:
 
     instances: list["FakeViewerPusher"] = []
 
-    def __init__(self, settings, **_kwargs) -> None:
+    def __init__(self, settings: Any, **_kwargs: Any) -> None:
         self.settings = settings
         self.switches: list[tuple] = []
         self.stopped = 0
         FakeViewerPusher.instances.append(self)
 
-    def apply_override(self, override, configured) -> bool:
+    def apply_override(self, override: Any, configured: Any) -> bool:
         self.switches.append((override, configured))
         return bool(configured if override is None else override)
 
@@ -56,17 +57,17 @@ class FakeViewerPusher:
 
 
 class IdleLoopTests(unittest.TestCase):
-    def run_loop(self, results, idle, viewer_enabled=False, dry_run=False):
+    def run_loop(self, results: Any, idle: Any, viewer_enabled: bool = False, dry_run: bool = False) -> Any:
         watcher = FakeWatcher(results)
         cycles = []
         FakeViewerPusher.instances = []
         self.watcher_kwargs: dict = {}
 
         @contextlib.contextmanager
-        def fake_database():
+        def fake_database() -> Iterator[Any]:
             yield object()
 
-        def fake_watcher(**kwargs):
+        def fake_watcher(**kwargs: Any) -> Any:
             self.watcher_kwargs = kwargs
             return watcher
 
@@ -179,7 +180,7 @@ class SinglePollCommandTests(unittest.TestCase):
 
 
 class GuiViewTests(unittest.TestCase):
-    def view(self, **fields):
+    def view(self, **fields: Any) -> Any:
         return gui_daemon.build_view(gui_daemon.DaemonSnapshot(running=True, pid=7, **fields), now=1000.0)
 
     def test_an_idle_daemon_says_so_and_can_be_polled(self) -> None:

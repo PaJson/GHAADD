@@ -5,10 +5,12 @@ import random
 import sys
 import time
 from contextlib import contextmanager, nullcontext
+from typing import Any, Dict, Iterator, Optional, TextIO, Tuple, Union
 from modules.config_manager import (
     get_config_fingerprint,
     get_destination_check_every_n_polls,
     get_polling_settings,
+    TerminalLogSettings,
     get_terminal_log_settings,
     get_viewer_settings,
     load_config,
@@ -42,7 +44,7 @@ from modules.mapping_manager import ensure_mapping_file, warn_about_missing_mapp
 from modules.queue_worker import process_queue_once, run_ingest_and_queue_cycle, run_single_cycle
 
 
-def _ensure_standard_streams():
+def _ensure_standard_streams() -> None:
     """Give a console-less run (pythonw.exe, e.g. from Task Scheduler) real stdout/stderr objects.
 
     Without a console both are None, which breaks the TeeStream wrapping and any write to them. Output is
@@ -65,7 +67,7 @@ _ORIGINAL_STDOUT = sys.stdout
 _ORIGINAL_STDERR = sys.stderr
 
 
-def _configure_output_encoding():
+def _configure_output_encoding() -> None:
     """Make console output UTF-8 and unable to crash on a character the stream cannot encode.
 
     A redirected stream (GUI Start button, service, "> file") falls back to cp1252 on Windows, where the
@@ -84,12 +86,12 @@ def _configure_output_encoding():
 class TeeStream:
     """Mirror writes to terminal and a log file stream."""
 
-    def __init__(self, primary_stream, secondary_stream):
+    def __init__(self, primary_stream: TextIO, secondary_stream: Optional[Union[TextIO, RollingLogFile]]) -> None:
         """Remember the real stream (primary) and the optional log file stream (secondary)."""
         self.primary_stream = primary_stream
         self.secondary_stream = secondary_stream
 
-    def _disable_secondary_stream(self, exc):
+    def _disable_secondary_stream(self, exc: Exception) -> None:
         """Drop the log file after a write error so logging trouble never stops the daemon.
 
         The failure is reported once on the original stderr; the console keeps working.
@@ -109,7 +111,7 @@ class TeeStream:
             file=_ORIGINAL_STDERR,
         )
 
-    def write(self, data):
+    def write(self, data: str) -> int:
         """Write to the console, and to the log file while one is attached."""
         self.primary_stream.write(data)
         if self.secondary_stream is not None:
@@ -120,7 +122,7 @@ class TeeStream:
                 self._disable_secondary_stream(exc)
         return len(data)
 
-    def flush(self):
+    def flush(self) -> None:
         """Flush the console and the log file (if any)."""
         self.primary_stream.flush()
         if self.secondary_stream is not None:
@@ -129,12 +131,12 @@ class TeeStream:
             except (OSError, ValueError) as exc:
                 self._disable_secondary_stream(exc)
 
-    def isatty(self):
+    def isatty(self) -> bool:
         """Report whether the console is a terminal (the log file does not count)."""
         return self.primary_stream.isatty()
 
     @property
-    def encoding(self):
+    def encoding(self) -> str:
         """Report the console's encoding, UTF-8 when the stream has none."""
         return getattr(self.primary_stream, "encoding", "utf-8")
 
@@ -147,18 +149,18 @@ class TerminalLog:
     daemon runs (each start() opens a new file).
     """
 
-    def __init__(self, settings, tees):
+    def __init__(self, settings: TerminalLogSettings, tees: Tuple[TeeStream, TeeStream]) -> None:
         """Keep the log settings and the two TeeStreams (stdout, stderr) whose file side this class switches."""
         self.settings = settings
         self._tees = tees
         self._log_file = None
 
     @property
-    def active(self):
+    def active(self) -> bool:
         """Return True while a log file is open and attached to both streams."""
         return self._log_file is not None and all(tee.secondary_stream is not None for tee in self._tees)
 
-    def start(self):
+    def start(self) -> bool:
         """Open a new log file and mirror output into it; return True if logging is on."""
         if self.active:
             return True
@@ -183,7 +185,7 @@ class TerminalLog:
         print(f"Logging enabled. Writing terminal output to: {self._log_file.path}")
         return True
 
-    def stop(self):
+    def stop(self) -> None:
         """Stop mirroring and close the log file (no-op when logging is off)."""
         if self._log_file is None:
             return
@@ -196,11 +198,11 @@ class TerminalLog:
         except (OSError, ValueError):
             pass
 
-    def prune(self):
+    def prune(self) -> int:
         """Apply the retention limit; returns how many old files were removed."""
         return self._log_file.prune() if self._log_file is not None else 0
 
-    def apply_override(self, override):
+    def apply_override(self, override: Optional[bool]) -> None:
         """Follow a live switch: True/False force logging on/off, None returns to config.json."""
         want = self.settings["enabled"] if override is None else override
         if want and not self.active:
@@ -212,7 +214,7 @@ class TerminalLog:
             self.stop()
 
 
-def setup_terminal_logging(config):
+def setup_terminal_logging(config: Optional[Dict[str, Any]]) -> TerminalLog:
     """Route console output through TeeStream and return the (still closed) TerminalLog.
 
     The log file itself starts later, once main() knows it is entering a run mode, so --help and the
@@ -223,7 +225,7 @@ def setup_terminal_logging(config):
     return TerminalLog(get_terminal_log_settings(config), tees)
 
 
-def run_internal_smoke_tests():
+def run_internal_smoke_tests() -> None:
     """Run internal smoke tests for baseline release-download behavior."""
     print("🚀 Starting Internal Smoke Tests...")
     
@@ -248,7 +250,7 @@ def run_internal_smoke_tests():
 
 
 @contextmanager
-def _viewer_push_scope(pusher):
+def _viewer_push_scope(pusher: Optional[ViewerPusher]) -> Iterator[None]:
     """Stop pushing to the viewer (telling it goodbye) however the polling loop ends."""
     try:
         yield
@@ -258,8 +260,13 @@ def _viewer_push_scope(pusher):
 
 
 def run_polling_loop(
-    interval_seconds, jitter_min_seconds, jitter_max_seconds, terminal_log=None, config_fingerprint=None, idle=False
-):
+    interval_seconds: float,
+    jitter_min_seconds: int,
+    jitter_max_seconds: int,
+    terminal_log: Optional[TerminalLog] = None,
+    config_fingerprint: Optional[str] = None,
+    idle: bool = False,
+) -> None:
     """Run processing continuously with randomized jitter between cycles.
 
     With `idle` (polling.enabled is false, started with --daemon) nothing is polled on a schedule: the daemon
@@ -292,16 +299,16 @@ def run_polling_loop(
         else None
     )
 
-    def apply_push_override(override):
+    def apply_push_override(override: Optional[bool]) -> None:
         """Follow a live push switch (None = the viewer.enabled setting of config.json)."""
         if pusher is not None:
             pusher.apply_override(override, viewer_settings["enabled"])
 
-    def log_is_active():
+    def log_is_active() -> bool:
         """Return whether the terminal log file is open right now (published for the GUI)."""
         return bool(terminal_log is not None and terminal_log.active)
 
-    def apply_log_override(override):
+    def apply_log_override(override: Optional[bool]) -> None:
         """Follow a live log switch, then publish whether the file really is open (the GUI shows it)."""
         if terminal_log is None:  # nothing to switch (never registered then, but keeps the types honest)
             return
@@ -309,7 +316,7 @@ def run_polling_loop(
         if control_enabled:
             update_daemon_status(log_active=log_is_active())
 
-    def publish_wait_state(paused, next_poll_at):
+    def publish_wait_state(paused: bool, next_poll_at: Optional[float]) -> None:
         """Publish pause state and next poll time to the status file, and announce pause/resume once."""
         nonlocal announced_paused
         if control_enabled:
@@ -358,14 +365,14 @@ def run_polling_loop(
             run_folder_checks("at start")  # counts and warnings are there right away, not after N polls
         run_backup_check()  # a daemon that was off for a while catches up at once
 
-        def announce_requested_poll(wait_result):
+        def announce_requested_poll(wait_result: Optional[str]) -> None:
             """Say which poll was asked for; and note that a pause goes on afterwards."""
             what = "Single poll requested (one notification, one queue item)" if wait_result == "single" else "Poll now requested"
             print(f"⏩ {what}." + (" Polling stays paused afterwards." if watcher.forced_while_paused else ""))
             if control_enabled:
                 update_daemon_status(last_forced_poll_handled=watcher.last_handled_request)
 
-        def wait_for_poll_now():
+        def wait_for_poll_now() -> Optional[str]:
             """Idle mode: wait (no countdown) until Poll now / Single poll or Stop; the request, or None on Stop."""
             wait_result = watcher.wait(0, on_change=publish_wait_state, idle=True)
             if wait_result == "stop":
@@ -434,7 +441,7 @@ def run_polling_loop(
             cycle += 1
 
 
-def run_backup_check():
+def run_backup_check() -> None:
     """Make a backup when the schedule in config.json says one is due (never stops the daemon).
 
     The settings are read afresh each time, so a change in the Backup window applies without a restart.
@@ -455,7 +462,7 @@ def run_backup_check():
         log_warning("BACKUP", result.message)
 
 
-def run_drain_queue_loop(github_token):
+def run_drain_queue_loop(github_token: Optional[str]) -> None:
     """Process only due queue jobs (no email ingestion) until the queue is fully empty."""
     print("Drain-queue mode enabled. Email ingestion is skipped.\n")
 
@@ -484,7 +491,7 @@ def run_drain_queue_loop(github_token):
             cycle += 1
 
 
-def main():
+def main() -> None:
     """Entry point: parse the CLI, then run one of the modes (one-shot command, single, drain, once, polling).
 
     Only mutating run modes take the daemon lock and start the terminal log; dry-run and the read-only

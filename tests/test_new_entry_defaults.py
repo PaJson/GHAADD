@@ -4,6 +4,7 @@ processing.default_limit) and fall back to "" (no subfolder) / 10.
 Nothing here touches the real config.json, mapping.json or state.db.
 Run from the project root: python -m unittest discover -s tests -t .
 """
+from typing import Any
 import unittest
 from unittest import mock
 
@@ -48,7 +49,7 @@ class NewEntryTests(unittest.TestCase):
 
 
 class SettingsFormTests(unittest.TestCase):
-    def form(self, **overrides):
+    def form(self, **overrides: Any) -> Any:
         form = {
             "recheck": "5", "max_emails": "0", "dest_check": "10", "default_limit": "10",
             "default_subfolder": "@GitHub", "interval": "300", "jitter_min": "5", "jitter_max": "30",

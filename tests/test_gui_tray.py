@@ -8,7 +8,7 @@ import sys
 import tempfile
 import unittest
 from types import SimpleNamespace
-from typing import Optional
+from typing import Any, Optional
 from unittest import mock
 
 from modules import config_manager, db_manager, gui_data, gui_tray
@@ -137,27 +137,27 @@ class FakeRegistry:
         self.writes = 0
         self.fail = fail
 
-    def CreateKeyEx(self, root, path, _reserved, _access):
+    def CreateKeyEx(self, root: Any, path: Any, _reserved: Any, _access: Any) -> Any:
         if self.fail:
             raise OSError("denied")
         values = self.keys.setdefault(path, {})
         registry = self
 
         class Handle:
-            def __enter__(self):
+            def __enter__(self) -> Any:
                 return (path, values)
 
-            def __exit__(self, *_exc):
+            def __exit__(self, *_exc: Any) -> bool:
                 return False
 
         return Handle()
 
-    def QueryValueEx(self, key, name):
+    def QueryValueEx(self, key: Any, name: Any) -> Any:
         if name not in key[1]:
             raise OSError("missing")
         return key[1][name], self.REG_SZ
 
-    def SetValueEx(self, key, name, _reserved, _kind, value):
+    def SetValueEx(self, key: Any, name: Any, _reserved: Any, _kind: Any, value: Any) -> None:
         key[1][name] = value
         self.writes += 1
 
@@ -242,10 +242,10 @@ class FailedJobFeedTests(unittest.TestCase):
 
     def test_the_feed_reports_a_failure_once(self) -> None:
         class Store:
-            def load(self):
+            def load(self) -> Any:
                 return {}
 
-            def save(self, seen):
+            def save(self, seen: Any) -> None:
                 pass
 
         feed = gui_data.StatusFeed(store=Store())
@@ -275,7 +275,7 @@ class ToastTests(unittest.TestCase):
         notice = gui_tray.Notice("t", "m")
         seen = []
 
-        def runner(command):
+        def runner(command: Any) -> Any:
             seen.append(command)
             return SimpleNamespace(returncode=0)
 
@@ -283,7 +283,7 @@ class ToastTests(unittest.TestCase):
         self.assertIn("-EncodedCommand", seen[0])
         self.assertFalse(gui_tray.send_windows_toast("GHAADD.GUI", notice, lambda command: SimpleNamespace(returncode=1)))
 
-        def broken(command):
+        def broken(command: Any) -> None:
             raise OSError("no powershell")
 
         self.assertFalse(gui_tray.send_windows_toast("GHAADD.GUI", notice, broken))

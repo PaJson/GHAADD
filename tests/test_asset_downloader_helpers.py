@@ -4,6 +4,7 @@ folder-count bookkeeping and the edge cases of moving folders around.
 Everything runs in temporary folders (see MoveTestCase). Run from the project root:
 python -m unittest discover -s tests -t .
 """
+from typing import Any
 import os
 import unittest
 from contextlib import closing
@@ -161,7 +162,7 @@ class MoveEdgeCaseTests(MoveTestCase):
         real_scandir = os.scandir
         calls = {"n": 0}
 
-        def flaky(path):
+        def flaky(path: Any) -> Any:
             calls["n"] += 1
             if calls["n"] == 2:  # the first call lists the repository folder, the second one the type folder
                 raise OSError("denied")

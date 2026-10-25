@@ -4,6 +4,7 @@ where the downloader really puts files, the lifecycle event logger, and the --do
 Everything runs against temporary files and a temporary state.db.
 Run from the project root: python -m unittest discover -s tests -t .
 """
+from typing import Any
 import contextlib
 import io
 import json
@@ -212,11 +213,11 @@ class DoctorTests(unittest.TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
 
-    def write(self, path: str, payload) -> None:
+    def write(self, path: str, payload: Any) -> None:
         with open(path, "w", encoding="utf-8") as handle:
             handle.write(payload if isinstance(payload, str) else json.dumps(payload))
 
-    def run_doctor(self, platform="win32", env=None):
+    def run_doctor(self, platform: str = "win32", env: Any = None) -> Any:
         environment = {k: v for k, v in (env if env is not None else self.env).items()}
         with mock.patch.dict(os.environ, environment, clear=False), mock.patch.object(doctor_checks.sys, "platform", platform), \
                 contextlib.redirect_stdout(io.StringIO()):

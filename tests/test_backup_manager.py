@@ -2,6 +2,7 @@
 
 Run from the project root: python -m unittest discover -s tests -t .
 """
+from typing import Any
 import io
 import json
 import os
@@ -16,7 +17,7 @@ from unittest import mock
 from modules import backup_manager, cli_commands, config_manager, db_manager, gui_forms, warning_types
 
 
-def _settings(directory: str, **overrides) -> config_manager.BackupSettings:
+def _settings(directory: str, **overrides: Any) -> config_manager.BackupSettings:
     settings: config_manager.BackupSettings = {
         "enabled": True, "every_hours": 24, "keep_files": 3, "directory": directory, "include_env": False,
     }
@@ -50,7 +51,7 @@ class BackupTestCase(unittest.TestCase):
         dry.start()
         self.addCleanup(dry.stop)
 
-    def make(self, when: datetime, **overrides) -> backup_manager.BackupResult:
+    def make(self, when: datetime, **overrides: Any) -> backup_manager.BackupResult:
         return backup_manager.create_backup(_settings(self.backups, **overrides), now=when, snapshot=_fake_snapshot)
 
 
@@ -192,7 +193,7 @@ class SettingsAndFormTests(unittest.TestCase):
 
 
 class DaemonHookTests(unittest.TestCase):
-    def check(self, result):
+    def check(self, result: Any) -> Any:
         import main  # imported here: it reads .env at import time
 
         warnings: list[tuple[str, str]] = []
@@ -219,7 +220,7 @@ class DaemonHookTests(unittest.TestCase):
     def test_an_exception_never_escapes(self) -> None:
         import main
 
-        def boom():
+        def boom() -> None:
             raise RuntimeError("x")
 
         with mock.patch.object(main, "run_scheduled_backup", boom), mock.patch.object(main, "is_dry_run", lambda: False), \

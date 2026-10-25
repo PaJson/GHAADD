@@ -1,5 +1,6 @@
 {
   "include": ["main.py", "main_gui.py", "viewer", "modules", "tests"],
   "extraPaths": ["viewer"],
-  "typeCheckingMode": "standard"
+  "typeCheckingMode": "standard",
+  "reportMissingParameterType": "error"
 }

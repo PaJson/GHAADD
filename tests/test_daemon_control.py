@@ -8,7 +8,7 @@ import os
 import sqlite3
 import tempfile
 import unittest
-from typing import Optional
+from typing import Any, NoReturn, Optional
 from unittest import mock
 
 from modules import daemon_control, db_manager, queue_worker
@@ -58,7 +58,7 @@ class ControlStateTests(unittest.TestCase):
         self.connection = db_manager.open_database()
         self.addCleanup(self.connection.close)
 
-    def read(self):
+    def read(self) -> Any:
         return daemon_control.read_control_state(self.connection)
 
     def test_stop_request_round_trip_keeps_other_fields(self) -> None:
@@ -206,7 +206,7 @@ class ControlStateTests(unittest.TestCase):
         calls = {"n": 0}
         real_read = daemon_control.read_control_state
 
-        def flaky(connection):
+        def flaky(connection: Any) -> Any:
             calls["n"] += 1
             if calls["n"] > 1:
                 raise sqlite3.OperationalError("database is locked")
@@ -219,7 +219,7 @@ class ControlStateTests(unittest.TestCase):
 
 
 class ControlWatcherTests(unittest.TestCase):
-    def make_watcher(self, state_for_time, fake=None):
+    def make_watcher(self, state_for_time: Any, fake: Any = None) -> Any:
         fake = fake or FakeTime()
         watcher = ControlWatcher(
             read_state=lambda: state_for_time(fake.now),
@@ -307,7 +307,7 @@ class ControlWatcherTests(unittest.TestCase):
         self.assertTrue(watcher.forced_while_paused)
 
     def test_request_during_pause_polls_at_once_and_the_pause_goes_on(self) -> None:
-        def state(t):
+        def state(t: Any) -> Any:
             return _state(paused=2 <= t, request=5.0 if t >= 3 else None, stop=9.0 if t >= 100 else None)
 
         watcher, fake = self.make_watcher(state)
@@ -380,7 +380,7 @@ class ControlWatcherTests(unittest.TestCase):
         self.assertTrue(watcher.stop_requested)
 
     def test_disabled_watcher_ignores_control_file(self) -> None:
-        def explode():
+        def explode() -> NoReturn:
             raise AssertionError("control file must not be read")
 
         fake = FakeTime()
@@ -391,7 +391,7 @@ class ControlWatcherTests(unittest.TestCase):
 class CheckFoldersRequestTests(unittest.TestCase):
     """A check-folders request runs the callback once and does not disturb the countdown."""
 
-    def make(self, state_for_time, on_check):
+    def make(self, state_for_time: Any, on_check: Any) -> Any:
         fake = FakeTime()
         watcher = ControlWatcher(
             read_state=lambda: state_for_time(fake.now),
@@ -441,7 +441,7 @@ class CheckFoldersRequestTests(unittest.TestCase):
 class LogOverrideWatcherTests(unittest.TestCase):
     """The watcher reports live log switches to its callback exactly once per change."""
 
-    def make(self, override_for_time):
+    def make(self, override_for_time: Any) -> Any:
         fake = FakeTime()
         seen = []
         watcher = ControlWatcher(

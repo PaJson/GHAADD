@@ -15,7 +15,7 @@ import time
 import types
 import unittest
 from email.utils import formatdate
-from typing import Any, cast
+from typing import Any, cast, Iterator, NoReturn, Self
 from unittest import mock
 
 import requests
@@ -29,7 +29,7 @@ LAST_MODIFIED_EPOCH = 1_700_000_000  # 2023-11-14, well before "now"
 
 
 class FakeResponse:
-    def __init__(self, status_code=200, body=b"", headers=None, json_data=None, text=None, fail_after=None):
+    def __init__(self, status_code: int = 200, body: Any = b"", headers: Any = None, json_data: Any = None, text: Any = None, fail_after: Any = None) -> None:
         self.status_code = status_code
         self.content = body
         self.headers = headers or {}
@@ -37,31 +37,31 @@ class FakeResponse:
         self.text = text if text is not None else body.decode("utf-8", errors="replace")
         self.fail_after = fail_after  # raise this error while streaming
 
-    def json(self):
+    def json(self) -> Any:
         return self._json
 
-    def raise_for_status(self):
+    def raise_for_status(self) -> None:
         if self.status_code >= 400:
             raise requests.HTTPError(f"{self.status_code} error")
 
-    def iter_content(self, chunk_size=8192):
+    def iter_content(self, chunk_size: int = 8192) -> Iterator[bytes]:
         if self.fail_after is not None:
             yield self.content[:2]
             raise self.fail_after
         for start in range(0, len(self.content), chunk_size):
             yield self.content[start:start + chunk_size]
 
-    def __enter__(self):
+    def __enter__(self) -> Self:
         return self
 
-    def __exit__(self, *exc):
+    def __exit__(self, *exc: Any) -> bool:
         return False
 
 
 class FakeGitHub:
     """Routes for one release. `files` maps a download URL to its bytes."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.release = {
             "tag_name": TAG,
             "name": "First release",
@@ -92,7 +92,7 @@ class FakeGitHub:
         self.requests: list[tuple[str, str]] = []
 
     # --- API (requests.get) -------------------------------------------------------------
-    def api_get(self, url, headers=None, timeout=None, **kwargs):
+    def api_get(self, url: Any, headers: Any = None, timeout: Any = None, **kwargs: Any) -> Any:
         self.requests.append(("GET", url))
         if "/releases/tags/" in url:
             if self.release_status == 200:
@@ -108,26 +108,26 @@ class FakeGitHub:
         return FakeResponse(404)
 
     # --- Session ------------------------------------------------------------------------
-    def make_session(self):
+    def make_session(self) -> Any:
         github = self
 
         class Session:
-            def __init__(self):
+            def __init__(self) -> None:
                 self.headers = {}
 
-            def __enter__(self):
+            def __enter__(self) -> Self:
                 return self
 
-            def __exit__(self, *exc):
+            def __exit__(self, *exc: Any) -> bool:
                 return False
 
-            def head(self, url, **kwargs):
+            def head(self, url: Any, **kwargs: Any) -> Any:
                 github.requests.append(("HEAD", url))
                 if url not in github.files:
                     return FakeResponse(404)
                 return FakeResponse(200, headers=github.headers_for(url))
 
-            def get(self, url, **kwargs):
+            def get(self, url: Any, **kwargs: Any) -> Any:
                 github.requests.append(("GET", url))
                 errors = github.get_errors.get(url)
                 if errors:
@@ -138,7 +138,7 @@ class FakeGitHub:
 
         return Session()
 
-    def headers_for(self, url):
+    def headers_for(self, url: Any) -> Any:
         headers = {
             "Content-Length": str(len(self.files[url])),
             "Last-Modified": formatdate(LAST_MODIFIED_EPOCH, usegmt=True),
@@ -147,7 +147,7 @@ class FakeGitHub:
         headers.update(self.file_headers.get(url, {}))
         return {key: value for key, value in headers.items() if value is not None}  # None = leave the header out
 
-    def module(self):
+    def module(self) -> Any:
         return types.SimpleNamespace(
             get=self.api_get,
             Session=self.make_session,
@@ -239,7 +239,7 @@ class GitHubLookupTests(DownloadTestCase):
     def test_the_token_is_sent_when_there_is_one(self) -> None:
         seen = {}
 
-        def capture(url, headers=None, **kwargs):
+        def capture(url: Any, headers: Any = None, **kwargs: Any) -> Any:
             seen.update(headers or {})
             return FakeResponse(200, json_data={})
 
@@ -499,13 +499,13 @@ class FailureTests(DownloadTestCase):
         # The HEAD is only an optimisation: without it the file is simply downloaded.
         session_factory = self.github.make_session
 
-        def session_with_failing_head():
+        def session_with_failing_head() -> Any:
             session = session_factory()
 
-            def head(url, **kwargs):
+            def head(url: Any, **kwargs: Any) -> NoReturn:
                 raise requests.ConnectionError("no head")
 
-            session.head = head
+            session.head = head  # pyright: ignore[reportAttributeAccessIssue]  # the test swaps in a fake
             return session
 
         module = self.github.module()
@@ -519,13 +519,13 @@ class FailureTests(DownloadTestCase):
         self.run_download()
         session_factory = self.github.make_session
 
-        def session_with_failing_head():
+        def session_with_failing_head() -> Any:
             session = session_factory()
 
-            def head(url, **kwargs):
+            def head(url: Any, **kwargs: Any) -> NoReturn:
                 raise requests.ConnectionError("no head")
 
-            session.head = head
+            session.head = head  # pyright: ignore[reportAttributeAccessIssue]  # the test swaps in a fake
             return session
 
         module = self.github.module()
@@ -604,7 +604,7 @@ class HeaderFallbackTests(DownloadTestCase):
         seen = []
         original = self.github.api_get
 
-        def spy(url, headers=None, **kwargs):
+        def spy(url: Any, headers: Any = None, **kwargs: Any) -> Any:
             seen.append((headers or {}).get("Authorization"))
             return original(url, headers=headers, **kwargs)
 

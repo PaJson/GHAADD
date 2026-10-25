@@ -2,6 +2,7 @@
 
 Run from the project root: python -m unittest discover -s tests -t .
 """
+from typing import Any
 import json
 import multiprocessing
 import os
@@ -16,7 +17,7 @@ def _increment_worker(mapping_path: str, iterations: int) -> None:
     """Child process: bump a shared counter `iterations` times via update_mapping."""
     mapping_manager._mapping_file_path = lambda: mapping_path
 
-    def _bump(payload):
+    def _bump(payload: Any) -> None:
         payload["repositories"][0]["counter"] = payload["repositories"][0].get("counter", 0) + 1
 
     for _ in range(iterations):
@@ -53,7 +54,7 @@ class MappingWriteTestCase(unittest.TestCase):
 
 class UpdateMappingTests(MappingWriteTestCase):
     def test_creates_file_sorted_with_collapsed_arrays(self) -> None:
-        def _add(payload):
+        def _add(payload: Any) -> None:
             payload["repositories"].append({"repository": "zed/zebra", "recheck_intervals": [5, 15]})
             payload["repositories"].append({"repository": "amy/apple"})
 
@@ -85,7 +86,7 @@ class UpdateMappingTests(MappingWriteTestCase):
     def test_mutator_error_keeps_old_file_and_releases_lock(self) -> None:
         self.write_mapping([{"repository": "a/a"}])
 
-        def _fail(payload):
+        def _fail(payload: Any) -> None:
             payload["repositories"].append({"repository": "b/b"})
             raise RuntimeError("boom")
 

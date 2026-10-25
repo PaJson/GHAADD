@@ -15,7 +15,7 @@ import tempfile
 import time
 import unittest
 from contextlib import closing
-from typing import Optional
+from typing import Any, Optional
 from unittest import mock
 
 # queue_worker -> mailbox_listener refuses to import without credentials; they are never used to connect.
@@ -27,7 +27,7 @@ from modules import db_manager, mapping_manager, queue_worker  # noqa: E402
 REPO = "o/app"
 
 
-def download_result(status="SUCCESS", downloaded=3, skipped=1, total=4, working_dir=None, skip_reason=None, skipped_items=None):
+def download_result(status: str = "SUCCESS", downloaded: int = 3, skipped: int = 1, total: int = 4, working_dir: Any = None, skip_reason: Any = None, skipped_items: Any = None) -> Any:
     return {
         "status": status,
         "downloaded_count": downloaded,
@@ -55,27 +55,27 @@ class WorkerTestCase(unittest.TestCase):
             "download", "complete", "partial", "warnings", "completed_logs", "partial_logs", "deleted", "trashed", "fetch")}
         self.write_mapping()
 
-        def commit_hash(repo, tag, token, include_reason=False):
+        def commit_hash(repo: Any, tag: Any, token: Any, include_reason: bool = False) -> Any:
             if self.commit is None:
                 return (None, "http_404") if include_reason else None
             return (self.commit, None) if include_reason else self.commit
 
-        def download(repo, tag, release_type, include_stats=False):
+        def download(repo: Any, tag: Any, release_type: Any, include_stats: bool = False) -> Any:
             self.calls["download"].append((repo, tag, release_type))
             result = self.download_results.pop(0) if self.download_results else download_result()
             if isinstance(result, Exception):
                 raise result
             return result
 
-        def move_complete(working_dir, repo=None):
+        def move_complete(working_dir: Any, repo: Any = None) -> Any:
             self.calls["complete"].append(working_dir)
             return os.path.join(self.root, "done", os.path.basename(working_dir))
 
-        def move_partial(working_dir):
+        def move_partial(working_dir: Any) -> Any:
             self.calls["partial"].append(working_dir)
             return os.path.join(self.root, "partial", os.path.basename(working_dir))
 
-        def fetch(limit=None):
+        def fetch(limit: Any = None) -> Any:
             self.calls["fetch"].append(limit)
             return list(self.notifications)
 
@@ -106,24 +106,24 @@ class WorkerTestCase(unittest.TestCase):
         self.addCleanup(self.connection.close)
 
     # ----- helpers
-    def write_mapping(self, *entries) -> None:
+    def write_mapping(self, *entries: Any) -> None:
         with open(self.mapping_path, "w", encoding="utf-8") as handle:
             json.dump({"repositories": list(entries)}, handle)
 
-    def quietly(self, function, *args, **kwargs):
+    def quietly(self, function: Any, *args: Any, **kwargs: Any) -> Any:
         with contextlib.redirect_stdout(io.StringIO()):
             return function(*args, **kwargs)
 
-    def job(self, tag="v1", release_type="Release", commit="aaa1111", due=0.0, repo=REPO) -> int:
+    def job(self, tag: str = "v1", release_type: str = "Release", commit: str = "aaa1111", due: float = 0.0, repo: Any = REPO) -> int:
         return db_manager.enqueue_job(self.connection, repo, tag, release_type, due, commit)
 
-    def row(self, job_id: int):
+    def row(self, job_id: int) -> Any:
         return db_manager.get_jobs_by_ids(self.connection, [job_id])[0]
 
-    def at_attempt(self, job_id: int, attempt: int, downloaded=0, skipped=0, total=0, working_dir=None, due=0.0) -> None:
+    def at_attempt(self, job_id: int, attempt: int, downloaded: int = 0, skipped: int = 0, total: int = 0, working_dir: Any = None, due: float = 0.0) -> None:
         db_manager.reschedule_job(self.connection, job_id, due, attempt, "aaa1111", downloaded, skipped, total, working_dir)
 
-    def staged_dir(self, name="rel1") -> str:
+    def staged_dir(self, name: str = "rel1") -> str:
         path = os.path.join(self.root, "Processing", "app (o)", "Release", name)
         os.makedirs(path, exist_ok=True)
         return path
@@ -134,14 +134,14 @@ class WorkerTestCase(unittest.TestCase):
     def pending_ids(self) -> list[int]:
         return [r["id"] for r in db_manager.get_pending_jobs(self.connection)]
 
-    def process(self, **kwargs):
+    def process(self, **kwargs: Any) -> Any:
         return self.quietly(queue_worker.process_queue_once, self.connection, "token", **kwargs)
 
-    def ingest(self, **kwargs):
+    def ingest(self, **kwargs: Any) -> Any:
         return self.quietly(queue_worker.ingest_notifications_once, self.connection, "token", **kwargs)
 
 
-def notification(repo: Optional[str] = REPO, tag: Optional[str] = "v1", release_type="Release", email_id=1) -> dict:
+def notification(repo: Optional[str] = REPO, tag: Optional[str] = "v1", release_type: str = "Release", email_id: int = 1) -> dict:
     return {"repo": repo, "tag": tag, "release_type": release_type, "email_id": email_id}
 
 
@@ -257,7 +257,7 @@ class IngestTests(WorkerTestCase):
         self.notifications = [notification(tag="bad", email_id=1), notification(tag="good", email_id=2)]
         real = queue_worker.enqueue_job
 
-        def flaky(connection, repo, tag, **kwargs):
+        def flaky(connection: Any, repo: Any, tag: Any, **kwargs: Any) -> Any:
             if tag == "bad":
                 raise RuntimeError("database is locked")
             return real(connection, repo, tag, **kwargs)
@@ -537,7 +537,7 @@ class FullCycleTests(WorkerTestCase):
 class CounterProtectionTests(unittest.TestCase):
     """A weaker attempt must never overwrite what an earlier one already achieved."""
 
-    def row(self, downloaded=3, skipped=1, total=4, working_dir: Optional[str] = "/work/a"):
+    def row(self, downloaded: int = 3, skipped: int = 1, total: int = 4, working_dir: Optional[str] = "/work/a") -> Any:
         return {"downloaded_count": downloaded, "skipped_count": skipped, "total_items": total, "working_dir": working_dir}
 
     def test_a_first_attempt_has_nothing_to_protect(self) -> None:

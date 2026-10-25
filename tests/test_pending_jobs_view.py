@@ -2,6 +2,7 @@
 
 A temporary state.db is used. Run from the project root: python -m unittest discover -s tests -t .
 """
+from typing import Any
 import contextlib
 import os
 import tempfile
@@ -39,7 +40,7 @@ class FormatTests(unittest.TestCase):
 
 
 class RowTests(unittest.TestCase):
-    def summary(self, **fields) -> dict:
+    def summary(self, **fields: Any) -> dict:
         base = {
             "last_activity": NOW, "latest_tag": "build-ccc", "latest_release_type": "Release", "latest_status": "PENDING",
             "latest_updated_at": NOW, "latest_downloaded": 3, "latest_skipped": 0, "latest_total": 3,
@@ -48,7 +49,7 @@ class RowTests(unittest.TestCase):
         base.update(fields)
         return base
 
-    def rows(self, summary: dict):
+    def rows(self, summary: dict) -> Any:
         return repo_overview.build_rows([{"repository": "o/r"}], {"o/r": summary}, NOW, lambda entry: 5)
 
     def test_several_pending_jobs_show_in_the_recheck_cell_and_the_note(self) -> None:

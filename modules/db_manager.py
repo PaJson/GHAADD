@@ -3,18 +3,18 @@
 import re
 import os
 import sqlite3
-from typing import Iterable, Optional
+from typing import Any, Iterable, List, Optional, Sequence
 
 STATE_DB_NAME = "state.db"
 
 
-def get_state_db_path():
+def get_state_db_path() -> str:
     """Return the SQLite state database path beside the app files."""
     app_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(app_dir, STATE_DB_NAME)
 
 
-def purge_state_database():
+def purge_state_database() -> bool:
     """Delete the local state database if it exists."""
     state_db_path = get_state_db_path()
     if not os.path.exists(state_db_path):
@@ -24,7 +24,7 @@ def purge_state_database():
     return True
 
 
-def backup_database(destination_path):
+def backup_database(destination_path: str) -> None:
     """Write a consistent copy of state.db to `destination_path` (SQLite online backup, safe while the daemon runs)."""
     source = open_database()
     try:
@@ -37,7 +37,7 @@ def backup_database(destination_path):
         source.close()
 
 
-def open_database():
+def open_database() -> sqlite3.Connection:
     """Open the SQLite database, enable WAL mode, and ensure the schema exists."""
     connection = sqlite3.connect(get_state_db_path())
     connection.row_factory = sqlite3.Row
@@ -324,7 +324,7 @@ def open_database():
     return connection
 
 
-def set_folder_count(connection, repo, folder_count, counted_at):
+def set_folder_count(connection: sqlite3.Connection, repo: str, folder_count: int, counted_at: float) -> None:
     """Remember how many release folders a repository had when they were last counted."""
     connection.execute(
         """
@@ -337,7 +337,7 @@ def set_folder_count(connection, repo, folder_count, counted_at):
     connection.commit()
 
 
-def delete_folder_counts(connection, keep_repos=None, repo=None):
+def delete_folder_counts(connection: sqlite3.Connection, keep_repos: Optional[Iterable[str]] = None, repo: Optional[str] = None) -> int:
     """Delete one repository's count, or every count except those of `keep_repos` (names, any case)."""
     if repo is not None:
         cursor = connection.execute("DELETE FROM folder_counts WHERE repo_key = ?", (str(repo).strip().lower(),))
@@ -353,7 +353,7 @@ def delete_folder_counts(connection, keep_repos=None, repo=None):
     return cursor.rowcount
 
 
-def get_folder_counts(connection):
+def get_folder_counts(connection: sqlite3.Connection) -> dict[Any, dict[str, Any]]:
     """{lower-cased repo: {"folder_count": int, "counted_at": float}} (read-only)."""
     rows = connection.execute("SELECT repo_key, folder_count, counted_at FROM folder_counts").fetchall()
     return {row[0]: {"folder_count": row[1], "counted_at": row[2]} for row in rows}
@@ -361,7 +361,7 @@ def get_folder_counts(connection):
 
 # Asset state helpers.
 
-def load_release_state(connection, release_key):
+def load_release_state(connection: sqlite3.Connection, release_key: str) -> dict[Any, Any]:
     """Return stored asset state for a release key."""
     rows = connection.execute(
         """
@@ -388,11 +388,13 @@ def load_release_state(connection, release_key):
     return state
 
 
-def save_state_entry(connection, release_key, item_key, file_name, rel_file_path, expected_signature, remote_size, remote_last_modified, remote_etag, base_dir):
+def save_state_entry(connection: sqlite3.Connection, release_key: str, item_key: str, file_name: str, rel_file_path: Optional[str], expected_signature: Optional[str], remote_size: Any, remote_last_modified: Any, remote_etag: Any, base_dir: str) -> None:
     """Insert or update one asset-state record using a relative path."""
     # Reconstruct the absolute path for local filesystem checks
-    abs_path = os.path.join(base_dir, rel_file_path)
     try:
+        if rel_file_path is None:
+            raise OSError("no file path")
+        abs_path = os.path.join(base_dir, rel_file_path)
         local_size = os.path.getsize(abs_path)
         local_mtime = os.path.getmtime(abs_path)
     except OSError:
@@ -421,7 +423,7 @@ def save_state_entry(connection, release_key, item_key, file_name, rel_file_path
     connection.commit()
 
 
-def prune_release_state(connection, release_key, valid_item_keys, base_dir):
+def prune_release_state(connection: sqlite3.Connection, release_key: str, valid_item_keys: Iterable[str], base_dir: str) -> None:
     """Delete stale asset-state rows using dynamically constructed absolute paths."""
     rows = connection.execute("SELECT item_key, file_path FROM asset_state WHERE release_key = ?", (release_key,)).fetchall()
     
@@ -448,7 +450,7 @@ def prune_release_state(connection, release_key, valid_item_keys, base_dir):
 
 # Queue state helpers.
 
-def enqueue_job(connection, repo, tag, release_type=None, next_check_time=None, expected_commit=None):
+def enqueue_job(connection: sqlite3.Connection, repo: str, tag: str, release_type: Optional[str] = None, next_check_time: Optional[float] = None, expected_commit: Optional[str] = None) -> int:
     """Insert a new queued job row and return its row id."""
     if next_check_time is None:
         next_check_time = 0.0
@@ -483,7 +485,7 @@ def enqueue_job(connection, repo, tag, release_type=None, next_check_time=None, 
     return job_id
 
 
-def get_pending_job_for_release(connection, repo, tag, release_type=None, expected_commit=None, exclude_job_id=None):
+def get_pending_job_for_release(connection: sqlite3.Connection, repo: str, tag: str, release_type: Optional[str] = None, expected_commit: Optional[str] = None, exclude_job_id: Optional[int] = None) -> Any:
     """Return one pending job for the same release identity, optionally matching commit."""
     conditions = [
         "status = 'PENDING'",
@@ -526,7 +528,7 @@ def get_pending_job_for_release(connection, repo, tag, release_type=None, expect
     return connection.execute(query, tuple(params)).fetchone()
 
 
-def get_pending_jobs_for_release(connection, repo, tag, release_type=None):
+def get_pending_jobs_for_release(connection: sqlite3.Connection, repo: str, tag: str, release_type: Optional[str] = None) -> list[Any]:
     """Return pending jobs for one release identity ordered by creation time."""
     return connection.execute(
         """
@@ -560,13 +562,13 @@ def get_pending_jobs_for_release(connection, repo, tag, release_type=None):
 
 
 def supersede_pending_jobs_for_release(
-    connection,
-    repo,
-    tag,
-    release_type=None,
-    replacement_expected_commit=None,
-    last_result="SUPERSEDED_REPLACED_BY_NEW_NOTIFICATION",
-):
+    connection: sqlite3.Connection,
+    repo: str,
+    tag: str,
+    release_type: Optional[str] = None,
+    replacement_expected_commit: Optional[str] = None,
+    last_result: str = "SUPERSEDED_REPLACED_BY_NEW_NOTIFICATION",
+) -> int:
     """Supersede pending jobs for a release identity and return affected row count."""
     cursor = connection.execute(
         """
@@ -597,7 +599,7 @@ def supersede_pending_jobs_for_release(
     return int(cursor.rowcount or 0)
 
 
-def get_due_jobs(connection, now_timestamp, limit=None):
+def get_due_jobs(connection: sqlite3.Connection, now_timestamp: float, limit: Optional[int] = None) -> list[Any]:
     """Return jobs that are ready to run, sorted by schedule time then id."""
     if limit is not None:
         return connection.execute(
@@ -650,7 +652,7 @@ def get_due_jobs(connection, now_timestamp, limit=None):
     ).fetchall()
 
 
-def get_pending_jobs(connection):
+def get_pending_jobs(connection: sqlite3.Connection) -> list[Any]:
     """Return all pending queue jobs ordered by creation time."""
     return connection.execute(
         """
@@ -676,7 +678,7 @@ def get_pending_jobs(connection):
     ).fetchall()
 
 
-def get_next_pending_job(connection):
+def get_next_pending_job(connection: sqlite3.Connection) -> Any:
     """Return the next scheduled pending job, or None when queue is empty."""
     return connection.execute(
         """
@@ -706,7 +708,7 @@ def get_next_pending_job(connection):
 _LIMIT_WARNING_REPO = re.compile(r"Folder limit warning: (\S+) currently has ")
 
 
-def purge_limit_warnings_for_repo(connection, repo, dry_run=False):
+def purge_limit_warnings_for_repo(connection: sqlite3.Connection, repo: str, dry_run: bool = False) -> int:
     """Delete the folder-limit warnings written for one repository; returns the count.
 
     The rows hold the repository only in their text, so they are matched on the message's fixed
@@ -722,7 +724,7 @@ def purge_limit_warnings_for_repo(connection, repo, dry_run=False):
     return cursor.rowcount
 
 
-def get_repos_with_limit_warnings(connection):
+def get_repos_with_limit_warnings(connection: sqlite3.Connection) -> set[Any]:
     """Lower-cased owner/repo names that have at least one folder-limit warning stored (read-only).
 
     The warning rows carry the repository only in their text ("Folder limit warning: owner/repo currently
@@ -739,7 +741,7 @@ def get_repos_with_limit_warnings(connection):
     return found
 
 
-def get_failed_jobs_since(connection, since_epoch):
+def get_failed_jobs_since(connection: sqlite3.Connection, since_epoch: float) -> list[dict[Any, Any]]:
     """Return jobs that ended FAILED at or after `since_epoch` (read-only), oldest first, for the GUI's notifications.
 
     Times have whole-second resolution, so the caller drops the ids it has already reported at the boundary.
@@ -756,7 +758,7 @@ def get_failed_jobs_since(connection, since_epoch):
     return [dict(row) for row in rows]
 
 
-def get_repo_job_summaries(connection):
+def get_repo_job_summaries(connection: sqlite3.Connection) -> dict[Any, Any]:
     """Return one read-only job_queue summary per repo, keyed by lower-cased owner/repo (GUI Mappings table).
 
     latest_* come from the newest non-SUPERSEDED job (None if only superseded ones exist); pending_next_check and
@@ -870,7 +872,7 @@ def get_repo_job_summaries(connection):
     return summaries
 
 
-def get_jobs_by_ids(connection, job_ids: Iterable[int]):
+def get_jobs_by_ids(connection: sqlite3.Connection, job_ids: Iterable[int]) -> list[Any]:
     """Return queue jobs for the provided IDs."""
     normalized_ids = sorted({int(job_id) for job_id in job_ids})
     if not normalized_ids:
@@ -903,10 +905,10 @@ def get_jobs_by_ids(connection, job_ids: Iterable[int]):
 
 
 def supersede_pending_jobs_by_ids(
-    connection,
+    connection: sqlite3.Connection,
     job_ids: Iterable[int],
-    last_result="SUPERSEDED_MANUAL_REMOVE",
-):
+    last_result: str = "SUPERSEDED_MANUAL_REMOVE",
+) -> list[Any]:
     """Mark specific pending jobs as SUPERSEDED and return removed rows."""
     normalized_ids = sorted({int(job_id) for job_id in job_ids})
     if not normalized_ids:
@@ -958,7 +960,7 @@ def supersede_pending_jobs_by_ids(
     return pending_rows
 
 
-def supersede_duplicate_pending_jobs(connection):
+def supersede_duplicate_pending_jobs(connection: sqlite3.Connection) -> int:
     """Mark duplicate pending jobs as SUPERSEDED, keeping the oldest per release+commit."""
     pending_rows = connection.execute(
         """
@@ -1026,14 +1028,14 @@ def supersede_duplicate_pending_jobs(connection):
 
 
 def mark_job_completed(
-    connection,
-    job_id,
-    attempt_count=None,
-    downloaded_count=0,
-    skipped_count=0,
-    total_items=0,
-    last_result="SUCCESS",
-):
+    connection: sqlite3.Connection,
+    job_id: int,
+    attempt_count: Optional[int] = None,
+    downloaded_count: int = 0,
+    skipped_count: int = 0,
+    total_items: int = 0,
+    last_result: str = "SUCCESS",
+) -> None:
     """Mark a queued job as completed."""
     if attempt_count is None:
         connection.execute(
@@ -1077,15 +1079,15 @@ def mark_job_completed(
 
 
 def mark_job_failed(
-    connection,
-    job_id,
-    attempt_count=None,
-    expected_commit=None,
-    downloaded_count=0,
-    skipped_count=0,
-    total_items=0,
-    last_result="FAILED",
-):
+    connection: sqlite3.Connection,
+    job_id: int,
+    attempt_count: Optional[int] = None,
+    expected_commit: Optional[str] = None,
+    downloaded_count: int = 0,
+    skipped_count: int = 0,
+    total_items: int = 0,
+    last_result: str = "FAILED",
+) -> None:
     """Mark a queued job as failed (no remaining retry intervals)."""
     if attempt_count is None:
         connection.execute(
@@ -1139,15 +1141,15 @@ def mark_job_failed(
 
 
 def mark_job_superseded(
-    connection,
-    job_id,
-    attempt_count=None,
-    expected_commit=None,
-    downloaded_count=0,
-    skipped_count=0,
-    total_items=0,
-    last_result="SUPERSEDED",
-):
+    connection: sqlite3.Connection,
+    job_id: int,
+    attempt_count: Optional[int] = None,
+    expected_commit: Optional[str] = None,
+    downloaded_count: int = 0,
+    skipped_count: int = 0,
+    total_items: int = 0,
+    last_result: str = "SUPERSEDED",
+) -> None:
     """Mark a queued job as superseded by a newer commit/job."""
     if attempt_count is None:
         connection.execute(
@@ -1201,17 +1203,17 @@ def mark_job_superseded(
 
 
 def reschedule_job(
-    connection,
-    job_id,
-    next_check_time,
-    attempt_count,
-    expected_commit=None,
-    downloaded_count=0,
-    skipped_count=0,
-    total_items=0,
-    working_dir=None,
-    last_result="RETRY",
-):
+    connection: sqlite3.Connection,
+    job_id: int,
+    next_check_time: float,
+    attempt_count: int,
+    expected_commit: Optional[str] = None,
+    downloaded_count: int = 0,
+    skipped_count: int = 0,
+    total_items: int = 0,
+    working_dir: Optional[str] = None,
+    last_result: str = "RETRY",
+) -> None:
     """Update a queued job with a new schedule and attempt counter."""
     connection.execute(
         """
@@ -1245,15 +1247,15 @@ def reschedule_job(
 
 
 def update_job_for_manual_check(
-    connection,
-    job_id,
-    expected_commit=None,
-    downloaded_count=0,
-    skipped_count=0,
-    total_items=0,
-    working_dir=None,
-    last_result="MANUAL_CHECK",
-):
+    connection: sqlite3.Connection,
+    job_id: int,
+    expected_commit: Optional[str] = None,
+    downloaded_count: int = 0,
+    skipped_count: int = 0,
+    total_items: int = 0,
+    working_dir: Optional[str] = None,
+    last_result: str = "MANUAL_CHECK",
+) -> None:
     """Update a pending job's counters and result without changing its retry schedule."""
     connection.execute(
         """
@@ -1282,7 +1284,7 @@ def update_job_for_manual_check(
     connection.commit()
 
 
-def save_job_skip_details(connection, job_id, attempt_count, skipped_items):
+def save_job_skip_details(connection: sqlite3.Connection, job_id: int, attempt_count: int, skipped_items: Any) -> None:
     """Persist skipped item details for a queue job attempt."""
     if not skipped_items:
         return
@@ -1321,8 +1323,8 @@ def save_job_skip_details(connection, job_id, attempt_count, skipped_items):
 
 
 def get_previous_successful_completed_job(
-    connection, repo, tag, release_type, exclude_job_id, match_tag=True, finished_before=None
-):
+    connection: sqlite3.Connection, repo: str, tag: str, release_type: Optional[str], exclude_job_id: int, match_tag: bool = True, finished_before: Optional[float] = None
+) -> Any:
     """Return the previous successful completed job for the same repo and release_type.
 
     match_tag=True also requires the same tag; False accepts the newest earlier success of the repository.
@@ -1371,15 +1373,15 @@ def get_previous_successful_completed_job(
 # Lifecycle event helpers.
 
 def insert_lifecycle_event(
-    connection,
-    event_type,
-    message,
-    category=None,
-    repo=None,
-    tag=None,
-    commit_hash=None,
-    destination_path=None,
-):
+    connection: sqlite3.Connection,
+    event_type: str,
+    message: str,
+    category: Optional[str] = None,
+    repo: Optional[str] = None,
+    tag: Optional[str] = None,
+    commit_hash: Optional[str] = None,
+    destination_path: Optional[str] = None,
+) -> int:
     """Insert one lifecycle event row and return its row id."""
     cursor = connection.execute(
         """
@@ -1397,7 +1399,7 @@ def insert_lifecycle_event(
     return event_id
 
 
-def get_lifecycle_events(connection, limit: Optional[int] = 20, event_type=None, repo_filter=None):
+def get_lifecycle_events(connection: sqlite3.Connection, limit: Optional[int] = 20, event_type: Optional[str] = None, repo_filter: Optional[str] = None) -> list[Any]:
     """Return recent lifecycle events, newest first, optionally filtered."""
     conditions = []
     params: list = []
@@ -1425,7 +1427,7 @@ def get_lifecycle_events(connection, limit: Optional[int] = 20, event_type=None,
     return connection.execute(query, params).fetchall()
 
 
-def get_existing_event_ids(connection, ids):
+def get_existing_event_ids(connection: sqlite3.Connection, ids: Iterable[int]) -> set[Any]:
     """The subset of `ids` that still exists in lifecycle_events (read-only primary-key lookup)."""
     ids = [int(i) for i in ids]
     found = set()
@@ -1438,10 +1440,10 @@ def get_existing_event_ids(connection, ids):
     return found
 
 
-def _tab_event_filter(event_types, categories, exclude_categories):
+def _tab_event_filter(event_types: Sequence[str], categories: Optional[Sequence[str]], exclude_categories: Sequence[str]) -> tuple[list[str], List[Any]]:
     """WHERE conditions and params selecting the events of one GUI status tab."""
     conditions = [f"event_type IN ({','.join('?' * len(event_types))})"]
-    params = list(event_types)
+    params: List[Any] = list(event_types)
     if categories:
         conditions.append(f"category IN ({','.join('?' * len(categories))})")
         params.extend(categories)
@@ -1451,7 +1453,7 @@ def _tab_event_filter(event_types, categories, exclude_categories):
     return conditions, params
 
 
-def purge_events_for_tab(connection, event_types, categories=None, exclude_categories=(), dry_run=False):
+def purge_events_for_tab(connection: sqlite3.Connection, event_types: Sequence[str], categories: Optional[Sequence[str]] = None, exclude_categories: Sequence[str] = (), dry_run: bool = False) -> int:
     """Delete exactly the events a GUI status tab lists (same filter as get_events_for_tab); returns the count.
 
     With dry_run=True nothing is deleted and the number of matching events is returned.
@@ -1466,13 +1468,13 @@ def purge_events_for_tab(connection, event_types, categories=None, exclude_categ
 
 
 def get_events_for_tab(
-    connection,
-    event_types,
-    categories=None,
-    exclude_categories=(),
-    after_id=None,
-    limit=500,
-):
+    connection: sqlite3.Connection,
+    event_types: Sequence[str],
+    categories: Optional[Sequence[str]] = None,
+    exclude_categories: Sequence[str] = (),
+    after_id: Optional[int] = None,
+    limit: int = 500,
+) -> list[dict[Any, Any]]:
     """Return lifecycle events for one GUI status tab, newest first (read-only).
 
     event_types/categories are allow-lists (categories=None means any), exclude_categories drops
@@ -1497,14 +1499,14 @@ def get_events_for_tab(
     return [dict(row) for row in rows]
 
 
-def get_storage_stats(connection):
+def get_storage_stats(connection: sqlite3.Connection) -> dict[str, Any]:
     """Return read-only size and growth figures for state.db (used by the --perf-report diagnostics)."""
-    def scalar(sql, params=()):
+    def scalar(sql: str, params: Sequence[Any] = ()) -> Any:
         """Run a query and return its single value, or None when there is no row or the value is NULL."""
         row = connection.execute(sql, params).fetchone()
         return None if row is None or row[0] is None else row[0]
 
-    def grouped(sql):
+    def grouped(sql: str) -> dict[str, int]:
         """Run a two-column query and return it as {first column as text: second column as int}."""
         return {str(row[0]): int(row[1]) for row in connection.execute(sql).fetchall()}
 
@@ -1532,13 +1534,13 @@ def get_storage_stats(connection):
     }
 
 
-def get_job_history(connection):
+def get_job_history(connection: sqlite3.Connection) -> list[tuple[Any, Any, Any, float]]:
     """Every job as (repo, tag, status, created_at), oldest first (read-only; feeds the --stats figures)."""
     rows = connection.execute("SELECT repo, tag, status, created_at FROM job_queue ORDER BY created_at, id").fetchall()
     return [(row[0], row[1], row[2], float(row[3])) for row in rows]
 
 
-def add_job_folder_size(connection, job_id, folder_bytes, folder_files):
+def add_job_folder_size(connection: sqlite3.Connection, job_id: int, folder_bytes: int, folder_files: int) -> None:
     """Add the size of one of a job's folders (finished, or quarantined in Partial) to what the job brought in."""
     connection.execute(
         """
@@ -1551,7 +1553,7 @@ def add_job_folder_size(connection, job_id, folder_bytes, folder_files):
     connection.commit()
 
 
-def get_job_folder_sizes(connection):
+def get_job_folder_sizes(connection: sqlite3.Connection) -> list[tuple[Any, Any, float, int, int]]:
     """Every job with a measured folder as (repo, tag, created_at, bytes, files), oldest first (read-only).
 
     Includes the sizes archived when their jobs were purged, so purging history does not shrink the data volumes.
@@ -1567,7 +1569,7 @@ def get_job_folder_sizes(connection):
     return [(row[0], row[1], float(row[2]), int(row[3]), int(row[4] or 0)) for row in rows]
 
 
-def get_cycle_times(connection):
+def get_cycle_times(connection: sqlite3.Connection) -> list[float]:
     """Creation times of the CYCLE_SUMMARY events (one per polling cycle), oldest first (read-only)."""
     rows = connection.execute(
         "SELECT created_at FROM lifecycle_events WHERE event_type = 'CYCLE_SUMMARY' ORDER BY created_at"
@@ -1575,7 +1577,7 @@ def get_cycle_times(connection):
     return [float(row[0]) for row in rows]
 
 
-def get_release_sizes(connection):
+def get_release_sizes(connection: sqlite3.Connection) -> dict[str, dict[str, int]]:
     """{"owner/repo|tag": {"bytes": int, "files": int, "newest": epoch}} from asset_state (read-only).
 
     Uses the size of the local file, else the size the server reported (source archives may lack one).
@@ -1595,13 +1597,13 @@ def get_release_sizes(connection):
     }
 
 
-def get_max_event_id(connection):
+def get_max_event_id(connection: sqlite3.Connection) -> int:
     """Return the newest lifecycle event id (0 when there are no events)."""
     row = connection.execute("SELECT MAX(id) FROM lifecycle_events").fetchone()
     return int(row[0] or 0)
 
 
-def purge_lifecycle_events(connection, event_type=None, repo_filter=None, min_age_days=None, dry_run=False):
+def purge_lifecycle_events(connection: sqlite3.Connection, event_type: Optional[str] = None, repo_filter: Optional[str] = None, min_age_days: Optional[int] = None, dry_run: bool = False) -> int:
     """Delete lifecycle events matching the filters and return the number removed.
 
     min_age_days=0 means no age floor; larger values only match events at least that many days old.
@@ -1635,7 +1637,7 @@ def purge_lifecycle_events(connection, event_type=None, repo_filter=None, min_ag
     return cursor.rowcount
 
 
-def purge_job_queue_rows(connection, status=None, repo_filter=None, min_age_days=None, oldest_count=None, dry_run=False):
+def purge_job_queue_rows(connection: sqlite3.Connection, status: Optional[str] = None, repo_filter: Optional[str] = None, min_age_days: Optional[int] = None, oldest_count: Optional[int] = None, dry_run: bool = False) -> int:
     """Delete terminal (non-PENDING) job_queue rows matching the filters; return the number removed.
 
     PENDING jobs are never purged. The delete cascades to job_skip_details. The caller gives min_age_days (0 = all
@@ -1687,7 +1689,7 @@ def purge_job_queue_rows(connection, status=None, repo_filter=None, min_age_days
     return cursor.rowcount
 
 
-def _archive_job_sizes(connection, where_clause, params):
+def _archive_job_sizes(connection: sqlite3.Connection, where_clause: str, params: Sequence[Any]) -> None:
     """Copy the measured folder sizes of the jobs a purge is about to delete into job_size_archive."""
     connection.execute(
         f"""
@@ -1700,7 +1702,7 @@ def _archive_job_sizes(connection, where_clause, params):
 
 
 # Daemon control helpers (single row, id = 1).
-def get_daemon_control(connection):
+def get_daemon_control(connection: sqlite3.Connection) -> tuple[bool, Any, Optional[bool]]:
     """Return (paused, poll_now_request, log_override); defaults when the row doesn't exist yet.
 
     log_override is None (follow config.json), True (force on) or False (force off).
@@ -1714,7 +1716,7 @@ def get_daemon_control(connection):
     return bool(row["paused"]), row["poll_now_request"], None if log_override is None else bool(log_override)
 
 
-def set_daemon_log_override(connection, override: Optional[bool]):
+def set_daemon_log_override(connection: sqlite3.Connection, override: Optional[bool]) -> None:
     """Set the terminal-log override (None = follow config.json), leaving the rest untouched."""
     connection.execute(
         """
@@ -1726,7 +1728,7 @@ def set_daemon_log_override(connection, override: Optional[bool]):
     connection.commit()
 
 
-def get_daemon_push_override(connection) -> Optional[bool]:
+def get_daemon_push_override(connection: sqlite3.Connection) -> Optional[bool]:
     """Return the viewer-push override: None (follow config.json), True (force on) or False (force off)."""
     row = connection.execute("SELECT push_override FROM daemon_control WHERE id = 1").fetchone()
     if row is None or row["push_override"] is None:
@@ -1734,7 +1736,7 @@ def get_daemon_push_override(connection) -> Optional[bool]:
     return bool(row["push_override"])
 
 
-def set_daemon_push_override(connection, override: Optional[bool]):
+def set_daemon_push_override(connection: sqlite3.Connection, override: Optional[bool]) -> None:
     """Set the viewer-push override (None = follow config.json), leaving the rest untouched."""
     connection.execute(
         """
@@ -1746,7 +1748,7 @@ def set_daemon_push_override(connection, override: Optional[bool]):
     connection.commit()
 
 
-def set_daemon_paused(connection, paused: bool):
+def set_daemon_paused(connection: sqlite3.Connection, paused: bool) -> None:
     """Set the pause flag, leaving any pending poll-now request untouched."""
     connection.execute(
         """
@@ -1758,7 +1760,7 @@ def set_daemon_paused(connection, paused: bool):
     connection.commit()
 
 
-def set_daemon_poll_now_request(connection, stamp: float) -> float:
+def set_daemon_poll_now_request(connection: sqlite3.Connection, stamp: float) -> float:
     """Store a poll-now request stamp, guaranteed to differ from the previous one.
 
     Returns the stamp actually stored.
@@ -1782,13 +1784,13 @@ def set_daemon_poll_now_request(connection, stamp: float) -> float:
     return stored
 
 
-def get_daemon_check_folders_request(connection):
+def get_daemon_check_folders_request(connection: sqlite3.Connection) -> Any | None:
     """Return the epoch stamp of the latest check-folders request, or None when never requested."""
     row = connection.execute("SELECT check_folders_request FROM daemon_control WHERE id = 1").fetchone()
     return None if row is None else row["check_folders_request"]
 
 
-def set_daemon_check_folders_request(connection, stamp: float) -> float:
+def set_daemon_check_folders_request(connection: sqlite3.Connection, stamp: float) -> float:
     """Store a check-folders request stamp, guaranteed to differ from the previous one. Returns the stored stamp."""
     connection.execute("INSERT OR IGNORE INTO daemon_control (id) VALUES (1)")
     connection.execute(
@@ -1807,13 +1809,13 @@ def set_daemon_check_folders_request(connection, stamp: float) -> float:
     return stored
 
 
-def get_daemon_single_request(connection):
+def get_daemon_single_request(connection: sqlite3.Connection) -> Any | None:
     """Return the epoch stamp of the latest poll-one-item request, or None when never requested."""
     row = connection.execute("SELECT single_request FROM daemon_control WHERE id = 1").fetchone()
     return None if row is None else row["single_request"]
 
 
-def set_daemon_single_request(connection, stamp: float) -> float:
+def set_daemon_single_request(connection: sqlite3.Connection, stamp: float) -> float:
     """Store a poll-one-item request stamp, guaranteed to differ from the previous one. Returns the stored stamp."""
     connection.execute("INSERT OR IGNORE INTO daemon_control (id) VALUES (1)")
     connection.execute(
@@ -1832,13 +1834,13 @@ def set_daemon_single_request(connection, stamp: float) -> float:
     return stored
 
 
-def get_daemon_stop_request(connection):
+def get_daemon_stop_request(connection: sqlite3.Connection) -> Any | None:
     """Return the epoch stamp of the latest graceful-stop request, or None when never requested."""
     row = connection.execute("SELECT stop_request FROM daemon_control WHERE id = 1").fetchone()
     return None if row is None else row["stop_request"]
 
 
-def set_daemon_stop_request(connection, stamp: float) -> float:
+def set_daemon_stop_request(connection: sqlite3.Connection, stamp: float) -> float:
     """Store a stop request stamp, guaranteed to differ from the previous one. Returns the stored stamp."""
     connection.execute("INSERT OR IGNORE INTO daemon_control (id) VALUES (1)")
     connection.execute(

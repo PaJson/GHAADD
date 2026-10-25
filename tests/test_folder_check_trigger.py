@@ -3,6 +3,7 @@
 Nothing here touches the real mailbox, daemon lock, mapping or state.db.
 Run from the project root: python -m unittest discover -s tests -t .
 """
+from typing import Any
 import contextlib
 import io
 import os
@@ -39,7 +40,7 @@ class FolderCheckTriggerTests(unittest.TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
 
-    def run_loop(self, every: int, cycle) -> str:
+    def run_loop(self, every: int, cycle: Any) -> str:
         output = io.StringIO()
         with mock.patch.object(main, "get_destination_check_every_n_polls", lambda: every), \
                 mock.patch.object(main, "run_ingest_and_queue_cycle", cycle), \
@@ -48,10 +49,10 @@ class FolderCheckTriggerTests(unittest.TestCase):
         return output.getvalue()
 
     @staticmethod
-    def stop_after(cycles: int):
+    def stop_after(cycles: int) -> Any:
         seen = []
 
-        def cycle(connection, token, should_pause=None):
+        def cycle(connection: Any, token: Any, should_pause: Any = None) -> None:
             seen.append(1)
             if len(seen) == cycles:
                 daemon_control.request_stop()
@@ -62,7 +63,7 @@ class FolderCheckTriggerTests(unittest.TestCase):
         order = []
         self.destinations.side_effect = lambda: order.append("check") or 0
 
-        def cycle(connection, token, should_pause=None):
+        def cycle(connection: Any, token: Any, should_pause: Any = None) -> None:
             order.append("poll")
             daemon_control.request_stop()
 
@@ -74,7 +75,7 @@ class FolderCheckTriggerTests(unittest.TestCase):
     def test_it_repeats_every_n_polls(self) -> None:
         polls = []
 
-        def cycle(connection, token, should_pause=None):
+        def cycle(connection: Any, token: Any, should_pause: Any = None) -> None:
             polls.append(1)
             if len(polls) == 5:
                 raise KeyboardInterrupt  # ends the loop; the check after poll 5 never runs
@@ -98,7 +99,7 @@ class FolderCheckTriggerTests(unittest.TestCase):
         # request would then count as already seen.
         timers: list[threading.Timer] = []
 
-        def cycle(connection, token, should_pause=None):
+        def cycle(connection: Any, token: Any, should_pause: Any = None) -> None:
             if timers:
                 return
             timers.extend((

@@ -5,6 +5,7 @@ These functions decide what is downloaded, when it is re-checked and what is nev
 against a throw-away database; the real state.db is never opened. Run from the project root:
 python -m unittest discover -s tests -t .
 """
+from typing import Any
 import os
 import tempfile
 import unittest
@@ -25,13 +26,13 @@ class QueueTestCase(unittest.TestCase):
         self.connection = db_manager.open_database()
         self.addCleanup(self.connection.close)
 
-    def job(self, repo="o/app", tag="v1", release_type: str | None = "Release", due=0.0, commit=None) -> int:
+    def job(self, repo: str = "o/app", tag: str = "v1", release_type: str | None = "Release", due: float = 0.0, commit: Any = None) -> int:
         return db_manager.enqueue_job(self.connection, repo, tag, release_type, due, commit)
 
-    def row(self, job_id: int):
+    def row(self, job_id: int) -> Any:
         return db_manager.get_jobs_by_ids(self.connection, [job_id])[0]
 
-    def ids(self, rows) -> list[int]:
+    def ids(self, rows: Any) -> list[int]:
         return [r["id"] for r in rows]
 
 
@@ -313,7 +314,7 @@ class PurgeTests(QueueTestCase):
 
 
 class LifecycleEventTests(QueueTestCase):
-    def add(self, event_type="WARNING", repo="o/app", message="m", age_days=0.0) -> int:
+    def add(self, event_type: str = "WARNING", repo: str = "o/app", message: str = "m", age_days: float = 0.0) -> int:
         event_id = db_manager.insert_lifecycle_event(self.connection, event_type, message, repo=repo)
         self.connection.execute(
             "UPDATE lifecycle_events SET created_at = CAST(strftime('%s', 'now') AS REAL) - ? WHERE id = ?",

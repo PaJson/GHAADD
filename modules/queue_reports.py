@@ -4,8 +4,9 @@ import csv
 import json
 import sys
 import time
+import sqlite3
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Any, Optional, Sequence
 
 from modules.db_manager import get_previous_successful_completed_job, open_database
 from modules.stats import format_bytes
@@ -29,7 +30,7 @@ from modules.payload_types import (
 PURGE_AGE_PREVIEW_THRESHOLDS_DAYS = (7, 30, 90, 180, 365)
 
 
-def _format_timestamp(unix_timestamp):
+def _format_timestamp(unix_timestamp: float) -> str:
     """Format a Unix timestamp for console output."""
     if unix_timestamp is None:
         return "-"
@@ -39,7 +40,7 @@ def _format_timestamp(unix_timestamp):
         return "-"
 
 
-def _build_skipped_item_preview(row) -> SkippedItemPreview:
+def _build_skipped_item_preview(row: sqlite3.Row) -> SkippedItemPreview:
     """Build a typed skipped-item preview payload from a database row."""
     return {
         "attempt_count": int(row["attempt_count"]),
@@ -52,7 +53,7 @@ def _build_skipped_item_preview(row) -> SkippedItemPreview:
 
 
 def _build_next_pending_job_payload(
-    row,
+    row: sqlite3.Row,
     skip_detail_count: int,
     skipped_items_preview: list[SkippedItemPreview],
 ) -> NextPendingJobPayload:
@@ -82,7 +83,7 @@ def _build_next_pending_job_payload(
 
 
 def _build_queue_job_payload(
-    row,
+    row: sqlite3.Row,
     skip_detail_count: int,
     skipped_items_preview: list[SkippedItemPreview],
     previous_success_tag: Optional[str] = None,
@@ -120,12 +121,12 @@ def _build_queue_job_payload(
     }
 
 
-def _build_top_failed_repo_payload(row) -> TopFailedRepoPayload:
+def _build_top_failed_repo_payload(row: sqlite3.Row) -> TopFailedRepoPayload:
     """Build a typed top-failed-repo payload."""
     return {"repo": row["repo"], "failed_count": int(row["failed_count"])}
 
 
-def _build_top_successful_repo_payload(row) -> TopSuccessfulRepoPayload:
+def _build_top_successful_repo_payload(row: sqlite3.Row) -> TopSuccessfulRepoPayload:
     """Build a typed top-successful-repo payload."""
     terminal_count = int(row["terminal_count"] or 0)
     success_count = int(row["success_count"] or 0)
@@ -145,17 +146,17 @@ def _build_top_successful_repo_payload(row) -> TopSuccessfulRepoPayload:
     }
 
 
-def _build_top_skipped_item_payload(row) -> TopSkippedItemPayload:
+def _build_top_skipped_item_payload(row: sqlite3.Row) -> TopSkippedItemPayload:
     """Build a typed top-skipped-item payload."""
     return {"item_label": row["item_label"], "skip_count": int(row["skip_count"])}
 
 
-def _build_skip_reason_payload(row) -> SkipReasonPayload:
+def _build_skip_reason_payload(row: sqlite3.Row) -> SkipReasonPayload:
     """Build a typed skip-reason payload."""
     return {"reason": row["reason"], "count": int(row["count"])}
 
 
-def _build_purgeable_job_age_summary(row, now_timestamp: float) -> Optional[PurgeableJobAgeSummary]:
+def _build_purgeable_job_age_summary(row: sqlite3.Row, now_timestamp: float) -> Optional[PurgeableJobAgeSummary]:
     """Build a typed age summary for a purgeable (non-PENDING) job row."""
     if row is None:
         return None
@@ -174,7 +175,7 @@ def _build_purgeable_job_age_summary(row, now_timestamp: float) -> Optional[Purg
 
 def _build_queue_report_payload(
     total_jobs: int,
-    summary_rows,
+    summary_rows: Sequence[Any],
     terminal_jobs: int,
     success_jobs: int,
     skip_jobs: int,
@@ -182,10 +183,10 @@ def _build_queue_report_payload(
     retry_pending_jobs: int,
     supersede_finalized_jobs: int,
     supersede_incomplete_moved_jobs: int,
-    failed_repo_rows,
-    successful_repo_rows,
-    top_skipped_items,
-    skip_reason_rows,
+    failed_repo_rows: Sequence[Any],
+    successful_repo_rows: Sequence[Any],
+    top_skipped_items: Sequence[Any],
+    skip_reason_rows: Sequence[Any],
     oldest_purgeable_job: Optional[PurgeableJobAgeSummary] = None,
     newest_purgeable_job: Optional[PurgeableJobAgeSummary] = None,
     purge_age_preview: Optional[list[PurgeAgePreviewEntry]] = None,

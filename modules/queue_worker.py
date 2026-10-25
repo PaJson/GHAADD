@@ -1,6 +1,7 @@
 """The processing engine: ingests notifications into jobs and runs due jobs (PENDING -> COMPLETED/FAILED/SUPERSEDED)."""
 
 import requests
+import sqlite3
 import sys
 import time
 import os
@@ -61,7 +62,7 @@ from modules.payload_types import (
     QueueCycleStats,
     SkippedItemPayload,
 )
-from typing import Callable, Literal, Optional, Tuple, Union, cast, overload
+from typing import Any, Callable, cast, Iterable, Literal, Optional, overload, Tuple, Union
 
 
 GITHUB_API_VERSION = "2022-11-28"
@@ -76,7 +77,7 @@ def _finalize_staged_release_folder(
     tag: Optional[str] = None,
     commit: Optional[str] = None,
     write_complete_log: bool = True,
-    connection=None,
+    connection: Optional[sqlite3.Connection] = None,
     job_id: Optional[int] = None,
 ) -> Optional[str]:
     """Move a terminal job's staging folder from Processing to complete destination.
@@ -104,7 +105,7 @@ def _finalize_staged_release_folder(
     return done_dir
 
 
-def _record_folder_size(connection, job_id: Optional[int], folder: str) -> None:
+def _record_folder_size(connection: Optional[sqlite3.Connection], job_id: Optional[int], folder: str) -> None:
     """Measure a job's moved folder (finished or in Partial) and add it to the job; a failure only warns."""
     if connection is None or job_id is None or is_dry_run():
         return
@@ -122,7 +123,7 @@ def _handle_working_dir_relocation(
     repo: str,
     tag: str,
     job_id: int,
-    connection=None,
+    connection: Optional[sqlite3.Connection] = None,
 ) -> None:
     """Warn about and quarantine a Processing folder abandoned by a mid-flight rename.
 
@@ -168,7 +169,7 @@ def _is_terminal_skip_reason(skip_reason: Optional[str]) -> bool:
 
 
 def _preserve_best_known_counters(
-    row,
+    row: Any,
     downloaded_count: int,
     skipped_count: int,
     total_items: int,
@@ -232,11 +233,11 @@ def _has_all_release_items_accounted(
 
 
 def _handle_superseded_pending_job_artifacts(
-    row,
+    row: sqlite3.Row,
     repo: str,
     tag: str,
     reason_code: str,
-    connection=None,
+    connection: Optional[sqlite3.Connection] = None,
 ) -> str:
     """Return artifact handling outcome: finalized, quarantined, or none."""
     job_id = int(row["id"])
@@ -338,7 +339,7 @@ def _handle_superseded_pending_job_artifacts(
 
 
 def _finalize_terminal_skip_job(
-    row,
+    row: sqlite3.Row,
     repo: str,
     tag: str,
     commit: Optional[str],
@@ -346,7 +347,7 @@ def _finalize_terminal_skip_job(
     current_skipped_count: int,
     current_total_items: int,
     current_working_dir: Optional[str],
-    connection=None,
+    connection: Optional[sqlite3.Connection] = None,
 ) -> Tuple[int, int, int]:
     """Finalize a job whose release/tag disappeared, moving any real staged files.
 
@@ -394,7 +395,7 @@ def _finalize_terminal_skip_job(
 
 
 def _warn_if_file_count_changed_from_previous_success(
-    connection,
+    connection: sqlite3.Connection,
     job_id: int,
     repo: str,
     tag: str,
@@ -506,7 +507,7 @@ def _empty_ingest_cycle_stats() -> IngestCycleStats:
 
 
 def ingest_notifications_once(
-    connection,
+    connection: sqlite3.Connection,
     github_token: Optional[str],
     notification_limit: Optional[int] = None,
     should_pause: Optional[Callable[[], bool]] = None,
@@ -804,7 +805,7 @@ def ingest_notifications_once(
         return _empty_ingest_cycle_stats(), None
 
 
-def process_selected_pending_jobs(connection, github_token: Optional[str], job_ids) -> tuple[int, list[int], list[int]]:
+def process_selected_pending_jobs(connection: sqlite3.Connection, github_token: Optional[str], job_ids: Iterable[int]) -> tuple[int, list[int], list[int]]:
     """Run selected pending jobs immediately without changing their retry schedule."""
     normalized_ids = sorted({int(job_id) for job_id in (job_ids or [])})
     if not normalized_ids:
@@ -1088,7 +1089,7 @@ def _empty_queue_cycle_stats() -> QueueCycleStats:
 
 
 def process_queue_once(
-    connection,
+    connection: sqlite3.Connection,
     github_token: Optional[str],
     limit: Optional[int] = None,
     job_filter_ids: Optional[list[int]] = None,
@@ -1105,7 +1106,7 @@ def process_queue_once(
 
 
 def _process_queue_once(
-    connection,
+    connection: sqlite3.Connection,
     github_token: Optional[str],
     limit: Optional[int] = None,
     job_filter_ids: Optional[list[int]] = None,
@@ -1447,7 +1448,7 @@ def _process_queue_once(
 
 
 def run_ingest_and_queue_cycle(
-    connection,
+    connection: sqlite3.Connection,
     github_token: Optional[str],
     should_pause: Optional[Callable[[], bool]] = None,
 ) -> None:
@@ -1482,7 +1483,7 @@ def run_ingest_and_queue_cycle(
     )
 
 
-def run_single_cycle(connection, github_token: Optional[str]) -> None:
+def run_single_cycle(connection: sqlite3.Connection, github_token: Optional[str]) -> None:
     """Ingest at most one new notification and process at most one queue item.
 
     Prefers the job just queued from the notification, else the oldest due job already in the queue. In dry-run

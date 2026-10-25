@@ -3,6 +3,7 @@
 Everything runs against a temp home folder, a fake systemctl and a fake registry; nothing real changes.
 Run from the project root: python -m unittest discover -s tests -t .
 """
+from typing import Any, NoReturn
 import os
 import plistlib
 import subprocess
@@ -61,35 +62,35 @@ class FakeRegistry:
     def __init__(self) -> None:
         self.values: dict[str, str] = {}
 
-    def _handle(self):
+    def _handle(self) -> Any:
         values = self.values
 
         class Handle:
-            def __enter__(self):
+            def __enter__(self) -> Any:
                 return values
 
-            def __exit__(self, *_exc):
+            def __exit__(self, *_exc: Any) -> bool:
                 return False
 
         return Handle()
 
-    def CreateKeyEx(self, _root, path, _reserved, _access):
+    def CreateKeyEx(self, _root: Any, path: Any, _reserved: Any, _access: Any) -> Any:
         assert path == autostart.WINDOWS_RUN_KEY
         return self._handle()
 
-    def OpenKey(self, _root, path, _reserved, _access):
+    def OpenKey(self, _root: Any, path: Any, _reserved: Any, _access: Any) -> Any:
         assert path == autostart.WINDOWS_RUN_KEY
         return self._handle()
 
-    def SetValueEx(self, key, name, _reserved, _kind, value):
+    def SetValueEx(self, key: Any, name: Any, _reserved: Any, _kind: Any, value: Any) -> None:
         key[name] = value
 
-    def QueryValueEx(self, key, name):
+    def QueryValueEx(self, key: Any, name: Any) -> Any:
         if name not in key:
             raise FileNotFoundError(name)
         return key[name], self.REG_SZ
 
-    def DeleteValue(self, key, name):
+    def DeleteValue(self, key: Any, name: Any) -> None:
         if name not in key:
             raise FileNotFoundError(name)
         del key[name]
@@ -150,7 +151,7 @@ class LinuxTests(unittest.TestCase):
         self.assertIn("enabling it failed", result.message)
 
     def test_a_missing_systemctl_is_reported_not_raised(self) -> None:
-        def missing(_command):
+        def missing(_command: Any) -> NoReturn:
             raise FileNotFoundError("systemctl")
 
         result = autostart.install_autostart(missing, platform="linux", home=self.home)
@@ -205,7 +206,7 @@ class TaskSchedulerTests(unittest.TestCase):
     def setUp(self) -> None:
         self.registry, self.schtasks = FakeRegistry(), FakeSchtasks()
 
-    def install(self, trigger: str = "logon"):
+    def install(self, trigger: str = "logon") -> Any:
         return autostart.install_autostart(
             self.schtasks, self.registry, "win32", python="C:\\py\\python.exe", mode="task", trigger=trigger
         )
@@ -306,7 +307,7 @@ class MacTests(unittest.TestCase):
         self.assertFalse(autostart.autostart_status(self.runner, platform="darwin", home=self.home, uid=501).installed)
 
     def test_a_failed_load_is_reported(self) -> None:
-        def failing(command):
+        def failing(command: Any) -> Any:
             return subprocess.CompletedProcess(command, 5 if command[1] == "bootstrap" else 0, "", "Bootstrap failed: 5")
 
         result = autostart.install_autostart(failing, platform="darwin", home=self.home, uid=501)
