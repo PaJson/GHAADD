@@ -32,7 +32,7 @@ from modules.mapping_manager import (
     get_repository_mapping,
     load_mapping,
 )
-from modules.payload_types import DownloadReleaseResult, DownloadResultPayload, ReleaseAssetQueueItem, SkippedItemPayload
+from modules.payload_types import DownloadReleaseResult, ReleaseAssetQueueItem, SkippedItemPayload
 from requests.exceptions import ChunkedEncodingError, ConnectionError, Timeout
 from typing import Any, cast, Dict, Literal, Optional
 from urllib.parse import quote, urljoin

@@ -141,7 +141,6 @@ class FakeRegistry:
         if self.fail:
             raise OSError("denied")
         values = self.keys.setdefault(path, {})
-        registry = self
 
         class Handle:
             def __enter__(self) -> Any:

@@ -1,0 +1,11 @@
+# Lint only (no formatter): Pyright does the types, this catches unused names and likely bugs.
+target-version = "py311"
+extend-exclude = ["typings"]
+
+[lint]
+select = ["F", "E9", "B"]
+ignore = [
+    "B905",  # zip() without strict=: every zip here pairs lists of equal length by construction
+    "B023",  # flagged closures are called inside the loop iteration that defines them
+    "B007",  # an unused loop variable in a tuple unpack is clearer than indexing
+]

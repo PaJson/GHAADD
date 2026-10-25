@@ -70,3 +70,6 @@ jobs:
 
       - name: Pyright (must report 0 errors)
         run: python -m pyright
+
+      - name: Ruff (unused names and likely bugs)
+        run: python -m ruff check .

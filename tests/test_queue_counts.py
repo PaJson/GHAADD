@@ -3,7 +3,6 @@
 A temporary state.db is used and the re-check intervals are fixed. Run from the project root:
 python -m unittest discover -s tests -t .
 """
-from typing import Any
 import contextlib
 import os
 import tempfile

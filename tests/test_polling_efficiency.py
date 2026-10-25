@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from modules import config_manager, daemon_control, db_manager, gui_daemon, gui_data
+from modules import config_manager, db_manager, gui_daemon, gui_data
 from modules.file_cache import StatCache, file_signature
 
 

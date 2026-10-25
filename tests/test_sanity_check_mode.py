@@ -6,7 +6,6 @@ import json
 import os
 import tempfile
 import unittest
-from contextlib import closing
 from unittest import mock
 
 from modules import db_manager, gui_forms, mapping_manager, queue_worker
