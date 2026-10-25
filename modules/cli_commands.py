@@ -1,5 +1,6 @@
 """Command-line flags: argument parsing and the dispatch of every one-shot command (queue, purge, report, doctor...)."""
 
+from contextlib import closing
 import argparse
 import json
 import os
@@ -560,7 +561,7 @@ def handle_cli_command(parsed_args: argparse.Namespace, run_smoke_tests: Callabl
             )
             return True
 
-        with open_database() as connection:
+        with closing(open_database()) as connection, connection:
             processed_count, skipped_ids, missing_ids = process_selected_pending_jobs(connection, None, requested_ids)
 
         print(f"Manual pending-job run complete. Processed {processed_count} job(s).")
@@ -585,7 +586,7 @@ def handle_cli_command(parsed_args: argparse.Namespace, run_smoke_tests: Callabl
             )
             return True
 
-        with open_database() as connection:
+        with closing(open_database()) as connection, connection:
             removed_rows = supersede_pending_jobs_by_ids(connection, requested_ids)
             all_rows = get_jobs_by_ids(connection, requested_ids)
 
@@ -726,7 +727,7 @@ def handle_cli_command(parsed_args: argparse.Namespace, run_smoke_tests: Callabl
             print("Purge option error: --purge-oldest must be a positive integer.", file=sys.stderr)
             return True
 
-        with open_database() as connection:
+        with closing(open_database()) as connection, connection:
             matched_count = purge_job_queue_rows(
                 connection,
                 status=parsed_args.purge_status,

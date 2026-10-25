@@ -4,7 +4,7 @@ import os
 import random
 import sys
 import time
-from contextlib import contextmanager, nullcontext
+from contextlib import closing, contextmanager, nullcontext
 from typing import Any, Dict, Iterator, Optional, TextIO, Tuple, Union
 from modules.config_manager import (
     get_config_fingerprint,
@@ -343,7 +343,7 @@ def run_polling_loop(
             print(f"   ⚠️ Could not check folder limits: {exc}")
 
     cycle = 1
-    with open_database() as connection, _viewer_push_scope(pusher):
+    with closing(open_database()) as connection, connection, _viewer_push_scope(pusher):
         if control_enabled:
             reset_paused_on_startup(connection)
             reset_log_override_on_startup(connection)
@@ -467,7 +467,7 @@ def run_drain_queue_loop(github_token: Optional[str]) -> None:
     print("Drain-queue mode enabled. Email ingestion is skipped.\n")
 
     cycle = 1
-    with open_database() as connection:
+    with closing(open_database()) as connection, connection:
         while True:
             started = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             print(f"=== Drain cycle {cycle} @ {started} ===")
@@ -534,7 +534,7 @@ def main() -> None:
                 return
 
             if parsed_args.single:
-                with open_database() as connection:
+                with closing(open_database()) as connection, connection:
                     run_single_cycle(connection, GITHUB_TOKEN)
                 return
 
@@ -549,7 +549,7 @@ def main() -> None:
             # polling.enabled by staying idle; --poll still forces polling like it always did.
             start_idle = bool(parsed_args.daemon and not parsed_args.poll and not polling_settings["enabled"])
             if once_mode or not poll_enabled:
-                with open_database() as connection:
+                with closing(open_database()) as connection, connection:
                     run_ingest_and_queue_cycle(connection, GITHUB_TOKEN)
                 return
 

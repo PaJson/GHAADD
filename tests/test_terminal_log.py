@@ -152,9 +152,9 @@ class WhichRunsWriteALogTests(unittest.TestCase):
             mock.patch.object(main, "get_terminal_log_settings", return_value=settings),
             mock.patch.object(main, "get_polling_settings", return_value={
                 "enabled": False, "interval_seconds": 300, "jitter_min_seconds": 0, "jitter_max_seconds": 0}),
-            mock.patch.object(main, "acquire_daemon_lock", return_value=contextlib.nullcontext()),
+            mock.patch.object(main, "acquire_daemon_lock", return_value=mock.MagicMock()),
             mock.patch.object(main, "ensure_mapping_file", return_value=False),
-            mock.patch.object(main, "open_database", return_value=contextlib.nullcontext()),
+            mock.patch.object(main, "open_database", return_value=mock.MagicMock()),
             mock.patch.object(main, "run_ingest_and_queue_cycle"),
             mock.patch.object(main, "_ORIGINAL_STDOUT", self.stdout),  # keep --help text out of the test output
             mock.patch.object(main, "_ORIGINAL_STDERR", io.StringIO()),
