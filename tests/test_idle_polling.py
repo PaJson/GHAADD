@@ -3,8 +3,9 @@
 Nothing real is touched: the database, the watcher and the cycle are replaced. Run from the project root:
 python -m unittest discover -s tests -t .
 """
-from typing import Any, Iterator
+from typing import Any
 import contextlib
+import os
 import unittest
 from unittest import mock
 
@@ -63,9 +64,8 @@ class IdleLoopTests(unittest.TestCase):
         FakeViewerPusher.instances = []
         self.watcher_kwargs: dict = {}
 
-        @contextlib.contextmanager
-        def fake_database() -> Iterator[Any]:
-            yield object()
+        def fake_database() -> Any:
+            return mock.MagicMock()  # a connection that can be closed and used in a with block
 
         def fake_watcher(**kwargs: Any) -> Any:
             self.watcher_kwargs = kwargs
@@ -88,7 +88,7 @@ class IdleLoopTests(unittest.TestCase):
                 ("run_scheduled_backup", lambda: None),  # backups are on by default: never write into the real app folder
             ):
                 stack.enter_context(mock.patch.object(main, name, value))
-            stack.enter_context(contextlib.redirect_stdout(open(__import__("os").devnull, "w", encoding="utf-8")))
+            stack.enter_context(contextlib.redirect_stdout(stack.enter_context(open(os.devnull, "w", encoding="utf-8"))))
             main.run_polling_loop(300, 5, 30, None, "fingerprint", idle=idle)
         return watcher, cycles
 

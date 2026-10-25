@@ -236,7 +236,7 @@ class DaemonControlTests(DispatchTestCase):
 class JobCommandTests(DispatchTestCase):
     def setUp(self) -> None:
         super().setUp()
-        self.patch("open_database", lambda: contextlib.nullcontext(object()))
+        self.patch("open_database", lambda: mock.MagicMock())
 
     def test_run_pending_reports_processed_skipped_and_missing(self) -> None:
         self.patch("process_selected_pending_jobs", lambda conn, token, ids: (len(ids) - 2, [7], [9]))
@@ -339,7 +339,7 @@ class PurgeTests(DispatchTestCase):
         self.assertTrue(self.calls[0][2]["dry_run"])
 
     def test_purge_jobs_option_errors(self) -> None:
-        self.patch("open_database", lambda: contextlib.nullcontext(object()))
+        self.patch("open_database", lambda: mock.MagicMock())
         self.patch("purge_job_queue_rows", self.recorder("purge", 0))
         cases = (
             (("--purge-jobs",), "--purge-age or --purge-oldest is required"),
@@ -353,7 +353,7 @@ class PurgeTests(DispatchTestCase):
         self.assertEqual(self.calls, [])
 
     def test_purge_jobs_by_age_and_by_count(self) -> None:
-        self.patch("open_database", lambda: contextlib.nullcontext(object()))
+        self.patch("open_database", lambda: mock.MagicMock())
         self.patch("purge_job_queue_rows", self.recorder("purge", 5))
         _, out, _ = self.run_cli("--purge-jobs", "--purge-age", "10", "--purge-status", "FAILED")
         self.assertIn("Purged 5 job_queue row(s)", out)

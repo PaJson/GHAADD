@@ -92,6 +92,8 @@ class OtherProcessTests(unittest.TestCase):
                 assert holder.stdin is not None
                 holder.stdin.close()
                 holder.wait(timeout=20)
+                if holder.stdout is not None:
+                    holder.stdout.close()
             self.addCleanup(gui_instance.release)
             self.assertTrue(gui_instance.acquire(directory))  # it ended, so the lock is free again
             self.assertFalse(gui_instance.take_show_request(directory))  # the note that was left was stale and dropped

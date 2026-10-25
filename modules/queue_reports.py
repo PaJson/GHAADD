@@ -1,5 +1,6 @@
 """Queue status, report and CSV output for the CLI (--queue-status, --queue-report, --queue-report-csv)."""
 
+from contextlib import closing
 import csv
 import json
 import sys
@@ -489,7 +490,7 @@ def _collect_queue_status_data(
         now_timestamp=now_timestamp,
     )
 
-    with open_database() as connection:
+    with closing(open_database()) as connection, connection:
         summary_rows = connection.execute(
             f"""
             SELECT status, COUNT(*) AS count
