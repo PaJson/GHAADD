@@ -32,11 +32,11 @@ class LookupTestCase(unittest.TestCase):
             self.addCleanup(patcher.stop)
         mapping_manager._BACKED_UP_INVALID_MAPPING_SIGNATURES.clear()
 
-    def write(self, *entries) -> None:
+    def write(self, *entries: Any) -> None:
         with open(self.path, "w", encoding="utf-8") as handle:
             json.dump({"repositories": list(entries)}, handle)
 
-    def quietly(self, function, *args):
+    def quietly(self, function: Any, *args: Any) -> Any:
         with contextlib.redirect_stdout(io.StringIO()):
             return function(*args)
 
@@ -196,10 +196,10 @@ class MissingDestinationTests(LookupTestCase):
 
 
 class ValidationTests(LookupTestCase):
-    def check(self, *entries):
+    def check(self, *entries: Any) -> Any:
         return mapping_manager.validate_mapping_payload({"repositories": list(entries)})
 
-    def errors(self, *entries) -> str:
+    def errors(self, *entries: Any) -> str:
         return " | ".join(self.check(*entries)["errors"])
 
     def test_a_good_entry_has_no_errors(self) -> None:
@@ -257,7 +257,7 @@ class ValidationTests(LookupTestCase):
         self.assertIn("o/a, o/b", warning[0])
         self.assertNotIn("o/c", warning[0])
 
-    def shared(self, *marks):
+    def shared(self, *marks: Any) -> Any:
         """Entries sharing one folder; each mark is True / False / None (= key absent)."""
         shared = {"destination": os.path.join(self.root, "d"), "folder": "Same", "subfolder": "@GitHub"}
         entries = []

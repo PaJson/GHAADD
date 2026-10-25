@@ -4,6 +4,7 @@ and the automatic upgrade of a file that still uses the old ones.
 Nothing here touches the real mapping.json, state.db or daemon lock.
 Run from the project root: python -m unittest discover -s tests -t .
 """
+from typing import Any
 import json
 import os
 import tempfile
@@ -144,7 +145,7 @@ class WritingTests(UpgradeTestCase):
             self.assertEqual(handle.read(), "older backup")
         self.assertEqual(len(self.backups()), 2)
 
-    def daemon(self, running: bool, mapping_format) -> mock._patch:
+    def daemon(self, running: bool, mapping_format: Any) -> mock._patch:
         return mock.patch(
             "modules.daemon_lock.get_daemon_status", return_value={"running": running, "mapping_format": mapping_format}
         )

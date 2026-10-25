@@ -2,6 +2,7 @@
 
 Only argument parsing is exercised. Run from the project root: python -m unittest discover -s tests -t .
 """
+from typing import Any, Iterator
 import contextlib
 import io
 import unittest
@@ -9,7 +10,7 @@ import unittest
 from modules import cli_commands
 
 
-def parse(*args: str):
+def parse(*args: str) -> Any:
     return cli_commands.parse_cli_args(list(args), "test")
 
 
@@ -22,7 +23,7 @@ def rejected(*args: str) -> str:
 
 
 @contextlib.contextmanager
-def self_assert_exit():
+def self_assert_exit() -> Iterator[None]:
     try:
         yield
     except SystemExit as exc:

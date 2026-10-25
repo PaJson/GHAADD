@@ -3,6 +3,7 @@
 import os
 import re
 import time
+from typing import Any, Optional, Sequence
 from modules.config_manager import get_gmail_folder
 from dotenv import load_dotenv
 from modules.dry_run_mode import is_dry_run
@@ -18,7 +19,7 @@ if not EMAIL or not PASSWORD:
     raise ValueError("GMAIL_USER and GMAIL_APP_PASSWORD environment variables must be set")
 
 
-def decode_email_subject(subject_raw):
+def decode_email_subject(subject_raw: Optional[str]) -> str | Any:
     """Decode MIME-encoded email subjects, including emojis and special characters."""
     if not subject_raw:
         return ""
@@ -38,7 +39,7 @@ def decode_email_subject(subject_raw):
     return subject
 
 
-def parse_github_subject(subject):
+def parse_github_subject(subject: str) -> tuple[Optional[str], Optional[str], Optional[str], bool]:
     """Parse a GitHub release subject.
 
     Returns:
@@ -70,7 +71,7 @@ def parse_github_subject(subject):
     return None, None, None, False
 
 
-def get_pending_notifications(limit=None):
+def get_pending_notifications(limit: Optional[int] = None) -> list[Any]:
     """Fetch unread GitHub release notifications from Gmail.
 
     Returns a list of dicts with the keys repo, tag, release_type and email_id.
@@ -136,7 +137,7 @@ def get_pending_notifications(limit=None):
     return notifications
 
 
-def mark_as_read_and_delete(email_ids, max_attempts=2, retry_delay_seconds=5):
+def mark_as_read_and_delete(email_ids: Sequence[Any], max_attempts: int = 2, retry_delay_seconds: float = 5) -> bool:
     """Mark a list of emails as read and move them to Trash.
 
     Retries transient IMAP store/move failures once before giving up.
@@ -185,7 +186,7 @@ def mark_as_read_and_delete(email_ids, max_attempts=2, retry_delay_seconds=5):
 
 
 
-def move_unread_to_trash(email_ids, max_attempts=2, retry_delay_seconds=5):
+def move_unread_to_trash(email_ids: Sequence[Any], max_attempts: int = 2, retry_delay_seconds: float = 5) -> bool:
     """Move unread emails to Trash without changing their seen state.
 
     Skipped entirely in dry-run mode; the mailbox is left untouched.
@@ -227,7 +228,7 @@ def move_unread_to_trash(email_ids, max_attempts=2, retry_delay_seconds=5):
     return False
 
 
-def check_releases():
+def check_releases() -> None:
     """Run the release check flow via get_pending_notifications."""
     notifications = get_pending_notifications()
     print(f"\nFound {len(notifications)} release notification(s).")

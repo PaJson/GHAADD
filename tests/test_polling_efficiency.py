@@ -2,6 +2,7 @@
 
 Run from the project root: python -m unittest discover -s tests -t .
 """
+from typing import Any
 import json
 import os
 import tempfile
@@ -38,7 +39,7 @@ class StatCacheTests(unittest.TestCase):
         with open(self.path, encoding="utf-8") as handle:
             return handle.read()
 
-    def cache(self, **kwargs) -> StatCache:
+    def cache(self, **kwargs: Any) -> StatCache:
         return StatCache(lambda: [self.path], self.compute, clock=self.clock, **kwargs)
 
     def test_reuses_the_value_while_the_file_is_unchanged(self) -> None:
@@ -261,7 +262,7 @@ class SummaryCacheTests(unittest.TestCase):
         self.daemon_connection = db_manager.open_database()
         self.addCleanup(self.daemon_connection.close)
 
-    def table(self):
+    def table(self) -> Any:
         with mock.patch.object(gui_data.daemon_lock, "get_daemon_status", return_value={"current_job": None}):
             return gui_data.load_repo_table()
 

@@ -11,7 +11,7 @@ import json
 import os
 import tempfile
 import unittest
-from typing import Optional, cast
+from typing import Any, cast, Optional
 from unittest import mock
 
 from modules import asset_downloader, config_manager, db_manager, mapping_manager
@@ -157,7 +157,7 @@ class MoveTestCase(unittest.TestCase):
             self.addCleanup(patcher.stop)
         self.dry_run = False
 
-    def write_mapping(self, **entry_fields) -> None:
+    def write_mapping(self, **entry_fields: Any) -> None:
         entries = []
         if entry_fields is not None and entry_fields != {"none": True}:
             entries.append({"repository": REPO, **entry_fields})
@@ -173,11 +173,11 @@ class MoveTestCase(unittest.TestCase):
                 handle.write(text)
         return path
 
-    def run_quietly(self, function, *args):
+    def run_quietly(self, function: Any, *args: Any) -> Any:
         with contextlib.redirect_stdout(io.StringIO()):
             return function(*args)
 
-    def moved(self, function, *args) -> str:
+    def moved(self, function: Any, *args: Any) -> str:
         """Run a move that is expected to succeed and return where the folder went (None would fail the test here)."""
         target = self.run_quietly(function, *args)
         assert target is not None, "the folder was not moved"

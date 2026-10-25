@@ -16,7 +16,7 @@ from modules.gui_daemon import DaemonSnapshot, build_view
 NOW = 1_000_000.0
 
 
-def running(**overrides) -> DaemonSnapshot:
+def running(**overrides: Any) -> DaemonSnapshot:
     fields: dict[str, Any] = dict(running=True, pid=42, paused=False, next_poll_at=NOW + 125, current_repo=None, log_on=False)
     fields.update(overrides)
     return DaemonSnapshot(**fields)
@@ -132,7 +132,7 @@ class BuildViewTests(unittest.TestCase):
 class ConfigFingerprintTests(unittest.TestCase):
     BASE = {"polling": {"enabled": True, "interval_seconds": 300}, "processing": {"recheck_intervals_minutes": [5, 15]}}
 
-    def fingerprint(self, config) -> str:
+    def fingerprint(self, config: Any) -> str:
         return config_manager.get_config_fingerprint(config)
 
     def test_same_settings_give_the_same_fingerprint(self) -> None:
@@ -175,7 +175,7 @@ class ReadSnapshotTests(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def patches(self, status, control=None, config_log=True):
+    def patches(self, status: Any, control: Any = None, config_log: bool = True) -> Any:
         control_patch = (
             mock.patch.object(gui_daemon.daemon_control, "get_control_state", return_value=control)
             if not isinstance(control, Exception)
@@ -189,7 +189,7 @@ class ReadSnapshotTests(unittest.TestCase):
             ),
         )
 
-    def snapshot(self, status, control=None, config_log=True) -> DaemonSnapshot:
+    def snapshot(self, status: Any, control: Any = None, config_log: bool = True) -> DaemonSnapshot:
         first, second, third = self.patches(status, control, config_log)
         with first, second, third:
             return gui_daemon.read_snapshot()
@@ -283,7 +283,7 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(os.path.basename(swapped), "python.exe")
         self.assertEqual(daemon_launcher.get_python_executable("/usr/bin/python3"), "/usr/bin/python3")
 
-    def start_with_fake_popen(self, stderr_path):
+    def start_with_fake_popen(self, stderr_path: Any) -> Any:
         with mock.patch.object(daemon_launcher, "get_stderr_path", return_value=stderr_path):
             with mock.patch.object(daemon_launcher.subprocess, "Popen") as popen:
                 popen.return_value.pid = 4321

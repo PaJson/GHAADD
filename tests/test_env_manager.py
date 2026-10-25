@@ -2,6 +2,7 @@
 
 Everything happens in a temporary folder. Run from the project root: python -m unittest discover -s tests -t .
 """
+from typing import Any
 import os
 import stat
 import tempfile
@@ -154,7 +155,7 @@ class WriteTests(EnvTestCase):
         real_replace = os.replace
         calls = {"n": 0}
 
-        def flaky(source, target):
+        def flaky(source: Any, target: Any) -> Any:
             calls["n"] += 1
             if calls["n"] < 3:
                 raise PermissionError("in use")

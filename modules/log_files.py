@@ -10,7 +10,7 @@ the newest file simple: they just switch when a newer file appears.
 import os
 import re
 from datetime import datetime
-from typing import Optional
+from typing import Optional, TextIO
 
 from modules.dry_run_mode import is_dry_run
 
@@ -88,7 +88,7 @@ class RollingLogFile:
         self._rollover_failed = False
 
     @staticmethod
-    def _open(path: str):
+    def _open(path: str) -> TextIO:
         """Open a log file for appending, line-buffered, UTF-8."""
         return open(path, "a", encoding="utf-8", buffering=1)
 

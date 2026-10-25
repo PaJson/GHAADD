@@ -22,7 +22,7 @@ HOUR, DAY = 3600, 86400
 GB = 1024 ** 3
 
 
-def jobs_fixture():
+def jobs_fixture() -> Any:
     """(repo, tag, status, created_at): oldest first, like db_manager.get_job_history."""
     return [
         ("o/old", "v1", "COMPLETED", NOW - 400 * DAY),
@@ -90,13 +90,13 @@ class MappingStatsTests(unittest.TestCase):
 
 
 class BuildTests(unittest.TestCase):
-    def build(self, **overrides):
+    def build(self, **overrides: Any) -> Any:
         arguments: dict[str, Any] = dict(entries=ENTRIES, jobs=jobs_fixture(), cycles=[NOW - 5 * HOUR, NOW - 2 * DAY, NOW - 100 * DAY],
                          sizes=SIZES, folder_counts={}, now=NOW)
         arguments.update(overrides)
         return stats.build(**arguments)
 
-    def period(self, report, key):
+    def period(self, report: Any, key: Any) -> Any:
         return next(row for row in report["periods"] if row["key"] == key)
 
     def test_jobs_per_period(self) -> None:
@@ -268,7 +268,7 @@ class DateRangeTests(unittest.TestCase):
 
 
 class BuildRangeTests(unittest.TestCase):
-    def build(self, window, **overrides):
+    def build(self, window: Any, **overrides: Any) -> Any:
         arguments: dict[str, Any] = dict(entries=ENTRIES, jobs=jobs_fixture(), cycles=[], sizes=SIZES, folder_counts={},
                                          now=NOW, top=None, date_range=window)
         arguments.update(overrides)
@@ -552,21 +552,21 @@ if __name__ == "__main__":
 
 
 class BucketDailyTests(unittest.TestCase):
-    def series(self, count):
+    def series(self, count: Any) -> Any:
         start = date(2025, 1, 1)
         return [{"date": str(start + timedelta(days=i)), "jobs": 1} for i in range(count)]
 
-    def test_short_series_stays_daily(self):
+    def test_short_series_stays_daily(self) -> None:
         unit, buckets = stats.bucket_daily(self.series(30), 100)
         self.assertEqual((unit, len(buckets)), ("day", 30))
 
-    def test_long_series_becomes_weeks_that_keep_the_total(self):
+    def test_long_series_becomes_weeks_that_keep_the_total(self) -> None:
         unit, buckets = stats.bucket_daily(self.series(400), 100)
         self.assertEqual(unit, "week")
         self.assertEqual(sum(b["jobs"] for b in buckets), 400)
         self.assertEqual(buckets[0]["days"], 5)  # 2025-01-01 is a Wednesday: the first week is cut off
 
-    def test_very_long_series_becomes_months(self):
+    def test_very_long_series_becomes_months(self) -> None:
         unit, buckets = stats.bucket_daily(self.series(1500), 100)
         self.assertEqual(unit, "month")
         self.assertEqual(sum(b["days"] for b in buckets), 1500)

@@ -116,13 +116,13 @@ class ReportTestCase(unittest.TestCase):
             db_manager.enqueue_job(c, "o/app", "v4", "Release", 0, "eee")
             db_manager.enqueue_job(c, "o/app", "v5", "Release", time.time() + 99999, "fff")
 
-    def status(self, **kwargs) -> dict:
+    def status(self, **kwargs: Any) -> dict:
         buffer = io.StringIO()
         with contextlib.redirect_stdout(buffer):
             queue_reports.print_queue_status(as_json=True, **kwargs)
         return json.loads(buffer.getvalue())
 
-    def text(self, **kwargs) -> str:
+    def text(self, **kwargs: Any) -> str:
         buffer = io.StringIO()
         with contextlib.redirect_stdout(buffer):
             queue_reports.print_queue_status(**kwargs)
@@ -173,7 +173,7 @@ class StatusTests(ReportTestCase):
     def jobs_by_id(self) -> dict:
         return {j["id"]: j for j in self.status()["recent_jobs"]}
 
-    def use_sanity_mode(self, mode) -> None:
+    def use_sanity_mode(self, mode: Any) -> None:
         entry = {"repository": "o/app"}
         if mode is not None:
             entry["sanity_check"] = mode

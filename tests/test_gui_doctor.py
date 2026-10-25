@@ -3,6 +3,7 @@
 No window is opened and nothing real is read: paths and the environment are passed in.
 Run from the project root: python -m unittest discover -s tests -t .
 """
+from typing import Any
 import os
 import tempfile
 import unittest
@@ -25,7 +26,7 @@ class FirstRunTests(unittest.TestCase):
             with open(path, "w", encoding="utf-8") as handle:
                 handle.write("{}")
 
-    def reasons(self, environment=FULL_ENV) -> list[str]:
+    def reasons(self, environment: Any = FULL_ENV) -> list[str]:
         return gui_doctor.first_run_reasons(environment, self.config, self.mapping)
 
     def test_a_complete_setup_is_not_a_first_run(self) -> None:
@@ -60,7 +61,7 @@ class FirstRunTests(unittest.TestCase):
 
 
 class ReportTextTests(unittest.TestCase):
-    def report(self, errors=(), warnings=()):
+    def report(self, errors: Any = (), warnings: Any = ()) -> Any:
         return {"ok": not errors, "platform": "win32", "errors": list(errors), "warnings": list(warnings), "checks": ["c"]}
 
     def test_summary_lines(self) -> None:
@@ -79,7 +80,7 @@ class ReportTextTests(unittest.TestCase):
 class CenterTests(unittest.TestCase):
     SCREEN = (0, 0, 1920, 1080)
 
-    def center(self, parent, size, screen=SCREEN):
+    def center(self, parent: Any, size: Any, screen: Any = SCREEN) -> Any:
         return gui_state.center_over(*parent, *size, *screen)
 
     def test_a_dialog_is_centred_over_its_parent(self) -> None:

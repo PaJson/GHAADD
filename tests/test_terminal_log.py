@@ -2,6 +2,7 @@
 
 Run from the project root: python -m unittest discover -s tests -t .
 """
+from typing import Any, cast
 import contextlib
 import io
 import os
@@ -10,6 +11,7 @@ import unittest
 from unittest import mock
 
 import main
+from modules.config_manager import TerminalLogSettings
 from modules.log_files import list_log_files
 
 
@@ -25,7 +27,7 @@ class TerminalLogTests(unittest.TestCase):
         redirect.__enter__()
         self.addCleanup(redirect.__exit__, None, None, None)
 
-    def make(self, enabled=False, **overrides):
+    def make(self, enabled: bool = False, **overrides: Any) -> Any:
         settings = {
             "enabled": enabled,
             "directory": self.directory,
@@ -33,14 +35,14 @@ class TerminalLogTests(unittest.TestCase):
             "keep_files": 30,
             **overrides,
         }
-        log = main.TerminalLog(settings, self.tees)
+        log = main.TerminalLog(cast(TerminalLogSettings, settings), self.tees)
         self.addCleanup(log.stop)
         return log
 
-    def logs(self):
+    def logs(self) -> Any:
         return list_log_files(self.directory)
 
-    def read(self, path):
+    def read(self, path: Any) -> Any:
         with open(path, encoding="utf-8") as handle:
             return handle.read()
 

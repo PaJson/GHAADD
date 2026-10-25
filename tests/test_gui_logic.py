@@ -2,6 +2,7 @@
 
 Run from the project root: python -m unittest discover -s tests -t .
 """
+from typing import Any
 import json
 import os
 import tempfile
@@ -21,11 +22,11 @@ class ConfigWriteTestCase(unittest.TestCase):
         self.addCleanup(patcher.stop)
         self.addCleanup(dry_run_mode.set_dry_run, False)
 
-    def write(self, payload) -> None:
+    def write(self, payload: Any) -> None:
         with open(self.config_path, "w", encoding="utf-8") as handle:
             json.dump(payload, handle)
 
-    def read(self):
+    def read(self) -> Any:
         with open(self.config_path, encoding="utf-8") as handle:
             return json.load(handle)
 
@@ -95,7 +96,7 @@ class UpdateConfigTests(ConfigWriteTestCase):
 
 
 class RepoFormTests(unittest.TestCase):
-    def valid_form(self, **overrides):
+    def valid_form(self, **overrides: Any) -> Any:
         form = {
             "destination": tempfile.gettempdir(),
             "folder": " App ",
@@ -176,7 +177,7 @@ class RepoFormTests(unittest.TestCase):
 
 
 class SettingsFormTests(unittest.TestCase):
-    def valid_form(self, **overrides):
+    def valid_form(self, **overrides: Any) -> Any:
         form = {
             "recheck": "5, 15, 30",
             "max_emails": "0",
@@ -217,7 +218,7 @@ class SettingsFormTests(unittest.TestCase):
 class OverviewTests(unittest.TestCase):
     NOW = 1_800_000_000.0
 
-    def summary(self, **overrides):
+    def summary(self, **overrides: Any) -> Any:
         base = {
             "last_activity": self.NOW - 100,
             "latest_tag": "v1",
@@ -302,7 +303,7 @@ class RepoJobSummaryTests(unittest.TestCase):
         self.connection = db_manager.open_database()
         self.addCleanup(self.connection.close)
 
-    def add_job(self, repo, tag, status, next_check, attempts=0, updated=100.0, downloaded=0, skipped=0, total=0):
+    def add_job(self, repo: Any, tag: Any, status: Any, next_check: Any, attempts: int = 0, updated: float = 100.0, downloaded: int = 0, skipped: int = 0, total: int = 0) -> None:
         self.connection.execute(
             "INSERT INTO job_queue (repo, tag, status, attempt_count, next_check_time, downloaded_count,"
             " skipped_count, total_items, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",

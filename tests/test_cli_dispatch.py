@@ -4,6 +4,7 @@ The commands are called with arguments parsed from a real command line, but ever
 (daemon control, database, autostart, shortcuts, doctor, ...) is replaced by a recorder, so nothing real is touched.
 Run from the project root: python -m unittest discover -s tests -t .
 """
+from typing import Any
 import contextlib
 import io
 import json
@@ -22,13 +23,13 @@ class DispatchTestCase(unittest.TestCase):
         self.daemon_running = True
         self.smoke_ran = False
 
-    def patch(self, name: str, value) -> None:
+    def patch(self, name: str, value: Any) -> None:
         patcher = mock.patch.object(cli_commands, name, value)
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def recorder(self, label: str, result=None):
-        def record(*args, **kwargs):
+    def recorder(self, label: str, result: Any = None) -> Any:
+        def record(*args: Any, **kwargs: Any) -> Any:
             self.calls.append((label, args, kwargs))
             return result
         return record
@@ -119,7 +120,7 @@ class DetachedDaemonTests(DispatchTestCase):
     def test_a_launch_failure_is_reported(self) -> None:
         self.daemon_running = False
 
-        def broken():
+        def broken() -> None:
             raise OSError("no python")
 
         with mock.patch("modules.daemon_launcher.start_daemon", broken):
@@ -223,7 +224,7 @@ class DaemonControlTests(DispatchTestCase):
         self.assertNotEqual(token, self.run_cli("--new-viewer-token")[1].strip())
 
     def test_a_locked_database_is_reported_instead_of_crashing(self) -> None:
-        def locked(*args):
+        def locked(*args: Any) -> None:
             raise sqlite3.OperationalError("database is locked")
 
         self.patch("request_poll_now", locked)
@@ -373,7 +374,7 @@ class MoveAndLifecycleLogTests(DispatchTestCase):
         _, out, _ = self.run_cli("--move-complete-to-destination", "--json")
         self.assertEqual(json.loads(out), {"moved": 2})
 
-    def events(self):
+    def events(self) -> Any:
         return [
             {"created_at_readable": "2026-10-08 10:00", "category": "COMPLETE", "event_type": "X", "message": "done"},
             {"created_at_readable": "2026-10-08 11:00", "category": None, "event_type": "WARNING", "message": "hmm"},

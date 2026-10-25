@@ -9,7 +9,7 @@ import re
 import sys
 import tempfile
 import time
-from typing import Any, Callable, Dict, Optional, TypedDict, TypeVar
+from typing import Any, Callable, Dict, List, Optional, Tuple, TypedDict, TypeVar
 
 from filelock import FileLock, Timeout
 
@@ -86,7 +86,7 @@ class TerminalLogSettings(TypedDict):
     keep_files: int
 
 
-def _as_bool(value, default=False):
+def _as_bool(value: Any, default: bool = False) -> bool:
     """Return a boolean parsed from value, or default when value is unset."""
     if isinstance(value, bool):
         return value
@@ -95,7 +95,7 @@ def _as_bool(value, default=False):
     return str(value).strip().lower() == "true"
 
 
-def _as_int(value, default):
+def _as_int(value: Any, default: int) -> int:
     """Return value parsed as int, or default when parsing fails."""
     if value is None:
         return default
@@ -105,7 +105,7 @@ def _as_int(value, default):
         return default
 
 
-def _get_nested(config, *keys):
+def _get_nested(config: Dict[str, Any], *keys: str) -> Any:
     """Return a nested dictionary value by key path, or None when missing."""
     current = config
     for key in keys:
@@ -289,7 +289,7 @@ def set_config_values(changes: Dict[str, Any]) -> bool:
     return update_config(_apply)
 
 
-def _hand_edited_defaults():
+def _hand_edited_defaults() -> List[Tuple[str, Any]]:
     """Optional settings that have no field in the Settings window, with the value used when they are missing.
 
     The getters fall back to these anyway; writing them into config.json only makes them visible and easy to edit.
@@ -334,14 +334,14 @@ def add_missing_defaults() -> bool:
     return update_config(_apply)
 
 
-def get_max_emails_to_process(config=None):
+def get_max_emails_to_process(config: Optional[Dict[str, Any]] = None) -> int:
     """Return the configured maximum number of emails to process."""
     config = config if config is not None else load_config()
     value = _get_nested(config, "processing", "max_emails_to_process")
     return max(0, _as_int(value, DEFAULT_MAX_EMAILS_TO_PROCESS))
 
 
-def get_recheck_intervals_minutes(config=None):
+def get_recheck_intervals_minutes(config: Optional[Dict[str, Any]] = None) -> list[int] | list[Any]:
     """Return queue re-check intervals in minutes, normalized and validated."""
     config = config if config is not None else load_config()
 
@@ -352,8 +352,11 @@ def get_recheck_intervals_minutes(config=None):
 
     normalized = []
     for item in value:
-        minutes = _as_int(item, None)
-        if minutes is None or minutes <= 0:
+        try:
+            minutes = int(item)
+        except (TypeError, ValueError):
+            continue
+        if minutes <= 0:
             continue
         if minutes not in normalized:
             normalized.append(minutes)
@@ -364,14 +367,14 @@ def get_recheck_intervals_minutes(config=None):
     return normalized
 
 
-def is_state_persistence_disabled(config=None):
+def is_state_persistence_disabled(config: Optional[Dict[str, Any]] = None) -> bool:
     """Return whether state persistence is disabled in configuration."""
     config = config if config is not None else load_config()
     value = _get_nested(config, "state", "disable_state_persistence")
     return _as_bool(value, DEFAULT_DISABLE_STATE_PERSISTENCE)
 
 
-def get_destination_check_every_n_polls(config=None):
+def get_destination_check_every_n_polls(config: Optional[Dict[str, Any]] = None) -> int:
     """Return how often (in poll cycles) to verify mapped destinations still exist.
 
     A value of 0 disables the periodic check.
@@ -393,7 +396,7 @@ def is_valid_subfolder(value: Any) -> bool:
     return ".." not in re.split(r"[\\/]+", text)
 
 
-def get_default_subfolder(config=None):
+def get_default_subfolder(config: Optional[Dict[str, Any]] = None) -> str:
     """Return the subfolder given to newly created mapping entries (paths.default_subfolder).
 
     An empty string (also the default) means no subfolder; a missing or unusable value gives the default.
@@ -405,7 +408,7 @@ def get_default_subfolder(config=None):
     return DEFAULT_SUBFOLDER
 
 
-def get_default_repository_limit(config=None):
+def get_default_repository_limit(config: Optional[Dict[str, Any]] = None) -> int:
     """Return the folder limit given to newly created mapping entries (processing.default_limit).
 
     0 switches the limit check off for new entries; a missing or negative value gives 10.
@@ -415,7 +418,7 @@ def get_default_repository_limit(config=None):
     return value if value >= 0 else DEFAULT_REPOSITORY_LIMIT
 
 
-def _gui_seconds(config, key, default, bounds):
+def _gui_seconds(config: Dict[str, Any], key: str, default: float, bounds: Tuple[float, float]) -> float:
     """A number of seconds from the "gui" section, kept inside bounds; anything unusable gives the default."""
     value = _get_nested(config, "gui", key)
     if isinstance(value, bool) or value is None:
@@ -429,13 +432,13 @@ def _gui_seconds(config, key, default, bounds):
     return min(max(seconds, bounds[0]), bounds[1])
 
 
-def get_gui_refresh_seconds(config=None):
+def get_gui_refresh_seconds(config: Optional[Dict[str, Any]] = None) -> float:
     """Seconds between the GUI's data refreshes (gui.refresh_seconds, default 3, 1 to 60)."""
     config = config if config is not None else load_config()
     return _gui_seconds(config, "refresh_seconds", DEFAULT_GUI_REFRESH_SECONDS, GUI_REFRESH_SECONDS_RANGE)
 
 
-def get_gui_status_message_seconds(config=None):
+def get_gui_status_message_seconds(config: Optional[Dict[str, Any]] = None) -> float:
     """Seconds a GUI status-bar message stays (gui.status_message_seconds, default 6, 2 to 60)."""
     config = config if config is not None else load_config()
     return _gui_seconds(
@@ -443,38 +446,38 @@ def get_gui_status_message_seconds(config=None):
     )
 
 
-def _gui_flag(config, key, default):
+def _gui_flag(config: Dict[str, Any], key: str, default: bool) -> bool:
     """A true/false setting from the "gui" section; anything that is not a real boolean gives the default."""
     value = _get_nested(config, "gui", key)
     return value if isinstance(value, bool) else default
 
 
-def get_gui_tray_enabled(config=None):
+def get_gui_tray_enabled(config: Optional[Dict[str, Any]] = None) -> bool:
     """Use a system tray icon (gui.tray, default true; it also needs the optional pystray + Pillow packages)."""
     config = config if config is not None else load_config()
     return _gui_flag(config, "tray", True)
 
 
-def get_gui_minimize_to_tray(config=None):
+def get_gui_minimize_to_tray(config: Optional[Dict[str, Any]] = None) -> bool:
     """Minimizing hides the window in the tray (gui.minimize_to_tray; default true on Windows/macOS, false on Linux
     where many desktops show no tray icon and the window would be lost)."""
     config = config if config is not None else load_config()
     return _gui_flag(config, "minimize_to_tray", sys.platform != "linux")
 
 
-def get_gui_close_to_tray(config=None):
+def get_gui_close_to_tray(config: Optional[Dict[str, Any]] = None) -> bool:
     """Closing the window hides it in the tray instead of ending the GUI (gui.close_to_tray, default false)."""
     config = config if config is not None else load_config()
     return _gui_flag(config, "close_to_tray", False)
 
 
-def get_gui_notifications_enabled(config=None):
+def get_gui_notifications_enabled(config: Optional[Dict[str, Any]] = None) -> bool:
     """Return gui.notifications (default true): tray notices for new warnings, failed jobs, unmapped repos, a stopped daemon."""
     config = config if config is not None else load_config()
     return _gui_flag(config, "notifications", True)
 
 
-def get_gui_silenced_warning_types(config=None) -> list[str]:
+def get_gui_silenced_warning_types(config: Optional[Dict[str, Any]] = None) -> list[str]:
     """Warning types that never pop up a notification (gui.silenced_warning_types; default API and LIMIT).
 
     The Warnings tab still shows them. A value that is not a list of strings gives the default.
@@ -486,19 +489,19 @@ def get_gui_silenced_warning_types(config=None) -> list[str]:
     return list(DEFAULT_SILENCED_WARNING_TYPES)
 
 
-def get_gui_dark_mode(config=None):
+def get_gui_dark_mode(config: Optional[Dict[str, Any]] = None) -> bool:
     """Return gui.dark_mode (default false): the GUI's dark color scheme, toggled by the button in the header."""
     config = config if config is not None else load_config()
     return _gui_flag(config, "dark_mode", False)
 
 
-def get_gui_start_minimized(config=None):
+def get_gui_start_minimized(config: Optional[Dict[str, Any]] = None) -> bool:
     """Return gui.start_minimized (default false): open the GUI minimized, as the minimize button does, not shown."""
     config = config if config is not None else load_config()
     return _gui_flag(config, "start_minimized", False)
 
 
-def get_gui_start_daemon(config=None):
+def get_gui_start_daemon(config: Optional[Dict[str, Any]] = None) -> bool:
     """Start the polling daemon when the GUI starts and none is running (gui.start_daemon, default false)."""
     config = config if config is not None else load_config()
     return _gui_flag(config, "start_daemon", False)
@@ -534,7 +537,7 @@ def get_all_download_dirs(config: Optional[Dict[str, Any]] = None) -> list[str]:
     return unique_dirs
 
 
-def get_gmail_folder(config=None):
+def get_gmail_folder(config: Optional[Dict[str, Any]] = None) -> str:
     """Return the Gmail folder used for GitHub notification processing."""
     config = config if config is not None else load_config()
     value = _get_nested(config, "mailbox", "folder")
@@ -654,12 +657,12 @@ def get_config_fingerprint(config: Optional[Dict[str, Any]] = None) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
-def get_download_dir_for_release(repo, release_type=None, config=None):
+def get_download_dir_for_release(repo: str, release_type: Optional[str] = None, config: Optional[Dict[str, Any]] = None) -> str:
     """Return the configured default download directory for a release."""
     return get_default_download_dir(config)
 
 
-def get_polling_settings(config=None):
+def get_polling_settings(config: Optional[Dict[str, Any]] = None) -> dict[str, Any]:
     """Return normalized polling settings with safe defaults."""
     config = config if config is not None else load_config()
 

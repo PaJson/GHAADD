@@ -2,6 +2,7 @@
 
 Run from the project root: python -m unittest discover -s tests -t .
 """
+from typing import Any
 import json
 import os
 import tempfile
@@ -76,7 +77,7 @@ class FitToScreenTests(unittest.TestCase):
 class PlacePopupTests(unittest.TestCase):
     SCREEN = (0, 0, 1920, 1080)
 
-    def place(self, x, y, width=400, height=60):
+    def place(self, x: Any, y: Any, width: int = 400, height: int = 60) -> Any:
         return gui_state.place_popup(x, y, width, height, *self.SCREEN)
 
     def test_normal_case_is_below_right_of_the_pointer(self) -> None:

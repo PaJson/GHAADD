@@ -3,6 +3,7 @@
 Nothing here touches the real mailbox, daemon lock or state.db.
 Run from the project root: python -m unittest discover -s tests -t .
 """
+from typing import Any
 import contextlib
 import io
 import json
@@ -58,7 +59,7 @@ class PollingLoopStopTests(unittest.TestCase):
     def test_stop_during_a_cycle_exits_without_waiting(self) -> None:
         calls = []
 
-        def cycle(connection, token, should_pause=None):
+        def cycle(connection: Any, token: Any, should_pause: Any = None) -> None:
             calls.append(1)
             daemon_control.request_stop()
             assert should_pause is not None
@@ -76,7 +77,7 @@ class PollingLoopStopTests(unittest.TestCase):
         daemon_control.request_stop()  # left behind in state.db by a previous run
         cycles = []
 
-        def cycle(connection, token, should_pause=None):
+        def cycle(connection: Any, token: Any, should_pause: Any = None) -> None:
             cycles.append(1)
             if len(cycles) == 2:
                 raise KeyboardInterrupt  # end the test loop after the second cycle

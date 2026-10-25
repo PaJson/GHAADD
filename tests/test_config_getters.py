@@ -4,6 +4,7 @@ and the "restart needed" fingerprint changes only when a setting the daemon real
 No real config.json is read: every getter takes the config as an argument here.
 Run from the project root: python -m unittest discover -s tests -t .
 """
+from typing import Any
 import os
 import unittest
 
@@ -83,7 +84,7 @@ class PollingTests(unittest.TestCase):
 
 
 class FolderSettingTests(unittest.TestCase):
-    def folders(self, **names):
+    def folders(self, **names: Any) -> Any:
         return cm.get_folder_settings({"folders": names})
 
     def test_defaults(self) -> None:
@@ -153,10 +154,10 @@ class TerminalLogTests(unittest.TestCase):
 
 
 class GuiTimingTests(unittest.TestCase):
-    def refresh(self, value):
+    def refresh(self, value: Any) -> Any:
         return cm.get_gui_refresh_seconds({"gui": {"refresh_seconds": value}})
 
-    def message(self, value):
+    def message(self, value: Any) -> Any:
         return cm.get_gui_status_message_seconds({"gui": {"status_message_seconds": value}})
 
     def test_defaults(self) -> None:
@@ -187,7 +188,7 @@ class FingerprintTests(unittest.TestCase):
         "terminal_log": {"enabled": False},
     }
 
-    def fingerprint(self, **sections) -> str:
+    def fingerprint(self, **sections: Any) -> str:
         config = {**self.BASE}
         for key, value in sections.items():
             config[key] = {**config.get(key, {}), **value} if isinstance(value, dict) else value

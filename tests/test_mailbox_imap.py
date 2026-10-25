@@ -4,6 +4,7 @@
 select (read-only when only reading), search, fetch, flags and the move to Trash.
 Run from the project root: python -m unittest discover -s tests -t .
 """
+from typing import Any, Self
 import contextlib
 import io
 import os
@@ -30,39 +31,39 @@ class FakeServer:
 class FakeIMAPClient:
     server = FakeServer()
 
-    def __init__(self, host, use_uid=True):
+    def __init__(self, host: Any, use_uid: bool = True) -> None:
         type(self).server.calls.append(("connect", host, use_uid))
         type(self).server.connections += 1
         if type(self).server.connections <= type(self).server.fail_times:
             raise OSError("connection refused")
 
-    def __enter__(self):
+    def __enter__(self) -> Self:
         return self
 
-    def __exit__(self, *exc):
+    def __exit__(self, *exc: Any) -> bool:
         return False
 
-    def login(self, user, password):
+    def login(self, user: Any, password: Any) -> None:
         self.server.calls.append(("login", user, password))
 
-    def select_folder(self, folder, readonly=False):
+    def select_folder(self, folder: Any, readonly: bool = False) -> None:
         self.server.calls.append(("select", folder, readonly))
 
-    def search(self, criteria):
+    def search(self, criteria: Any) -> Any:
         self.server.calls.append(("search", criteria))
         return list(self.server.subjects)
 
-    def fetch(self, ids, items):
+    def fetch(self, ids: Any, items: Any) -> Any:
         self.server.calls.append(("fetch", list(ids), items))
         return {
             msg_id: {b"ENVELOPE": SimpleNamespace(subject=self.server.subjects[msg_id])}
             for msg_id in ids
         }
 
-    def set_flags(self, ids, flags):
+    def set_flags(self, ids: Any, flags: Any) -> None:
         self.server.calls.append(("flags", list(ids), flags))
 
-    def move(self, ids, folder):
+    def move(self, ids: Any, folder: Any) -> None:
         self.server.calls.append(("move", list(ids), folder))
 
 
@@ -80,7 +81,7 @@ class ImapTestCase(unittest.TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
 
-    def quietly(self, function, *args, **kwargs):
+    def quietly(self, function: Any, *args: Any, **kwargs: Any) -> Any:
         buffer = io.StringIO()
         try:
             with contextlib.redirect_stdout(buffer):

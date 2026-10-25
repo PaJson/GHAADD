@@ -2,6 +2,7 @@
 
 No network is used. Run from the project root: python -m unittest discover -s tests -t .
 """
+from typing import Any, Self
 import socket
 import unittest
 from types import SimpleNamespace
@@ -21,36 +22,36 @@ FOLDERS = [
 
 
 class FakeServer:
-    def __init__(self, login_error=None, folders=FOLDERS, unread=(1, 2, 3), select_error=None):
+    def __init__(self, login_error: Any = None, folders: Any = FOLDERS, unread: Any = (1, 2, 3), select_error: Any = None) -> None:
         self.login_error, self.folders, self.unread, self.select_error = login_error, folders, unread, select_error
         self.calls = []
 
-    def __enter__(self):
+    def __enter__(self) -> Self:
         return self
 
-    def __exit__(self, *exc):
+    def __exit__(self, *exc: Any) -> bool:
         return False
 
-    def login(self, user, password):
+    def login(self, user: Any, password: Any) -> None:
         self.calls.append(("login", user, password))
         if self.login_error:
             raise self.login_error
 
-    def list_folders(self):
+    def list_folders(self) -> Any:
         return self.folders
 
-    def select_folder(self, folder, readonly=False):
+    def select_folder(self, folder: Any, readonly: bool = False) -> None:
         self.calls.append(("select", folder, readonly))
         if self.select_error:
             raise self.select_error
 
-    def search(self, criteria):
+    def search(self, criteria: Any) -> Any:
         self.calls.append(("search", criteria))
         return list(self.unread)
 
 
-def factory(server=None, error=None, hosts=None):
-    def make(host):
+def factory(server: Any = None, error: Any = None, hosts: Any = None) -> Any:
+    def make(host: Any) -> Any:
         if hosts is not None:
             hosts.append(host)
         if error:
@@ -119,12 +120,12 @@ class GmailTests(unittest.TestCase):
         self.assertFalse(connection_tests.check_gmail("me@gmail.com", "", "", make).ok)
 
 
-def response(status, payload=None):
+def response(status: Any, payload: Any = None) -> Any:
     return SimpleNamespace(status_code=status, json=lambda: payload)
 
 
-def getter(result=None, error=None, seen=None):
-    def get(url, headers=None, timeout=None):
+def getter(result: Any = None, error: Any = None, seen: Any = None) -> Any:
+    def get(url: Any, headers: Any = None, timeout: Any = None) -> Any:
         if seen is not None:
             seen.update(headers or {})
         if error:

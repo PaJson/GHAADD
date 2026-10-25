@@ -34,7 +34,7 @@ from modules.mapping_manager import (
 )
 from modules.payload_types import DownloadReleaseResult, DownloadResultPayload, ReleaseAssetQueueItem, SkippedItemPayload
 from requests.exceptions import ChunkedEncodingError, ConnectionError, Timeout
-from typing import Literal, Optional, cast
+from typing import Any, cast, Dict, Literal, Optional
 from urllib.parse import quote, urljoin
 
 # Load environment variables from .env.
@@ -806,7 +806,7 @@ def _github_archive_name(repo_name: str, tag: str, extension: str) -> str:
     return f"{repo_name}-{version}.{extension}"
 
 
-def _probe_archive_name(session, repo: str, tag: str, extension: str, fallback: str) -> str:
+def _probe_archive_name(session: requests.Session, repo: str, tag: str, extension: str, fallback: str) -> str:
     """Return the file name GitHub sends for the release page's own archive link, else the fallback."""
     url = f"https://github.com/{repo}/archive/refs/tags/{quote(tag, safe='/')}.{extension}"
     try:
@@ -820,7 +820,7 @@ def _probe_archive_name(session, repo: str, tag: str, extension: str, fallback: 
     return name if name and name != "unknown" else fallback
 
 
-def sanitize_folder_name(text):
+def sanitize_folder_name(text: Optional[str]) -> str:
     """Return a Windows-safe folder name using JS-compatible rules."""
     if not text:
         return "unknown"
@@ -829,7 +829,7 @@ def sanitize_folder_name(text):
     return text.strip()
 
 
-def get_short_commit_hash(repo, tag, headers):
+def get_short_commit_hash(repo: str, tag: str, headers: Dict[str, str]) -> Any | Literal['unknown-commit']:
     """Return the 7-character commit hash for a specific tag."""
     url = f"https://api.github.com/repos/{repo}/commits/{tag}"
     response = requests.get(url, headers=headers)
@@ -838,7 +838,7 @@ def get_short_commit_hash(repo, tag, headers):
     return "unknown-commit"
 
 
-def build_folder_name(repo, release_data, headers, raw_name):
+def build_folder_name(repo: str, release_data: Dict[str, Any], headers: Dict[str, str], raw_name: str) -> str:
     """Build a release folder name from a specific display name."""
     pub_time_str = release_data.get("published_at", "")
     if pub_time_str:
@@ -858,13 +858,13 @@ def build_folder_name(repo, release_data, headers, raw_name):
     return f"{formatted_date}, {safe_name}, {safe_tag}, {safe_commit}"
 
 
-def generate_folder_name(repo, release_data, headers):
+def generate_folder_name(repo: str, release_data: Dict[str, Any], headers: Dict[str, str]) -> str:
     """Generate the default folder name based on the release title."""
     release_name = release_data.get("name") or release_data.get("tag_name", "unknown-name")
     return build_folder_name(repo, release_data, headers, release_name)
 
 
-def is_state_persistence_enabled():
+def is_state_persistence_enabled() -> bool:
     """Return whether persistent duplicate-detection state is enabled."""
     return not is_state_persistence_disabled()
 
@@ -883,7 +883,7 @@ def build_expected_signature(item: ReleaseAssetQueueItem) -> Optional[str]:
     return "|".join(signature_parts)
 
 
-def get_release_data(repo, tag):
+def get_release_data(repo: str, tag: str) -> Any | None:
     """Return release JSON for a repository tag, or None when unavailable."""
     url = f"https://api.github.com/repos/{repo}/releases/tags/{tag}"
 
@@ -907,7 +907,7 @@ def get_release_data(repo, tag):
     return None
 
 
-def get_release_attestation_url(release_data, headers):
+def get_release_attestation_url(release_data: Dict[str, Any], headers: Dict[str, str]) -> str | None:
     """Return the release attestation download URL from the expanded assets page.
 
     GitHub exposes this link in expanded-assets HTML, not in release JSON.
@@ -1117,15 +1117,15 @@ def download_all_assets(
     per_file_retry_delay = 2
     normal_downloaded_count = 0
 
-    def refresh_release_state():
+    def refresh_release_state() -> None:
         """Reload the stored state of this release from state.db into the enclosing function's variable."""
         nonlocal release_state
         if state_db is not None:
             release_state = load_release_state(state_db, release_key)
 
-    def should_skip_existing_file(file_path, item_key, expected_signature, remote_size, remote_last_modified, remote_etag):
+    def should_skip_existing_file(file_path: Optional[str], item_key: str, expected_signature: Optional[str], remote_size: Any, remote_last_modified: Any, remote_etag: Any) -> bool:
         """Return True when the local file can be treated as up to date."""
-        if not os.path.exists(file_path):
+        if file_path is None or not os.path.exists(file_path):
             return False
 
         state_entry = release_state.get(item_key, {})
