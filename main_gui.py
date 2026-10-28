@@ -1429,6 +1429,7 @@ class StatusTab(ttk.Frame):
 
     # (key, heading, width, anchor, stretch)
     Column = tuple[str, str, int, Anchor, bool]
+    FLAG_MARK = "● "  # in front of the Type of a row that counts toward the tray icon
 
     def __init__(
         self,
@@ -1458,6 +1459,7 @@ class StatusTab(ttk.Frame):
         self._repos: list[str] = []
         self._ids: list[int] = []
         self._highlight_after: Optional[int] = None
+        self._flag_rule: Optional[Callable[[str], bool]] = None
         self._fit_job: Optional[str] = None
         self._tip_cell: Optional[tuple[str, str]] = None
         self._measure_cache: dict[str, int] = {}
@@ -1646,7 +1648,8 @@ class StatusTab(ttk.Frame):
         self.tree.delete(*self.tree.get_children())
         for index, row in enumerate(self._rows):
             self.tree.insert(
-                "", "end", iid=str(index), values=self._display(row, self._is_unread(index)), tags=self._tags(index)
+                "", "end", iid=str(index),
+                values=self._display(row, self._is_unread(index), self._is_flagged(index)), tags=self._tags(index),
             )
         if self._has_detail:
             if selected_id is not None and selected_id in self._ids:
@@ -1675,12 +1678,29 @@ class StatusTab(ttk.Frame):
         """True when the row's id is above the highlight mark."""
         return self._highlight_after is not None and self._ids[index] > self._highlight_after
 
-    def _display(self, row: tuple[str, ...], bold: bool = False) -> list[str]:
+    def _is_flagged(self, index: int) -> bool:
+        """True for an unread row whose Type is one the tray icon counts (see set_flag_rule)."""
+        if self._flag_rule is None or not self._is_unread(index):
+            return False
+        try:
+            kind_index = [column[0] for column in self._columns].index("kind")
+        except ValueError:
+            return False
+        return self._flag_rule(self._rows[index][kind_index])
+
+    def set_flag_rule(self, rule: Optional[Callable[[str], bool]]) -> None:
+        """Mark unread rows whose Type the rule accepts with a dot (the Warnings tab: what the tray icon counts)."""
+        self._flag_rule = rule
+        self._render()
+
+    def _display(self, row: tuple[str, ...], bold: bool = False, flagged: bool = False) -> list[str]:
         """Cell texts shortened to their column; bold rows are measured in the (wider) bold font."""
         shown = []
         for (key, _heading, _width, _anchor, _stretch), text in zip(self._columns, row):
             width = int(self.tree.column(key, "width")) - 14
-            shown.append(fit_text(text, max(width, 20), lambda value: self._measure(value, bold)))
+            mark = self.FLAG_MARK if flagged and key == "kind" else ""
+            fitted = fit_text(text, max(width - self._measure(mark, bold), 20), lambda value: self._measure(value, bold))
+            shown.append(mark + fitted)
         return shown
 
     def _current_widths(self) -> tuple[int, ...]:
@@ -1710,7 +1730,8 @@ class StatusTab(ttk.Frame):
             return
         self._hide_tip()
         full = self._rows[int(iid)][index]
-        if self._display(self._rows[int(iid)], self._is_unread(int(iid)))[index] != full:
+        shown = self._display(self._rows[int(iid)], self._is_unread(int(iid)), self._is_flagged(int(iid)))[index]
+        if shown.removeprefix(self.FLAG_MARK) != full:
             self._tip_cell = (iid, str(index))
             self._tooltip.schedule(full, event.x_root, event.y_root)
 
@@ -3643,6 +3664,10 @@ class MainWindow(tk.Tk):
         for definition in status_tabs.TAB_DEFS:
             tab = self._build_status_tab(definition)
             self._status_tabs[definition.key] = tab
+            if definition.key == "warnings":
+                # The dot marks what the tray icon counts: unread and not silenced (read at call time, so a saved
+                # choice applies at once).
+                tab.set_flag_rule(lambda kind: warning_types.wants_notice(kind, self._silenced_warning_types))
             self._status_titles[definition.key] = definition.title
             self.notebook.add(tab, text=definition.title)
 
@@ -3739,7 +3764,9 @@ class MainWindow(tk.Tk):
             self.notebook,
             self.COMPLETED_COLUMNS if definition.key in self.FOLDER_TABS else self.EVENT_COLUMNS,
             self.EMPTY_TEXTS.get(definition.key, "Nothing to show."), self._show_repo,
-            hint="Double-click a row to open its repository in the Mappings tab.",
+            hint="Double-click a row to open its repository in the Mappings tab."
+                 + (f" {StatusTab.FLAG_MARK.strip()} marks the unread warnings that count toward the tray icon."
+                    if definition.key == "warnings" else ""),
             on_open_folder=self._open_repo_folder,  # every event tab; Unmapped has no folder to open
             on_mark_read=(lambda key=definition.key: self._mark_status_read(key)) if definition.counter else None,
             on_clear=lambda key=definition.key: self._clear_status_tab(key),
@@ -4217,6 +4244,9 @@ class MainWindow(tk.Tk):
         except Exception:  # an unreadable config.json keeps the choice made at start
             return
         self._update_tray_icon()  # the red dot follows the same choice
+        self._status_tabs["warnings"].set_flag_rule(
+            lambda kind: warning_types.wants_notice(kind, self._silenced_warning_types)
+        )
         self.set_status("Warning notifications saved.")
 
     def _open_doctor(self) -> None:
