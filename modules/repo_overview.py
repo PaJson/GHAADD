@@ -46,6 +46,52 @@ class RepoRow:
     limit_note: str = ""  # hover text for the Limit cell ("12 of 15 allowed folders, counted ...")
     pending_count: int = 0  # PENDING jobs of this repository (the Recheck cell reads "2 / 5 (+2)" for 3 of them)
     pending_note: str = ""  # hover text for the Recheck cell: every pending job, when there is more than one
+    has_skiplist: bool = False  # the entry names release types to ignore
+    has_custom_recheck: bool = False  # the entry has its own recheck minutes instead of the global ones
+    shared_folder: bool = False  # the entry is marked as sharing its destination folder on purpose
+
+
+# The Mappings tab's "Show" drop-down, in order; show_matches() holds the rule of each choice.
+SHOW_FILTERS = (
+    "All", "Active", "Inactive", "Has pending", "Has skiplist", "Custom recheck", "Shared folder",
+)
+
+
+def show_matches(row: RepoRow, show: str) -> bool:
+    """True when the row passes the Show choice (an unknown choice lets everything through)."""
+    if show == "Active":
+        return row.status != STATUS_INACTIVE
+    if show == "Inactive":
+        return row.status == STATUS_INACTIVE
+    if show == "Has pending":
+        return row.status in (STATUS_QUEUED, STATUS_WAITING, STATUS_RUNNING)
+    if show == "Has skiplist":
+        return row.has_skiplist
+    if show == "Custom recheck":
+        return row.has_custom_recheck
+    if show == "Shared folder":
+        return row.shared_folder
+    return True
+
+
+def has_entries(value: Any) -> bool:
+    """True for a list with at least one non-blank item (an empty list, blanks and non-lists are 'not set')."""
+    return isinstance(value, list) and any(str(item).strip() for item in value if not isinstance(item, bool))
+
+
+def has_custom_intervals(value: Any) -> bool:
+    """True when the list holds at least one usable recheck minute count (the same test as the daemon's fallback)."""
+    if not isinstance(value, list):
+        return False
+    for item in value:
+        if isinstance(item, bool):
+            continue
+        try:
+            if int(item) > 0:
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
 
 
 def release_marker(release_type: Any) -> str:
@@ -231,6 +277,9 @@ def build_rows(
                 limit_note=limit_note,
                 pending_count=pending_count,
                 pending_note=format_pending_note(pending_jobs, steps, now),
+                has_skiplist=has_entries(entry.get("skiplist")),
+                has_custom_recheck=has_custom_intervals(entry.get("recheck_intervals")),
+                shared_folder=entry.get("shared_destination") is True,
             )
         )
 
