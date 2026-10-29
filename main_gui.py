@@ -42,6 +42,7 @@ from modules import (
     gui_viewer,
     log_tail,
     mapping_manager,
+    repo_overview,
     shortcuts,
     stats,
     status_tabs,
@@ -488,7 +489,7 @@ class MappingsTab(ttk.Frame):
         ("limit", "Limit", 75, "center"),
     )
     STRETCH_COLUMNS = ("repo", "folder", "destination", "tag")
-    SHOW_FILTERS = ("All", "Active", "Inactive", "Has pending")
+    SHOW_FILTERS = repo_overview.SHOW_FILTERS
     # Editor layout: three columns of up to three rows; a row holds one or more fields side by side.
     # A field is (key, label, kind, weight): kinds name, entry, readonly, dest, spin, choice; weight is its share of the
     # row's width (a spin box keeps its natural width). The last column's third row holds Active and the buttons.
@@ -561,7 +562,7 @@ class MappingsTab(ttk.Frame):
         FilterEntry(bar, self.filter_var).grid(row=0, column=1, sticky="ew")
         self.filter_var.trace_add("write", lambda *_: self._render_rows())
         self.show_var = tk.StringVar(value=self.SHOW_FILTERS[0])
-        show_box = ttk.Combobox(bar, textvariable=self.show_var, state="readonly", width=12, values=self.SHOW_FILTERS)
+        show_box = ttk.Combobox(bar, textvariable=self.show_var, state="readonly", width=15, values=self.SHOW_FILTERS)
         show_box.grid(row=0, column=2, padx=(8, 0))
         show_box.bind("<<ComboboxSelected>>", lambda _event: self._render_rows())
         self.add_button = ttk.Button(bar, text="Add repository…", command=self._add_repository)
@@ -904,14 +905,7 @@ class MappingsTab(ttk.Frame):
         needle = self.filter_var.get().strip().casefold()
         if needle and needle not in f"{row.folder} {row.repo} {row.destination}".casefold():
             return False
-        show = self.show_var.get()
-        if show == "Active":
-            return row.status != "Inactive"
-        if show == "Inactive":
-            return row.status == "Inactive"
-        if show == "Has pending":
-            return row.status in ("Queued", "Waiting", "Running")
-        return True
+        return repo_overview.show_matches(row, self.show_var.get())
 
     def _render_rows(self) -> None:
         """Update the tree in place (no flicker, selection kept) to match the filtered rows."""
