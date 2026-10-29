@@ -832,7 +832,7 @@ def get_repo_job_summaries(connection: sqlite3.Connection) -> dict[Any, Any]:
             }
         )
     for summary in summaries.values():
-        summary["pending_jobs"].reverse()  # earliest check time first, the one the row's Recheck cells describe
+        summary["pending_jobs"].reverse()  # earliest check time first, the one the row's Step cells describe
 
     # The newest notification of a repository that was switched off (no job exists for it); repos that have
     # never had a job get a summary of their own so the table can show what they announced.

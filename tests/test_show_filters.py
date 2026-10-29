@@ -1,4 +1,4 @@
-"""The Mappings tab's Show drop-down: Has skiplist, Custom recheck and Shared folder (plus the older choices)."""
+"""The Mappings tab's Show drop-down: Pending, Recheck, Skiplist and Shared folder (plus the older choices)."""
 import unittest
 from typing import Any
 
@@ -17,7 +17,7 @@ def shown(rows: dict[str, repo_overview.RepoRow], choice: str) -> list[str]:
 
 class ShowFilterTests(unittest.TestCase):
     def test_the_new_choices_are_in_the_drop_down(self) -> None:
-        for choice in ("Has skiplist", "Custom recheck", "Shared folder"):
+        for choice in ("Pending", "Recheck", "Skiplist", "Shared folder"):
             self.assertIn(choice, repo_overview.SHOW_FILTERS)
         self.assertEqual(repo_overview.SHOW_FILTERS[0], "All")  # the editor resets to the first choice
 
@@ -28,7 +28,7 @@ class ShowFilterTests(unittest.TestCase):
             {"repository": "o/blank", "skiplist": ["", "  "]},
             {"repository": "o/pre", "skiplist": ["Pre-release"]},
         )
-        self.assertEqual(shown(rows, "Has skiplist"), ["o/pre"])
+        self.assertEqual(shown(rows, "Skiplist"), ["o/pre"])
 
     def test_custom_recheck_means_an_own_usable_minute_list(self) -> None:
         rows = rows_for(
@@ -38,7 +38,7 @@ class ShowFilterTests(unittest.TestCase):
             {"repository": "o/own", "recheck_intervals": [5, 60]},
             {"repository": "o/text", "recheck_intervals": ["15"]},
         )
-        self.assertEqual(shown(rows, "Custom recheck"), ["o/own", "o/text"])
+        self.assertEqual(shown(rows, "Recheck"), ["o/own", "o/text"])
 
     def test_shared_folder_is_only_a_real_true(self) -> None:
         rows = rows_for(
@@ -54,7 +54,7 @@ class ShowFilterTests(unittest.TestCase):
         self.assertEqual(shown(rows, "All"), ["o/off", "o/on"])
         self.assertEqual(shown(rows, "Active"), ["o/on"])
         self.assertEqual(shown(rows, "Inactive"), ["o/off"])
-        self.assertEqual(shown(rows, "Has pending"), [])
+        self.assertEqual(shown(rows, "Pending"), [])
 
     def test_an_unknown_choice_shows_everything(self) -> None:
         rows = rows_for({"repository": "o/a"})

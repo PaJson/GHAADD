@@ -1,4 +1,4 @@
-"""A repository can have several pending jobs (one per build/release): the Recheck cell says so and lists them.
+"""A repository can have several pending jobs (one per build/release): the Step cell says so and lists them.
 
 A temporary state.db is used. Run from the project root: python -m unittest discover -s tests -t .
 """
@@ -102,7 +102,7 @@ class DatabaseSummaryTests(unittest.TestCase):
         self.assertEqual(summary["pending_count"], 3)
         self.assertEqual([job["tag"] for job in summary["pending_jobs"]], ["oldest", "middle", "newest"])
         self.assertEqual(summary["pending_next_check"], 100.0)  # what the row's Next check cell shows
-        self.assertEqual(summary["pending_attempts"], 4)  # ... and its Recheck cell
+        self.assertEqual(summary["pending_attempts"], 4)  # ... and its Step cell
         self.assertEqual(summary["pending_jobs"][0]["attempts"], 4)
         self.assertEqual(summary["latest_tag"], "middle")  # the row's Tag cell: the newest by id, not by check time
 

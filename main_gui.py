@@ -483,7 +483,7 @@ class MappingsTab(ttk.Frame):
         ("destination", "Destination", 150, "w"),
         ("tag", "Tag", 100, "w"),
         ("last_check", "Last check", 135, "w"),
-        ("step", "Recheck", 65, "center"),
+        ("step", "Step", 65, "center"),
         ("next_check", "Next check", 135, "w"),
         ("files", "Files", 70, "center"),
         ("limit", "Limit", 75, "center"),
@@ -784,7 +784,7 @@ class MappingsTab(ttk.Frame):
         bold = tkfont.nametofont("TkDefaultFont").copy()
         bold.configure(weight="bold")
         stamp = font.measure("2026-10-07 00:00") + 47  # text plus the cell's side margins (Windows 135, Linux 174)
-        heading = bold.measure("Recheck") + 17
+        heading = bold.measure("Step") + 17
         step = font.measure("5 / 5 (+99)") + 20  # "2 / 5 (+2)": the step plus the jobs that are waiting besides it
         wanted = {"last_check": stamp, "next_check": stamp, "step": max(heading, step)}
         listed = {key: width for key, _title, width, _anchor in self.TABLE_COLUMNS}
