@@ -44,8 +44,8 @@ class RepoRow:
     limit_warning: bool = False  # over its limit, or a folder-limit warning is on record
     files_total: str = ""  # the newest release's file count (total_items), shown in the editor
     limit_note: str = ""  # hover text for the Limit cell ("12 of 15 allowed folders, counted ...")
-    pending_count: int = 0  # PENDING jobs of this repository (the Recheck cell reads "2 / 5 (+2)" for 3 of them)
-    pending_note: str = ""  # hover text for the Recheck cell: every pending job, when there is more than one
+    pending_count: int = 0  # PENDING jobs of this repository (the Step cell reads "2 / 5 (+2)" for 3 of them)
+    pending_note: str = ""  # hover text for the Step cell: every pending job, when there is more than one
     has_skiplist: bool = False  # the entry names release types to ignore
     has_custom_recheck: bool = False  # the entry has its own recheck minutes instead of the global ones
     shared_folder: bool = False  # the entry is marked as sharing its destination folder on purpose
@@ -53,7 +53,7 @@ class RepoRow:
 
 # The Mappings tab's "Show" drop-down, in order; show_matches() holds the rule of each choice.
 SHOW_FILTERS = (
-    "All", "Active", "Inactive", "Has pending", "Has skiplist", "Custom recheck", "Shared folder",
+    "All", "Pending", "Active", "Inactive", "Recheck", "Skiplist", "Shared folder",
 )
 
 
@@ -63,11 +63,11 @@ def show_matches(row: RepoRow, show: str) -> bool:
         return row.status != STATUS_INACTIVE
     if show == "Inactive":
         return row.status == STATUS_INACTIVE
-    if show == "Has pending":
+    if show == "Pending":
         return row.status in (STATUS_QUEUED, STATUS_WAITING, STATUS_RUNNING)
-    if show == "Has skiplist":
+    if show == "Skiplist":
         return row.has_skiplist
-    if show == "Custom recheck":
+    if show == "Recheck":
         return row.has_custom_recheck
     if show == "Shared folder":
         return row.shared_folder
@@ -166,13 +166,13 @@ def format_step(attempts: Any, steps: int, pending_count: int) -> str:
 def format_pending_note(jobs: Sequence[Mapping[str, Any]], steps: int, now: float) -> str:
     """Hover text listing every pending job (earliest check first); empty for none or a single job.
 
-    The Recheck and Next check cells describe the first job of this list; the Tag, Last check and Files cells
+    The Step and Next check cells describe the first job of this list; the Tag, Last check and Files cells
     describe the newest job, which is why a row can seem to mix two.
     """
     if len(jobs) < 2:
         return ""
     lines = [
-        f"{len(jobs)} jobs of this repository are waiting. The Recheck and Next check cells show the first one; "
+        f"{len(jobs)} jobs of this repository are waiting. The Step and Next check cells show the first one; "
         "the Tag, Last check and Files cells show the newest release."
     ]
     for job in jobs:

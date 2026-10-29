@@ -759,7 +759,7 @@ const TABS = [
 ];
 const COLUMNS = {
   mappings: [["repo", "Repository (owner/repo)"], ["folder", "Name (folder)"], ["status", "Status"], ["tag", "Tag"],
-             ["last_check", "Last check"], ["step", "Recheck"], ["next_check", "Next check"], ["files", "Files"], ["limit", "Limit"]],
+             ["last_check", "Last check"], ["step", "Step"], ["next_check", "Next check"], ["files", "Files"], ["limit", "Limit"]],
   warnings: [["time", "Time"], ["repo", "Repository (owner/repo)"], ["kind", "Type"], ["message", "Message"]],
   completed: [["time", "Time"], ["repo", "Repository (owner/repo)"], ["kind", "Tag"], ["message", "Message"]],
   limits: [["time", "Time"], ["repo", "Repository (owner/repo)"], ["kind", "Type"], ["message", "Message"]],
