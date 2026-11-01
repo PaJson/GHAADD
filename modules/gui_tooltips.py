@@ -116,6 +116,10 @@ CONTROL_HELP = {
     "poll_one": "Poll one item: take at most one new notification and process at most one queue item "
                 "(the same as --single, but in the running daemon), then restart the countdown.\n"
                 "Handy to try something out without working through everything that is waiting.",
+    "fetch_release": "Queue one release by its GitHub link (github.com/owner/repo/releases/tag/<tag>), for example one "
+                     "you found while browsing or an old release that was never picked up. A repository that is "
+                     "not mapped yet is added without a destination. The Skiplist and the Active switch are "
+                     "ignored. Nothing is polled from the mailbox.",
     "polling_enabled": "Poll the mailbox on a schedule (config.json: polling.enabled).\n"
                        "Off: the daemon (started from the GUI, the \"GHAADD daemon\" shortcut or at login) still runs, "
                        "but stays idle and polls only when you press Poll now.\n"
