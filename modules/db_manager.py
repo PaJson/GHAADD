@@ -3,6 +3,7 @@
 import re
 import os
 import sqlite3
+import time
 from typing import Any, Iterable, List, Optional, Sequence
 
 STATE_DB_NAME = "state.db"
@@ -1244,6 +1245,41 @@ def reschedule_job(
         ),
     )
     connection.commit()
+
+
+def get_pending_jobs_for_repo(connection: sqlite3.Connection, repo: str) -> list[Any]:
+    """Return one repository's PENDING jobs (any capitalisation of owner/repo), newest job first."""
+    return connection.execute(
+        """
+        SELECT id, repo, tag, release_type, attempt_count, next_check_time, created_at
+        FROM job_queue
+        WHERE status = 'PENDING' AND LOWER(repo) = LOWER(?)
+        ORDER BY id DESC
+        """,
+        (repo,),
+    ).fetchall()
+
+
+def finish_job_now(connection: sqlite3.Connection, job_id: int, steps: int, now: Optional[float] = None) -> bool:
+    """Skip a PENDING job's remaining re-check waits: put it on its last step and make it due now.
+
+    The worker finalizes a job when `attempt_count + 1` passes the number of re-check steps, so the next poll runs
+    one more real check (downloads what is missing) and then finalizes it through the normal path. Returns False
+    when the job is not PENDING any more. Never lowers an attempt count or postpones a check.
+    """
+    due = time.time() if now is None else float(now)
+    cursor = connection.execute(
+        """
+        UPDATE job_queue
+        SET attempt_count = MAX(attempt_count, ?),
+            next_check_time = MIN(next_check_time, ?),
+            updated_at = CAST(strftime('%s', 'now') AS REAL)
+        WHERE id = ? AND status = 'PENDING'
+        """,
+        (int(steps), due, int(job_id)),
+    )
+    connection.commit()
+    return cursor.rowcount > 0
 
 
 def update_job_for_manual_check(

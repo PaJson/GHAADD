@@ -33,6 +33,7 @@ from modules import (
     gui_daemon,
     gui_data,
     gui_doctor,
+    gui_finish,
     gui_forms,
     gui_instance,
     gui_state,
@@ -472,6 +473,49 @@ class AddRepositoryDialog(tk.Toplevel):
         self._on_added(repo)
 
 
+class FinishJobDialog(tk.Toplevel):
+    """List a repository's pending jobs, let the user pick one and confirm skipping its remaining re-checks."""
+
+    def __init__(
+        self, master: tk.Misc, repo: str, choices: list[gui_finish.PendingChoice], on_chosen: Callable[[int], None]
+    ) -> None:
+        """Build the dialog: an explanation, one radio button per pending job (the newest preselected)."""
+        super().__init__(master)
+        self.title("Finish now")
+        self.resizable(False, False)
+        self.transient(master)  # type: ignore[arg-type]
+        self._choices = choices
+        self._on_chosen = on_chosen
+
+        body = ttk.Frame(self, padding=14)
+        body.pack(fill="both", expand=True)
+        ttk.Label(body, text=gui_finish.intro_text(repo, len(choices)), wraplength=520, justify="left").grid(
+            row=0, column=0, sticky="w", pady=(0, 10)
+        )
+        self.selected = tk.IntVar(value=0)
+        first: Optional[ttk.Radiobutton] = None
+        for index, choice in enumerate(choices, start=1):
+            radio = ttk.Radiobutton(body, text=choice.label, variable=self.selected, value=index - 1)
+            radio.grid(row=index, column=0, sticky="w", pady=2)
+            first = first or radio
+        buttons = ttk.Frame(body)
+        buttons.grid(row=len(choices) + 1, column=0, sticky="e", pady=(12, 0))
+        ttk.Button(buttons, text="Cancel", command=self.destroy).grid(row=0, column=0, padx=(0, 6))
+        finish_button = ttk.Button(buttons, text="Finish now", command=self._finish)
+        finish_button.grid(row=0, column=1)
+
+        self.bind("<Return>", lambda _event: self._finish())
+        self.bind("<Escape>", lambda _event: self.destroy())
+        center_dialog(self, master, focus=first)
+        self.grab_set()
+
+    def _finish(self) -> None:
+        """Close the dialog and hand the picked job's id to the caller."""
+        job_id = self._choices[self.selected.get()].job_id
+        self.destroy()
+        self._on_chosen(job_id)
+
+
 class MappingsTab(ttk.Frame):
     """Wide repository table on top, editor below (always fully visible)."""
 
@@ -521,10 +565,16 @@ class MappingsTab(ttk.Frame):
     )
     CHECK_KEYS = ("active", "shared_destination")  # yes/no fields (a check box instead of text)
 
-    def __init__(self, master: tk.Misc, set_status: Callable[[str], None]) -> None:
+    def __init__(
+        self,
+        master: tk.Misc,
+        set_status: Callable[[str], None],
+        on_finish_now: Optional[Callable[[str], None]] = None,
+    ) -> None:
         """Build the Mappings tab: filter bar, table and the editor form."""
         super().__init__(master, padding=10)
         self._set_status = set_status
+        self._on_finish_now = on_finish_now  # takes the selected repository; the window does the rest
         self._table = gui_data.RepoTable()
         self._current_repo: Optional[str] = None  # repo shown in the editor
         self._loaded: dict[str, Any] = {}  # editable values as loaded, to detect changes
@@ -640,14 +690,17 @@ class MappingsTab(ttk.Frame):
         self.revert_button = ttk.Button(actions, text="Revert", command=self._revert)
         self.save_button = ttk.Button(actions, text="Save", command=self._save)
         self.open_button = ttk.Button(actions, text="Open folder", command=self._open_folder)
+        self.finish_button = ttk.Button(actions, text="Finish now", command=self._finish_now)
         self.active_check.grid(row=0, column=0, sticky="w")  # the two check boxes stack; the buttons sit beside them
         self.shared_check.grid(row=1, column=0, sticky="w")
-        self.open_button.grid(row=0, column=2, rowspan=2, padx=(0, 6))
-        self.revert_button.grid(row=0, column=3, rowspan=2, padx=(0, 6))
-        self.save_button.grid(row=0, column=4, rowspan=2)
-        self.form_widgets.extend([self.active_check, self.shared_check, self.open_button])
+        self.finish_button.grid(row=0, column=2, rowspan=2, padx=(0, 6))
+        self.open_button.grid(row=0, column=3, rowspan=2, padx=(0, 6))
+        self.revert_button.grid(row=0, column=4, rowspan=2, padx=(0, 6))
+        self.save_button.grid(row=0, column=5, rowspan=2)
+        self.form_widgets.extend([self.active_check, self.shared_check, self.finish_button, self.open_button])
         attach_tooltip(self.active_check, gui_tooltips.FIELD_HELP["active"])
         attach_tooltip(self.shared_check, gui_tooltips.FIELD_HELP["shared_destination"])
+        attach_tooltip(self.finish_button, gui_tooltips.FIELD_HELP["finish_now"])
         attach_tooltip(self.open_button, gui_tooltips.FIELD_HELP["open_folder"])
 
     def _add_form_row(
@@ -720,6 +773,11 @@ class MappingsTab(ttk.Frame):
             self._set_status(f"Opened {url}")
         else:
             self._set_status(f"Could not open a browser for {url}")
+
+    def _finish_now(self) -> None:
+        """Hand the repository shown in the editor to the window, which asks which pending job to finish."""
+        if self._current_repo is not None and self._on_finish_now is not None:
+            self._on_finish_now(self._current_repo)
 
     def _open_folder(self) -> None:
         """Open the repository's folder (destination/folder name/subfolder, or the longest part that exists)."""
@@ -3646,7 +3704,7 @@ class MainWindow(tk.Tk):
         self.notebook = ttk.Notebook(self)
         self.notebook.pack(fill="both", expand=True, padx=8, pady=8)
 
-        self.mappings_tab = MappingsTab(self.notebook, self.set_status)
+        self.mappings_tab = MappingsTab(self.notebook, self.set_status, self._on_finish_now)
         self.log_tab = TerminalLogTab(self.notebook, self._terminal_log_active, self._on_enable_log, self.set_status)
         self.notebook.add(self.mappings_tab, text="Mappings")
         self.notebook.add(self.log_tab, text="Terminal log")
@@ -3814,6 +3872,40 @@ class MainWindow(tk.Tk):
             self.control_bar.set_movable(0 if self._moving else self._movable.get())
         except Exception:
             pass
+
+    def _on_finish_now(self, repo: str) -> None:
+        """Finish now button: ask which pending job of the repository to finish, then let the daemon do it at once."""
+        snapshot = self._snapshot
+        job_running = snapshot.running and (snapshot.current_repo is not None or snapshot.progress is not None)
+        busy_repo = snapshot.current_repo or (snapshot.progress.repo if snapshot.progress else None)
+        reason = gui_finish.blocked_reason(busy_repo, job_running)
+        if reason:
+            self.set_status(reason)
+            return
+        try:
+            choices = gui_finish.load_choices(repo)
+        except Exception as exc:  # a busy or unreadable state.db is shown, not raised into Tk
+            self.set_status(f"Could not read the queue: {describe_error(exc)}")
+            return
+        if not choices:
+            self.set_status(f"{repo} has no waiting job: there are no re-checks to skip.")
+            return
+        FinishJobDialog(self, repo, choices, lambda job_id: self._finish_job(repo, job_id))
+
+    def _finish_job(self, repo: str, job_id: int) -> None:
+        """Put the picked job on its last step and ask the daemon (when one runs) to poll right away."""
+        try:
+            changed = gui_finish.finish(repo, job_id)
+        except Exception as exc:
+            self.set_status(f"Could not update the job: {describe_error(exc)}")
+            return
+        if not changed:
+            self.set_status(f"That job of {repo} is no longer waiting.")
+            return
+        running = daemon_lock.is_daemon_running()
+        poll_error = gui_daemon.do_poll_now() if running else None
+        self.set_status(gui_finish.result_text(repo, running, poll_error))
+        self.mappings_tab.refresh()
 
     def _on_move_complete(self) -> None:
         """Move now button: move what waits in Complete to the repositories' destinations (not while a job runs)."""
