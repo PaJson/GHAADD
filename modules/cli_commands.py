@@ -36,6 +36,7 @@ from modules.lifecycle_logger import list_lifecycle_events, purge_lifecycle_even
 from modules.mapping_manager import validate_mapping_schema
 from modules.queue_reports import build_queue_status_options, print_queue_status
 from modules.queue_worker import process_selected_pending_jobs
+from modules.release_fetch import ReleaseFetchError, ReleaseUrlError, fetch_release, outcome_text
 
 
 # Options that only change what another command does, and the commands they work with. Given without one of those
@@ -51,6 +52,7 @@ MODIFIER_COMMANDS: dict[str, tuple[str, ...]] = {
     "queue_report": ("queue_status",),
     "queue_report_only": ("queue_status",),
     "queue_report_csv": ("queue_status",),
+    "fetch_keep_rechecks": ("fetch_release",),
     "stats_top": ("stats",),
     "stats_from": ("stats",),
     "stats_to": ("stats",),
@@ -208,6 +210,19 @@ def parse_cli_args(args: list[str], version: str) -> argparse.Namespace:
         type=int,
         metavar="JOB",
         help="Run the selected pending jobs immediately without changing their retry schedule.",
+    )
+
+    parser.add_argument(
+        "--fetch-release",
+        metavar="URL",
+        help="Queue one release by its GitHub link (github.com/owner/repo/releases/tag/<tag>), adding the repository "
+        "when it is not mapped. The Skiplist and the Active flag are ignored; one final check follows, then the "
+        "release is finalized. A running daemon is asked to poll right away.",
+    )
+    parser.add_argument(
+        "--fetch-keep-rechecks",
+        action="store_true",
+        help="With --fetch-release: keep the usual waiting re-checks instead of one final check.",
     )
 
     control_group = parser.add_argument_group("running-daemon control options")
@@ -549,6 +564,21 @@ def handle_cli_command(parsed_args: argparse.Namespace, run_smoke_tests: Callabl
                 print("Stop requested. The daemon exits after the job in progress finishes.")
         except sqlite3.OperationalError as error:
             print(f"Could not update the control state ({error}); try again.", file=sys.stderr)
+        return True
+
+    if parsed_args.fetch_release:
+        try:
+            outcome = fetch_release(parsed_args.fetch_release, finish_early=not parsed_args.fetch_keep_rechecks)
+        except (ReleaseUrlError, ReleaseFetchError) as error:
+            print(f"Fetch error: {error}", file=sys.stderr)
+            return True
+        print(outcome_text(outcome))
+        if outcome.job_id is not None and not is_dry_run():
+            if is_daemon_running():
+                request_poll_now()
+                print("The running daemon was asked to poll right away.")
+            else:
+                print("No daemon is running: the job is processed when it next polls (or use --drain-queue).")
         return True
 
     if parsed_args.run_pending:

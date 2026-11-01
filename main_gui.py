@@ -43,6 +43,7 @@ from modules import (
     gui_viewer,
     log_tail,
     mapping_manager,
+    release_fetch,
     repo_overview,
     shortcuts,
     stats,
@@ -311,6 +312,7 @@ class ControlBar(ttk.Frame):
         self.pause_button = ttk.Button(daemon_box, text="Pause")
         self.poll_button = ttk.Button(polling_box, text="Poll now")
         self.single_button = ttk.Button(polling_box, text="Poll one")
+        self.fetch_button = ttk.Button(polling_box, text="Fetch\u2026")
         self.check_button = ttk.Button(polling_box, text="Check folders")
         self.detailed_log = tk.BooleanVar(value=False)
         self.log_check = ttk.Checkbutton(tools_box, text="Terminal log", variable=self.detailed_log)
@@ -335,7 +337,7 @@ class ControlBar(ttk.Frame):
 
         for box, widgets in (
             (daemon_box, (self.start_button, self.stop_button, self.pause_button, self.restart_button)),
-            (polling_box, (self.poll_button, self.single_button, self.check_button)),
+            (polling_box, (self.poll_button, self.single_button, self.fetch_button, self.check_button)),
             (folders_box, (self.move_button, *self.folder_buttons.values())),
             (tools_box, (self.log_check, self.doctor_button, self.stats_button, self.settings_button)),
         ):
@@ -345,6 +347,7 @@ class ControlBar(ttk.Frame):
         self.log_check.grid_configure(padx=(0, 12))
         attach_tooltip(self.poll_button, gui_tooltips.CONTROL_HELP["poll_now"])
         attach_tooltip(self.single_button, gui_tooltips.CONTROL_HELP["poll_one"])
+        attach_tooltip(self.fetch_button, gui_tooltips.CONTROL_HELP["fetch_release"])
         attach_tooltip(self.check_button, gui_tooltips.CONTROL_HELP["check_folders"])
         attach_tooltip(self.stats_button, gui_tooltips.CONTROL_HELP["stats"])
         for key, button in self.folder_buttons.items():
@@ -514,6 +517,93 @@ class FinishJobDialog(tk.Toplevel):
         job_id = self._choices[self.selected.get()].job_id
         self.destroy()
         self._on_chosen(job_id)
+
+
+class FetchReleaseDialog(tk.Toplevel):
+    """Ask for the link of one GitHub release and queue it (see release_fetch); stays open on an error."""
+
+    def __init__(self, master: tk.Misc, on_done: Callable[[release_fetch.FetchOutcome], None]) -> None:
+        """Build the dialog: a link field, the skip-re-checks box and Fetch/Cancel."""
+        super().__init__(master)
+        self.title("Fetch a release")
+        self.resizable(False, False)
+        self.transient(master)  # type: ignore[arg-type]
+        self._on_done = on_done
+        self._result: list[Any] = []  # filled by the worker thread: an outcome or an exception
+        self._working = False
+
+        body = ttk.Frame(self, padding=14)
+        body.pack(fill="both", expand=True)
+        body.columnconfigure(0, weight=1)
+        ttk.Label(
+            body,
+            text="Paste the link of ONE release, for example\nhttps://github.com/owner/repo/releases/tag/v1.0\n\n"
+            "A repository that is not mapped yet is added without a destination (see the Unmapped tab). "
+            "The Skiplist and the Active switch are ignored: you asked for this release.",
+            wraplength=520, justify="left",
+        ).grid(row=0, column=0, sticky="w", pady=(0, 8))
+        self.url_var = tk.StringVar()
+        self.url_entry = ttk.Entry(body, textvariable=self.url_var, width=70)
+        self.url_entry.grid(row=1, column=0, sticky="ew")
+        self.finish_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(
+            body, text="The release is complete: skip the waiting re-checks (one final check, then finalize)",
+            variable=self.finish_var,
+        ).grid(row=2, column=0, sticky="w", pady=(8, 0))
+        self.message = ttk.Label(body, text="", foreground=COLOR_ERROR, wraplength=520, justify="left")
+        self.message.grid(row=3, column=0, sticky="w", pady=(8, 0))
+        buttons = ttk.Frame(body)
+        buttons.grid(row=4, column=0, sticky="e", pady=(10, 0))
+        self.cancel_button = ttk.Button(buttons, text="Cancel", command=self.destroy)
+        self.cancel_button.grid(row=0, column=0, padx=(0, 6))
+        self.fetch_button = ttk.Button(buttons, text="Fetch", command=self._fetch)
+        self.fetch_button.grid(row=0, column=1)
+
+        self.bind("<Return>", lambda _event: self._fetch())
+        self.bind("<Escape>", lambda _event: self.destroy())
+        center_dialog(self, master, focus=self.url_entry)
+        self.grab_set()
+
+    def _fetch(self) -> None:
+        """Validate the link at once, then look the release up and queue it in a thread (it uses the network)."""
+        if self._working:
+            return
+        url = self.url_var.get()
+        try:
+            release_fetch.parse_release_url(url)
+        except release_fetch.ReleaseUrlError as exc:
+            self.message.configure(text=str(exc), foreground=COLOR_ERROR)
+            return
+        self._working = True
+        self.fetch_button.state(["disabled"])
+        self.message.configure(text="Asking GitHub\u2026", foreground=COLOR_MUTED)
+        finish_early = bool(self.finish_var.get())
+
+        def run() -> None:
+            """Thread body: fetch and keep the outcome or the error for the dialog to pick up."""
+            try:
+                self._result.append(release_fetch.fetch_release(url, finish_early=finish_early))
+            except Exception as exc:  # shown in the dialog instead of vanishing
+                self._result.append(exc)
+
+        threading.Thread(target=run, daemon=True).start()
+        self.after(150, self._poll_result)
+
+    def _poll_result(self) -> None:
+        """Wait for the thread; on success close and report, on an error show it and let the user try again."""
+        if not self.winfo_exists():
+            return
+        if not self._result:
+            self.after(150, self._poll_result)
+            return
+        outcome = self._result.pop()
+        self._working = False
+        if isinstance(outcome, release_fetch.FetchOutcome):
+            self.destroy()
+            self._on_done(outcome)
+            return
+        self.fetch_button.state(["!disabled"])
+        self.message.configure(text=describe_error(outcome), foreground=COLOR_ERROR)
 
 
 class MappingsTab(ttk.Frame):
@@ -3674,6 +3764,7 @@ class MainWindow(tk.Tk):
         self.control_bar.pause_button.configure(command=self._on_pause)
         self.control_bar.poll_button.configure(command=self._on_poll_now)
         self.control_bar.single_button.configure(command=self._on_single_poll)
+        self.control_bar.fetch_button.configure(command=self._on_fetch)
         self.control_bar.check_button.configure(command=self._on_check_folders)
         self.control_bar.log_check.configure(command=self._on_log_toggle)
         self.control_bar.restart_button.configure(command=self._on_restart)
@@ -4279,6 +4370,22 @@ class MainWindow(tk.Tk):
             gui_daemon.do_single_poll(),
             "Single poll requested: one notification and one queue item, within a second.",
         )
+
+    def _on_fetch(self) -> None:
+        """Fetch button: open the dialog that queues one release by its GitHub link."""
+        FetchReleaseDialog(self, self._fetched)
+
+    def _fetched(self, outcome: release_fetch.FetchOutcome) -> None:
+        """A release was queued from its link: say so, ask a running daemon to poll right away, refresh the table."""
+        running = daemon_lock.is_daemon_running()
+        poll_error = gui_daemon.do_poll_now() if running and outcome.job_id is not None else None
+        text = release_fetch.outcome_text(outcome)
+        if poll_error:
+            text += f" Poll now failed: {poll_error}"
+        elif outcome.job_id is not None and not running:
+            text += " No daemon is running: it is processed when the daemon next polls."
+        self.set_status(text)
+        self.mappings_tab.refresh()
 
     def _on_check_folders(self) -> None:
         """Check folders button: ask the daemon to check destinations and folder limits."""

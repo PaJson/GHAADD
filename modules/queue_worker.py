@@ -506,6 +506,110 @@ def _empty_ingest_cycle_stats() -> IngestCycleStats:
     }
 
 
+def queue_release_job(
+    connection: sqlite3.Connection,
+    repo: str,
+    tag: str,
+    release_type: Optional[str],
+    expected_commit: Optional[str],
+    commit_reason: Optional[str],
+    now_timestamp: float,
+) -> Optional[int]:
+    """Replace any pending job of the same release and queue a new PENDING one; return its id (None in a dry run).
+
+    Shared by the notification ingest and the "fetch a release by URL" feature, so both queue exactly alike.
+    """
+    pending_rows = get_pending_jobs_for_release(
+        connection,
+        repo,
+        tag,
+        release_type=release_type,
+    )
+    finalized_superseded_count = 0
+    quarantined_superseded_count = 0
+    superseded_count = 0
+    for pending_row in pending_rows:
+        superseded_count += 1
+        artifact_outcome = _handle_superseded_pending_job_artifacts(
+            pending_row,
+            repo,
+            tag,
+            reason_code="NEW_NOTIFICATION",
+            connection=connection,
+        )
+        if artifact_outcome == "finalized":
+            finalized_superseded_count += 1
+        elif artifact_outcome == "quarantined":
+            quarantined_superseded_count += 1
+
+        superseded_last_result = (
+            "SUPERSEDED_REPLACED_BY_NEW_NOTIFICATION_FINALIZED"
+            if artifact_outcome == "finalized"
+            else (
+                "SUPERSEDED_REPLACED_BY_NEW_NOTIFICATION_INCOMPLETE_MOVED"
+                if artifact_outcome == "quarantined"
+                else "SUPERSEDED_REPLACED_BY_NEW_NOTIFICATION"
+            )
+        )
+        if is_dry_run():
+            print(
+                f"   🧪 [DRY-RUN] Would mark pending job #{int(pending_row['id'])} "
+                f"as SUPERSEDED ({superseded_last_result})."
+            )
+        else:
+            mark_job_superseded(
+                connection,
+                int(pending_row["id"]),
+                attempt_count=int(pending_row["attempt_count"] or 0),
+                expected_commit=expected_commit or pending_row["expected_commit"],
+                downloaded_count=int(pending_row["downloaded_count"] or 0),
+                skipped_count=int(pending_row["skipped_count"] or 0),
+                total_items=int(pending_row["total_items"] or 0),
+                last_result=superseded_last_result,
+            )
+
+    if superseded_count > 0:
+        print(
+            "🔁 Replaced older pending job(s) for this release identity "
+            f"before queueing new notification (superseded={superseded_count})."
+        )
+        if finalized_superseded_count > 0:
+            print(
+                "   [SUPERSEDE_FINALIZE] NEW_NOTIFICATION: "
+                f"finalized {finalized_superseded_count} superseded pending job folder(s)."
+            )
+        if quarantined_superseded_count > 0:
+            print(
+                "   [SUPERSEDE_FINALIZE] NEW_NOTIFICATION: "
+                f"moved {quarantined_superseded_count} incomplete superseded job folder(s) "
+                f"to {_PARTIAL_LABEL}."
+            )
+
+    queued_job_id: Optional[int] = None
+    if is_dry_run():
+        print(
+            f"   🧪 [DRY-RUN] Would queue as PENDING for {repo} {tag} "
+            f"(expected_commit={expected_commit or 'unknown'})."
+        )
+    else:
+        queued_job_id = enqueue_job(
+            connection,
+            repo,
+            tag,
+            release_type=release_type,
+            next_check_time=now_timestamp,
+            expected_commit=expected_commit,
+        )
+        if expected_commit:
+            print(f"✓ Queued as PENDING for {repo} {tag} (expected_commit={expected_commit})")
+        else:
+            print(
+                f"✓ Queued as PENDING for {repo} {tag} "
+                f"(expected_commit=unknown, reason={commit_reason or 'unavailable'})"
+            )
+    return queued_job_id
+
+
 def ingest_notifications_once(
     connection: sqlite3.Connection,
     github_token: Optional[str],
@@ -664,94 +768,9 @@ def ingest_notifications_once(
                     include_reason=True,
                 )
 
-                pending_rows = get_pending_jobs_for_release(
-                    connection,
-                    repo,
-                    tag,
-                    release_type=release_type,
+                queued_job_id = queue_release_job(
+                    connection, repo, tag, release_type, expected_commit, commit_reason, now_timestamp
                 )
-                finalized_superseded_count = 0
-                quarantined_superseded_count = 0
-                superseded_count = 0
-                for pending_row in pending_rows:
-                    superseded_count += 1
-                    artifact_outcome = _handle_superseded_pending_job_artifacts(
-                        pending_row,
-                        repo,
-                        tag,
-                        reason_code="NEW_NOTIFICATION",
-                        connection=connection,
-                    )
-                    if artifact_outcome == "finalized":
-                        finalized_superseded_count += 1
-                    elif artifact_outcome == "quarantined":
-                        quarantined_superseded_count += 1
-
-                    superseded_last_result = (
-                        "SUPERSEDED_REPLACED_BY_NEW_NOTIFICATION_FINALIZED"
-                        if artifact_outcome == "finalized"
-                        else (
-                            "SUPERSEDED_REPLACED_BY_NEW_NOTIFICATION_INCOMPLETE_MOVED"
-                            if artifact_outcome == "quarantined"
-                            else "SUPERSEDED_REPLACED_BY_NEW_NOTIFICATION"
-                        )
-                    )
-                    if is_dry_run():
-                        print(
-                            f"   🧪 [DRY-RUN] Would mark pending job #{int(pending_row['id'])} "
-                            f"as SUPERSEDED ({superseded_last_result})."
-                        )
-                    else:
-                        mark_job_superseded(
-                            connection,
-                            int(pending_row["id"]),
-                            attempt_count=int(pending_row["attempt_count"] or 0),
-                            expected_commit=expected_commit or pending_row["expected_commit"],
-                            downloaded_count=int(pending_row["downloaded_count"] or 0),
-                            skipped_count=int(pending_row["skipped_count"] or 0),
-                            total_items=int(pending_row["total_items"] or 0),
-                            last_result=superseded_last_result,
-                        )
-
-                if superseded_count > 0:
-                    print(
-                        "🔁 Replaced older pending job(s) for this release identity "
-                        f"before queueing new notification (superseded={superseded_count})."
-                    )
-                    if finalized_superseded_count > 0:
-                        print(
-                            "   [SUPERSEDE_FINALIZE] NEW_NOTIFICATION: "
-                            f"finalized {finalized_superseded_count} superseded pending job folder(s)."
-                        )
-                    if quarantined_superseded_count > 0:
-                        print(
-                            "   [SUPERSEDE_FINALIZE] NEW_NOTIFICATION: "
-                            f"moved {quarantined_superseded_count} incomplete superseded job folder(s) "
-                            f"to {_PARTIAL_LABEL}."
-                        )
-
-                queued_job_id: Optional[int] = None
-                if is_dry_run():
-                    print(
-                        f"   🧪 [DRY-RUN] Would queue as PENDING for {repo} {tag} "
-                        f"(expected_commit={expected_commit or 'unknown'})."
-                    )
-                else:
-                    queued_job_id = enqueue_job(
-                        connection,
-                        repo,
-                        tag,
-                        release_type=release_type,
-                        next_check_time=now_timestamp,
-                        expected_commit=expected_commit,
-                    )
-                    if expected_commit:
-                        print(f"✓ Queued as PENDING for {repo} {tag} (expected_commit={expected_commit})")
-                    else:
-                        print(
-                            f"✓ Queued as PENDING for {repo} {tag} "
-                            f"(expected_commit=unknown, reason={commit_reason or 'unavailable'})"
-                        )
                 emails_to_delete.extend(email_ids)
                 queued_count += 1
                 queued_item_info = {
