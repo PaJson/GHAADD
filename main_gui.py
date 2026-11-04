@@ -783,11 +783,12 @@ class MappingsTab(ttk.Frame):
         self.finish_button = ttk.Button(actions, text="Finish now", command=self._finish_now)
         self.active_check.grid(row=0, column=0, sticky="w")  # the two check boxes stack; the buttons sit beside them
         self.shared_check.grid(row=1, column=0, sticky="w")
-        self.finish_button.grid(row=0, column=2, rowspan=2, padx=(0, 6))
-        self.open_button.grid(row=0, column=3, rowspan=2, padx=(0, 6))
-        self.revert_button.grid(row=0, column=4, rowspan=2, padx=(0, 6))
-        self.save_button.grid(row=0, column=5, rowspan=2)
-        self.form_widgets.extend([self.active_check, self.shared_check, self.finish_button, self.open_button])
+        self.open_button.grid(row=0, column=2, rowspan=2, padx=(0, 6))
+        self.revert_button.grid(row=0, column=3, rowspan=2, padx=(0, 6))
+        self.save_button.grid(row=0, column=4, rowspan=2, padx=(0, 18))
+        self.finish_button.grid(row=0, column=5, rowspan=2)
+        # Finish now is not in form_widgets: _update_buttons enables it only while the repository has a waiting job.
+        self.form_widgets.extend([self.active_check, self.shared_check, self.open_button])
         attach_tooltip(self.active_check, gui_tooltips.FIELD_HELP["active"])
         attach_tooltip(self.shared_check, gui_tooltips.FIELD_HELP["shared_destination"])
         attach_tooltip(self.finish_button, gui_tooltips.FIELD_HELP["finish_now"])
@@ -915,6 +916,7 @@ class MappingsTab(ttk.Frame):
             self._set_status(self._table.db_error)
         self._render_rows()
         self._sync_form_after_refresh()
+        self._update_buttons()  # Finish now follows the waiting jobs of the selected repository
 
     def _set_xscroll(self, first: float | str, last: float | str) -> None:
         """Show the horizontal scrollbar only while the columns are wider than the table."""
@@ -1146,6 +1148,8 @@ class MappingsTab(ttk.Frame):
         self.remove_button.state(["!disabled"] if has_repo else ["disabled"])
         for widget in self.form_widgets:
             widget.state(["!disabled"] if has_repo else ["disabled"])
+        waiting = has_repo and any(row.repo == self._current_repo and row.pending_count > 0 for row in self._table.rows)
+        self.finish_button.state(["!disabled"] if waiting else ["disabled"])
 
     def _show_message(self, text: str, kind: str = "error") -> None:
         """Show a validation message (or hide the message row when the text is empty)."""
@@ -3978,8 +3982,8 @@ class MainWindow(tk.Tk):
         except Exception as exc:  # a busy or unreadable state.db is shown, not raised into Tk
             self.set_status(f"Could not read the queue: {describe_error(exc)}")
             return
-        if not choices:
-            self.set_status(f"{repo} has no waiting job: there are no re-checks to skip.")
+        if not choices:  # the button is only enabled with a waiting job; this is a stale click
+            self.mappings_tab.refresh()
             return
         FinishJobDialog(self, repo, choices, lambda job_id: self._finish_job(repo, job_id))
 
