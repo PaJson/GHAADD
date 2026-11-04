@@ -163,6 +163,39 @@ class RepositoryWriterTests(MappingWriteTestCase):
         self.assertFalse(mapping_manager.mark_repository_finalized("unknown/repo", "2026-01-03_00-00"))
         self.assertEqual(self.read_mapping()[0]["last_finalized"], "2026-01-03_00-00")
 
+    def test_mark_finalized_stores_the_file_count_with_the_stamp(self) -> None:
+        mapping_manager.upsert_repository_mapping("owner/repo", "2026-01-01_00-00")
+        self.assertEqual(self.read_mapping()[0]["last_finalized_file_count"], 0)  # a new entry starts at "not known"
+
+        self.assertTrue(mapping_manager.mark_repository_finalized("owner/repo", "2026-01-03_00-00", file_count=12))
+        self.assertFalse(mapping_manager.mark_repository_finalized("owner/repo", "2026-01-03_00-00", file_count=12))
+        self.assertTrue(mapping_manager.mark_repository_finalized("owner/repo", "2026-01-03_00-00", file_count=13))
+        self.assertEqual(self.read_mapping()[0]["last_finalized_file_count"], 13)
+
+    def test_an_unknown_file_count_never_overwrites_a_known_one(self) -> None:
+        mapping_manager.upsert_repository_mapping("owner/repo", "2026-01-01_00-00")
+        mapping_manager.mark_repository_finalized("owner/repo", "2026-01-03_00-00", file_count=12)
+        for unknown in (None, 0, -4):
+            mapping_manager.mark_repository_finalized("owner/repo", "2026-01-04_00-00", file_count=unknown)
+        entry = self.read_mapping()[0]
+        self.assertEqual((entry["last_finalized"], entry["last_finalized_file_count"]), ("2026-01-04_00-00", 12))
+
+    def test_an_older_entry_gets_the_field_on_its_next_notification(self) -> None:
+        mapping_manager.upsert_repository_mapping("owner/repo", "2026-01-01_00-00")
+        mapping_manager.update_mapping(lambda payload: payload["repositories"][0].pop("last_finalized_file_count"))
+        mapping_manager.upsert_repository_mapping("owner/repo", "2026-01-02_00-00")
+        self.assertEqual(self.read_mapping()[0]["last_finalized_file_count"], 0)
+
+    def test_the_count_must_be_a_whole_number_and_the_gui_cannot_set_it(self) -> None:
+        for bad in ("12", -1, True, 1.5):
+            payload = {"repositories": [{"repository": "o/r", "last_finalized_file_count": bad}]}
+            errors = mapping_manager.validate_mapping_payload(payload)["errors"]
+            self.assertTrue(any("last_finalized_file_count" in error for error in errors), bad)
+        ok = {"repositories": [{"repository": "o/r", "last_finalized_file_count": 5}]}
+        self.assertEqual(mapping_manager.validate_mapping_payload(ok)["errors"], [])
+        with self.assertRaises(ValueError):
+            mapping_manager.update_repository_fields("o/r", {"last_finalized_file_count": 3})
+
 
 class UpdateRepositoryFieldsTests(MappingWriteTestCase):
     def test_stale_gui_edit_preserves_daemon_updates(self) -> None:

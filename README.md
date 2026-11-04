@@ -135,6 +135,7 @@ Each repository entry supports these fields (in this order):
 - shared_destination: `true` when this repository shares its destination folder (destination + folder + subfolder) with other repositories on purpose, for example one repository per platform. `--mapping-validate` and the Doctor then do not warn about the shared folder; the notice is hidden once every repository of the group is marked. Default `false`. In the GUI: the "Shared folder" checkbox
 - last_notification: timestamp when the last GitHub release notification was seen
 - last_finalized: timestamp when a release was last moved to its complete destination (empty when none has been finalized)
+- last_finalized_file_count: number of files of that release, written by the daemon together with last_finalized (`0` = not known yet; an unknown count never overwrites a known one). It is the figure shown as "Last finalized file count" in the GUI editor. Read it from the command line with `--repo-overview`
 - active: `true` (the default) downloads new releases; when `false`, matching notification emails move to Trash but remain unread, no new jobs are queued, and jobs already queued continue normally
 
 Files written by version 1.x used other names (`name`, `foldername`, `recheck_intervals_minutes`, `limit_release_type_folders`, `last_notification_seen`, and `paused`, where `paused: true` is now `active: false`). They are upgraded automatically: the first GUI start, daemon start or write rewrites mapping.json with the new names and keeps a copy of the old file as `mapping.json.v1.bak`. Until an older daemon (started before the upgrade) has been restarted, the upgrade waits and writes are refused with a message saying so. `state.db` is not affected: it refers to repositories by their owner/repo text only.
@@ -148,7 +149,7 @@ When a new repository is seen, the app fills in a default skeleton entry with:
 - an empty `skiplist` (`[]`, nothing is skipped)
 - `active: true`
 - a last_notification timestamp
-- an empty last_finalized value
+- an empty last_finalized value and a last_finalized_file_count of `0`
 
 If you want to customize the display name or routing, you can edit these fields manually in mapping.json.
 
@@ -168,6 +169,7 @@ Example:
 	"shared_destination": false,
 	"last_notification": "2026-08-08_14-59",
 	"last_finalized": "2026-08-16_15-20",
+	"last_finalized_file_count": 17,
 	"active": true
 }
 ```
@@ -235,6 +237,7 @@ CLI options:
 - --purge-state: Delete local state.db and exit. Add --dry-run to preview whether it would delete anything without doing so.
 - --smoke-test: Run internal smoke tests and exit.
 - --doctor: Run environment and cross-platform diagnostics.
+- --repo-overview: Print one line per mapped repository, as the GUI's Mappings table shows it: status, tag, last check, step, next check, files, limit, when a release was last finalized and how many files it had. Read-only and safe while the daemon runs; add --json for machine-readable output (with `last_finalized_file_count` as a number, or null when not known) and --overview-filter TEXT to keep only the repositories whose owner/repo contains TEXT.
 - --perf-report: Print a read-only performance baseline: data sizes and growth (state.db, tables, logs) and how long the routine queries and probes take on your data (config/mapping loads, the queue summary, the GUI's status and table queries, the terminal-log read). Safe to run while the daemon works; add --json for machine-readable output. Run it now and again after weeks of use to see what grows.
 	- Add --json to output the diagnostics report as JSON.
 - --stats: Print statistics (read-only, safe while the daemon runs; add --json for machine-readable output): how many repositories are mapped, active and inactive; how many jobs, polls, files and how much data per period (last 24 hours, 7, 30 and 365 days, lifetime, with jobs per day); jobs per day for the last 30 days; the 10 busiest repositories (most jobs), the 10 biggest repositories and the 10 biggest single releases (--stats-top N or --stats-top all lists more); with --stats-from and/or --stats-to (YYYY-MM-DD, both days included) the busiest and biggest lists and the per-day series cover only that window and the activity table gets a row for it; the reliability (completed / failed / replaced) and how old the history in state.db is. Sizes are those of the files kept per release (what GHAADD recorded when it fetched them), so a release counts once however often it was re-checked, and files you deleted later are still counted. The GUI shows the same in Tools -> Stats.

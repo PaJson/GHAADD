@@ -37,6 +37,7 @@ _MAPPING_FIELD_ORDER = (
     "shared_destination",
     "last_notification",
     "last_finalized",
+    "last_finalized_file_count",
     "active",
 )
 
@@ -59,7 +60,7 @@ _REPLACE_RETRY_DELAY_SECONDS = 0.05
 
 # Fields the daemon maintains. Other writers (GUI/CLI) must not set them, and
 # "repository" is the entry's identity.
-_DAEMON_OWNED_FIELDS = frozenset({"last_notification", "last_finalized"})
+_DAEMON_OWNED_FIELDS = frozenset({"last_notification", "last_finalized", "last_finalized_file_count"})
 _IDENTITY_FIELDS = frozenset({"repository"})
 
 _REPOSITORY_NAME_PATTERN = re.compile(r"^[^/\s]+/[^/\s]+$")
@@ -661,6 +662,7 @@ def _build_skeleton_entry(repo: str, notification_seen_stamp: str) -> dict[str, 
         "sanity_check": DEFAULT_SANITY_CHECK,
         "last_notification": notification_seen_stamp,
         "last_finalized": "",
+        "last_finalized_file_count": 0,
         "active": True,
     }
 
@@ -688,6 +690,10 @@ def upsert_repository_mapping(
 
             if "last_finalized" not in entry:
                 entry["last_finalized"] = ""
+                updated = True
+
+            if "last_finalized_file_count" not in entry:
+                entry["last_finalized_file_count"] = 0
                 updated = True
 
             if "recheck_intervals" not in entry:
@@ -729,23 +735,33 @@ def upsert_repository_mapping(
 def mark_repository_finalized(
     repo: str,
     finalized_stamp: Optional[str] = None,
+    file_count: Optional[int] = None,
 ) -> bool:
-    """Record when a repository release was moved to its complete destination."""
+    """Record when a repository release was moved to its complete destination, and how many files it had.
+
+    The count (`last_finalized_file_count`) is stored together with the stamp; a missing or non-positive count
+    leaves the earlier one alone, so an unknown total never wipes a known figure.
+    """
     normalized_repo = str(repo or "").strip()
     if not normalized_repo:
         return False
 
     finalized_value = finalized_stamp or _current_mapping_stamp()
+    count_value = int(file_count) if file_count is not None and int(file_count) > 0 else None
 
     def _apply(mapping_payload: dict[str, list[dict[str, Any]]]) -> bool:
-        """Mutator: store `last_finalized` for the repository; True when the value changed."""
+        """Mutator: store `last_finalized` (and the file count) for the repository; True when a value changed."""
         for entry in mapping_payload["repositories"]:
             if not _is_same_repository_identity(entry, normalized_repo):
                 continue
-            if entry.get("last_finalized") == finalized_value:
-                return False
-            entry["last_finalized"] = finalized_value
-            return True
+            changed = False
+            if entry.get("last_finalized") != finalized_value:
+                entry["last_finalized"] = finalized_value
+                changed = True
+            if count_value is not None and entry.get("last_finalized_file_count") != count_value:
+                entry["last_finalized_file_count"] = count_value
+                changed = True
+            return changed
 
         return False
 
@@ -1077,6 +1093,15 @@ def validate_mapping_payload(raw_payload: Any) -> MappingValidationResult:
                 errors.append(
                     f"{display_location}.{field_name} must be a string when provided.{display_suffix}"
                 )
+
+        count_value = entry.get("last_finalized_file_count")
+        if count_value is not None and (
+            not isinstance(count_value, int) or isinstance(count_value, bool) or count_value < 0
+        ):
+            errors.append(
+                f"{display_location}.last_finalized_file_count must be an integer greater than or equal to 0 "
+                f"when provided.{display_suffix}"
+            )
 
         active_value = entry.get("active")
         if active_value is not None and not isinstance(active_value, bool):

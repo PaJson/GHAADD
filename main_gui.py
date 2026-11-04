@@ -643,7 +643,7 @@ class MappingsTab(ttk.Frame):
             (
                 ("last_seen", "Last notification", "readonly", 3),
                 ("last_finalized", "Last finalized", "readonly", 3),
-                ("last_filecount", "Last file count", "readonly", 2),
+                ("last_filecount", "Last finalized file count", "readonly", 2),
             ),
             (),
         ),
@@ -1105,7 +1105,7 @@ class MappingsTab(ttk.Frame):
             "sanity_check": gui_forms.sanity_label(entry.get("sanity_check")),
             "last_seen": str(entry.get("last_notification") or ""),
             "last_finalized": str(entry.get("last_finalized") or ""),
-            "last_filecount": next((row.files_total for row in self._table.rows if row.repo == repo), ""),
+            "last_filecount": repo_overview.format_file_count(entry.get("last_finalized_file_count")),
             "shared_destination": entry.get("shared_destination") is True,
             "active": entry.get("active") is not False,
         }

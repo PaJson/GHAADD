@@ -36,7 +36,7 @@ class MappingExampleTests(unittest.TestCase):
         plain = load("mapping.example.json")["repositories"][0]
         with mock.patch.object(config_manager, "load_config", lambda: {}):  # not the real config.json: the built-in defaults
             new = mapping_manager._build_skeleton_entry("example-org/plain-example", plain["last_notification"])
-        for key in ("subfolder", "skiplist", "recheck_intervals", "limit", "limit_folders", "sanity_check", "last_finalized", "active"):
+        for key in ("subfolder", "skiplist", "recheck_intervals", "limit", "limit_folders", "sanity_check", "last_finalized", "last_finalized_file_count", "active"):
             self.assertEqual(plain[key], new[key], key)
         self.assertEqual(plain["folder"], new["folder"])
 

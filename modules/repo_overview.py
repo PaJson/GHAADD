@@ -42,7 +42,6 @@ class RepoRow:
     limit: str
     last_activity: float  # epoch seconds; 0 = never worked on
     limit_warning: bool = False  # over its limit, or a folder-limit warning is on record
-    files_total: str = ""  # the newest release's file count (total_items), shown in the editor
     limit_note: str = ""  # hover text for the Limit cell ("12 of 15 allowed folders, counted ...")
     pending_count: int = 0  # PENDING jobs of this repository (the Step cell reads "2 / 5 (+2)" for 3 of them)
     pending_note: str = ""  # hover text for the Step cell: every pending job, when there is more than one
@@ -149,12 +148,11 @@ def format_files(summary: Optional[Mapping[str, Any]]) -> str:
     return str(accounted) if accounted >= total else f"{accounted} / {total}"
 
 
-def format_total_files(summary: Optional[Mapping[str, Any]]) -> str:
-    """The file count of the newest release (job_queue.total_items), or "-" when it is not known."""
-    if not summary or summary.get("latest_tag") is None:
+def format_file_count(value: Any) -> str:
+    """The stored file count of the last finalized release (mapping.json), or "-" when it is not known."""
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         return NO_VALUE
-    total = int(summary.get("latest_total") or 0)
-    return str(total) if total > 0 else NO_VALUE
+    return str(value)
 
 
 def format_step(attempts: Any, steps: int, pending_count: int) -> str:
@@ -248,13 +246,12 @@ def build_rows(
         if show_skipped and summary:
             tag_text = f"{format_tag(skipped_tag, summary.get('skipped_release_type'))} {SKIPPED_MARK}"
             last_check_text = format_timestamp(summary.get("skipped_at"))
-            files = files_total = NO_VALUE
+            files = NO_VALUE
         elif summary:
             tag_text = format_tag(summary.get("latest_tag"), summary.get("latest_release_type")) or NO_VALUE
             last_check_text = format_timestamp(summary.get("latest_updated_at"))
-            files_total = format_total_files(summary)
         else:
-            tag_text, last_check_text, files_total = NO_VALUE, NO_VALUE, NO_VALUE
+            tag_text, last_check_text = NO_VALUE, NO_VALUE
         last_activity = max(float(summary.get("last_activity") or 0), float(summary.get("skipped_at") or 0)) if summary else 0.0
 
         folder = str(entry.get("folder") or "").strip() or repo
@@ -270,7 +267,6 @@ def build_rows(
                 step=step,
                 next_check=format_timestamp(pending_check),
                 files=files,
-                files_total=files_total,
                 limit=limit_text,
                 last_activity=last_activity,
                 limit_warning=over or repo.lower() in limit_warned,

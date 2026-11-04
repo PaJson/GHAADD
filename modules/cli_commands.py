@@ -42,7 +42,8 @@ from modules.release_fetch import ReleaseFetchError, ReleaseUrlError, fetch_rele
 # Options that only change what another command does, and the commands they work with. Given without one of those
 # commands they would silently do nothing (and the program would carry on polling), so they are rejected instead.
 MODIFIER_COMMANDS: dict[str, tuple[str, ...]] = {
-    "json": ("queue_status", "mapping_validate", "doctor", "perf_report", "stats", "lifecycle_log", "move_complete_to_destination"),
+    "json": ("queue_status", "mapping_validate", "doctor", "perf_report", "stats", "lifecycle_log", "move_complete_to_destination", "repo_overview"),
+    "overview_filter": ("repo_overview",),
     "queue_all": ("queue_status",),
     "queue_limit": ("queue_status",),
     "queue_hours": ("queue_status",),
@@ -171,6 +172,20 @@ def parse_cli_args(args: list[str], version: str) -> argparse.Namespace:
         "--perf-report",
         action="store_true",
         help="Measure data sizes, growth and the timings of the routine queries (read-only, safe while the daemon runs; --json for machine output).",
+    )
+    parser.add_argument(
+        "--repo-overview",
+        action="store_true",
+        help=(
+            "Show one line per mapped repository, as the GUI's Mappings table does: status, tag, step, next check, files, "
+            "limit, when a release was last finalized and how many files it had (read-only, safe while the daemon runs; "
+            "--json for machine output)."
+        ),
+    )
+    parser.add_argument(
+        "--overview-filter",
+        metavar="TEXT",
+        help="With --repo-overview: only the repositories whose owner/repo contains this text (not case-sensitive).",
     )
     parser.add_argument(
         "--stats",
@@ -429,6 +444,20 @@ def handle_cli_command(parsed_args: argparse.Namespace, run_smoke_tests: Callabl
 
         report = perf_report.collect()
         print(json.dumps(report, indent=2) if parsed_args.json else perf_report.format_report(report))
+        return True
+
+    if parsed_args.repo_overview:
+        from modules import repo_report  # imported here: it pulls in the GUI data modules, no other command needs them
+
+        overview = repo_report.collect()
+        if parsed_args.json:
+            needle = (parsed_args.overview_filter or "").lower()
+            overview["repositories"] = [
+                row for row in overview["repositories"] if needle in row["repository"].lower()
+            ]
+            print(json.dumps(overview, indent=2))
+        else:
+            print(repo_report.format_report(overview, parsed_args.overview_filter))
         return True
 
     if parsed_args.backup:
