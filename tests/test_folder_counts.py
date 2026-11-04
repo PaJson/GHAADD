@@ -38,17 +38,13 @@ class FormatLimitTests(unittest.TestCase):
         self.assertEqual((rows["o/b"].limit, rows["o/b"].limit_warning), ("3 / 10", False))
 
 
-class TotalFilesTests(unittest.TestCase):
-    def test_the_total_is_shown_as_a_plain_number(self) -> None:
-        summary = {"latest_tag": "v1", "latest_downloaded": 10, "latest_skipped": 6, "latest_total": 16}
-        self.assertEqual(repo_overview.format_total_files(summary), "16")
-        summary.update(latest_downloaded=0, latest_skipped=16)
-        self.assertEqual(repo_overview.format_total_files(summary), "16")
+class FileCountTests(unittest.TestCase):
+    def test_the_stored_count_is_shown_as_a_plain_number(self) -> None:
+        self.assertEqual(repo_overview.format_file_count(16), "16")
 
     def test_nothing_known_shows_a_dash(self) -> None:
-        self.assertEqual(repo_overview.format_total_files(None), "-")
-        self.assertEqual(repo_overview.format_total_files({"latest_tag": None}), "-")
-        self.assertEqual(repo_overview.format_total_files({"latest_tag": "v1", "latest_total": 0}), "-")
+        for value in (None, 0, -1, "", "16", True, 1.5):
+            self.assertEqual(repo_overview.format_file_count(value), "-", value)
 
 
 class FolderCountTests(unittest.TestCase):

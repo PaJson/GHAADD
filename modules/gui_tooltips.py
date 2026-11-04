@@ -43,7 +43,9 @@ FIELD_HELP = {
                     "the same tag do not affect each other.",
     "last_seen": "When the last GitHub notification for this repository arrived (set by the daemon).",
     "last_finalized": "When a release was last moved to its destination (set by the daemon).",
-    "last_filecount": "Number of files in the newest release (what the Sanity check compares). "
+    "last_filecount": "Number of files in the release that was last moved to its destination, stored in "
+                      "mapping.json as last_finalized_file_count (set by the daemon together with Last finalized). "
+                      "The Files column of the table shows the newest release, finished or not. "
                       "- = not known yet.",
     "shared_destination": "Tick this when this repository shares its destination folder with other repositories on "
                           "purpose (for example one repository per platform that all go to the same folder). "

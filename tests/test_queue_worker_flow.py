@@ -620,6 +620,17 @@ class FinalizeStagedFolderTests(WorkerTestCase):
         self.assertEqual(self.calls["completed_logs"], [(REPO, "v1", "abc", done)])
         self.assertNotEqual((mapping_manager.get_repository_mapping(REPO) or {})["last_finalized"], "")
 
+    def test_the_file_count_of_the_release_is_stored_with_the_finalized_stamp(self) -> None:
+        self.write_mapping({"repository": REPO, "last_finalized": "", "last_finalized_file_count": 0})
+        self.quietly(queue_worker._finalize_staged_release_folder, self.staged_dir(), REPO, "v1", "abc", total_items=17)
+        entry = mapping_manager.get_repository_mapping(REPO) or {}
+        self.assertEqual(entry["last_finalized_file_count"], 17)
+
+    def test_an_unknown_file_count_keeps_the_earlier_one(self) -> None:
+        self.write_mapping({"repository": REPO, "last_finalized": "", "last_finalized_file_count": 9})
+        self.quietly(queue_worker._finalize_staged_release_folder, self.staged_dir(), REPO, "v1", "abc", total_items=0)
+        self.assertEqual((mapping_manager.get_repository_mapping(REPO) or {})["last_finalized_file_count"], 9)
+
     def test_the_size_of_the_finished_folder_is_stored_on_the_job(self) -> None:
         job_id = self.job()
         done_dir = os.path.join(self.root, "done", "rel1")

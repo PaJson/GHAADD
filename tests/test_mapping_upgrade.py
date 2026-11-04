@@ -206,7 +206,8 @@ class WritingTests(UpgradeTestCase):
         self.assertEqual(
             list(entry),
             ["repository", "folder", "subfolder", "destination", "skiplist", "recheck_intervals", "limit",
-             "limit_folders", "sanity_check", "last_notification", "last_finalized", "active"],
+             "limit_folders", "sanity_check", "last_notification", "last_finalized", "last_finalized_file_count",
+             "active"],
         )
         self.assertIs(entry["active"], True)
         self.assertEqual(entry["folder"], "Repo (Owner)")

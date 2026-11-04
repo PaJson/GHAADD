@@ -79,10 +79,12 @@ def _finalize_staged_release_folder(
     write_complete_log: bool = True,
     connection: Optional[sqlite3.Connection] = None,
     job_id: Optional[int] = None,
+    total_items: Optional[int] = None,
 ) -> Optional[str]:
     """Move a terminal job's staging folder from Processing to complete destination.
 
     With a `connection` and `job_id`, the finished folder's size is stored on the job (what the Stats window reports).
+    `total_items` (the release's file count) goes into mapping.json as `last_finalized_file_count`.
     """
     if not working_dir:
         return None
@@ -98,7 +100,7 @@ def _finalize_staged_release_folder(
         print(f"   📁 Finalized artifacts: {done_dir}")
         _record_folder_size(connection, job_id, done_dir)
         if repo:
-            mark_repository_finalized(repo)
+            mark_repository_finalized(repo, file_count=total_items)
         if write_complete_log and repo and tag:
             log_completed_move(repo, tag, commit, done_dir)
 
@@ -317,6 +319,7 @@ def _handle_superseded_pending_job_artifacts(
         write_complete_log=False,
         connection=connection,
         job_id=job_id,
+        total_items=total_items,
     )
     if not done_dir:
         print(
@@ -369,7 +372,8 @@ def _finalize_terminal_skip_job(
     if working_dir and os.path.isdir(working_dir):
         if _has_all_release_items_accounted(downloaded_count, skipped_count, total_items):
             done_dir = _finalize_staged_release_folder(
-                working_dir, repo=repo, tag=tag, commit=commit, connection=connection, job_id=int(row["id"])
+                working_dir, repo=repo, tag=tag, commit=commit, connection=connection, job_id=int(row["id"]),
+                total_items=total_items,
             )
             if done_dir:
                 premature_message = (
@@ -1089,6 +1093,7 @@ def process_selected_pending_jobs(connection: sqlite3.Connection, github_token: 
                 commit=latest_commit,
                 connection=connection,
                 job_id=job_id,
+                total_items=total_items,
             )
 
     return processed_count, skipped_ids, missing_ids
@@ -1446,6 +1451,7 @@ def _process_queue_once(
                     commit=latest_commit,
                     connection=connection,
                     job_id=job_id,
+                    total_items=total_items,
                 )
 
             downloaded_files_total += downloaded_count

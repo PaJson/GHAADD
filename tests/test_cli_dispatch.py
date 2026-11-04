@@ -4,7 +4,7 @@ The commands are called with arguments parsed from a real command line, but ever
 (daemon control, database, autostart, shortcuts, doctor, ...) is replaced by a recorder, so nothing real is touched.
 Run from the project root: python -m unittest discover -s tests -t .
 """
-from typing import Any
+from typing import Any, Optional
 import contextlib
 import io
 import json
@@ -137,6 +137,27 @@ class ReportCommandTests(DispatchTestCase):
             _, as_json, _ = self.run_cli("--perf-report", "--json")
         self.assertEqual(text, "TEXT REPORT\n")
         self.assertEqual(json.loads(as_json), {"a": 1})
+
+    def test_repo_overview_as_text_and_as_json_with_a_filter(self) -> None:
+        report = {"repositories": [{"repository": "a/one"}, {"repository": "b/two"}], "db_error": None}
+        seen: list[Any] = []
+
+        def fake_format(data: dict[str, Any], repo_filter: Optional[str] = None) -> str:
+            seen.append(repo_filter)
+            return "TABLE"
+
+        with mock.patch("modules.repo_report.collect", lambda: dict(report)), \
+                mock.patch("modules.repo_report.format_report", fake_format):
+            _, text, _ = self.run_cli("--repo-overview", "--overview-filter", "two")
+            _, as_json, _ = self.run_cli("--repo-overview", "--json", "--overview-filter", "TWO")
+        self.assertEqual(text, "TABLE\n")
+        self.assertEqual(seen, ["two"])
+        self.assertEqual([row["repository"] for row in json.loads(as_json)["repositories"]], ["b/two"])
+
+    def test_the_overview_filter_needs_the_overview_command(self) -> None:
+        with contextlib.redirect_stderr(io.StringIO()) as err, self.assertRaises(SystemExit):
+            cli_commands.parse_cli_args(["--overview-filter", "x"], "1.0")
+        self.assertIn("--overview-filter has no effect without --repo-overview", err.getvalue())
 
     def test_doctor_text_lists_errors_warnings_and_checks(self) -> None:
         self.patch("run_doctor", lambda: {

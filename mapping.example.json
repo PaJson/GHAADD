@@ -13,6 +13,7 @@
       "shared_destination": false,
       "last_notification": "2026-01-01_12-00",
       "last_finalized": "",
+      "last_finalized_file_count": 0,
       "active": true
     },
     {
@@ -28,6 +29,7 @@
       "shared_destination": true,
       "last_notification": "2026-01-02_08-30",
       "last_finalized": "2026-01-02_09-15",
+      "last_finalized_file_count": 17,
       "active": true
     }
   ]
