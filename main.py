@@ -39,7 +39,7 @@ from modules.asset_downloader import check_folder_limits, clear_all_resolved_lim
 from modules.dry_run_mode import is_dry_run, set_dry_run
 from modules.backup_manager import run_scheduled_backup
 from modules.lifecycle_logger import log_cycle_summary, log_warning
-from modules.log_files import RollingLogFile
+from modules.log_files import RollingLogFile, list_log_files, prune_message
 from modules.mapping_manager import ensure_mapping_file, warn_about_missing_mapped_destinations
 from modules.queue_worker import process_queue_once, run_ingest_and_queue_cycle, run_single_cycle
 
@@ -560,7 +560,8 @@ def main() -> None:
             if terminal_log.active:
                 removed_logs = terminal_log.prune()
                 if removed_logs:
-                    print(f"Removed {removed_logs} old log file(s) (terminal_log.keep_files).")
+                    kept_logs = len(list_log_files(terminal_log.settings["directory"]))
+                    print(prune_message(removed_logs, kept_logs, terminal_log.settings["keep_files"]))
 
             try:
                 run_polling_loop(

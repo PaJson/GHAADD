@@ -69,6 +69,15 @@ def prune_log_files(directory: str, keep_files: int, protect: Optional[str] = No
     return removed
 
 
+def prune_message(removed: int, remaining: int, keep_files: int) -> str:
+    """Return the console line that reports a log cleanup: what went, what is left and the limit."""
+    noun = "file" if removed == 1 else "files"
+    return (
+        f"Log cleanup: removed {removed} old log {noun}, {remaining} kept "
+        f"(limit {keep_files}, \"Keep log files\" in Settings)."
+    )
+
+
 class RollingLogFile:
     """Text file-like object that rolls over to a new log file at a size limit.
 
