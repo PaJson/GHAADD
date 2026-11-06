@@ -9,7 +9,7 @@ from datetime import datetime
 from unittest import mock
 
 from modules import dry_run_mode
-from modules.log_files import RollingLogFile, list_log_files, new_log_path, prune_log_files
+from modules.log_files import RollingLogFile, list_log_files, new_log_path, prune_log_files, prune_message
 
 
 class LogFilesTestCase(unittest.TestCase):
@@ -63,6 +63,13 @@ class NamingTests(LogFilesTestCase):
 
 
 class PruneTests(LogFilesTestCase):
+    def test_message_gives_removed_kept_and_limit(self) -> None:
+        self.assertEqual(
+            prune_message(1, 30, 30),
+            'Log cleanup: removed 1 old log file, 30 kept (limit 30, "Keep log files" in Settings).',
+        )
+        self.assertIn("removed 3 old log files, 5 kept (limit 5", prune_message(3, 5, 5))
+
     def test_keeps_newest_files_and_foreign_files(self) -> None:
         for day in range(1, 6):
             self.touch(f"2026010{day}_000000.log")
