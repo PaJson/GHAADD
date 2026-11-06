@@ -122,7 +122,8 @@ CONTROL_HELP = {
     "fetch_release": "Queue one release by its GitHub link (github.com/owner/repo/releases/tag/<tag>), for example one "
                      "you found while browsing or an old release that was never picked up. A repository that is "
                      "not mapped yet is added without a destination. The Skiplist and the Active switch are "
-                     "ignored. Nothing is polled from the mailbox.",
+                     "ignored. Then the daemon is asked for a full poll (like Poll now), so waiting emails and "
+                     "other due jobs are processed too.",
     "polling_enabled": "Poll the mailbox on a schedule (config.json: polling.enabled).\n"
                        "Off: the daemon (started from the GUI, the \"GHAADD daemon\" shortcut or at login) still runs, "
                        "but stays idle and polls only when you press Poll now.\n"
