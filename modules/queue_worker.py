@@ -27,6 +27,7 @@ from modules.db_manager import (
     update_job_for_manual_check,
 )
 from modules.asset_downloader import (
+    ReleaseLookupError,
     download_release,
     get_release_data,
     measure_folder,
@@ -742,7 +743,11 @@ def ingest_notifications_once(
 
             # The email subject only reflects the release's state when GitHub sent the
             # notification; confirm against the live API before acting on it (skiplist, folder).
-            live_release_data = get_release_data(repo, tag)
+            try:
+                live_release_data = get_release_data(repo, tag)
+            except ReleaseLookupError as error:
+                print(f"   ⚠️ Could not confirm the release type with GitHub ({error}); using the notification's.")
+                live_release_data = None
             if live_release_data is not None:
                 live_release_type = "Pre-release" if live_release_data.get("prerelease") else "Release"
                 if live_release_type != (release_type or "Release"):

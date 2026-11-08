@@ -883,8 +883,41 @@ def build_expected_signature(item: ReleaseAssetQueueItem) -> Optional[str]:
     return "|".join(signature_parts)
 
 
+class ReleaseLookupError(Exception):
+    """GitHub could not be asked (server error, timeout, refusal): not the same as "the release does not exist"."""
+
+
+def _get_with_retries(url: str, headers: Dict[str, str], what: str) -> Any:
+    """GET a GitHub page; retry a dropped connection, a timeout and HTTP 429/5xx, else return the response.
+
+    Raises ReleaseLookupError once the tries (HTTP_RETRY_DELAYS plus the first) are used up. Any other status,
+    404 included, is returned for the caller to judge.
+    """
+    tries = len(HTTP_RETRY_DELAYS) + 1
+    for attempt in range(1, tries + 1):
+        response = None
+        try:
+            response = requests.get(url, headers=headers, timeout=API_TIMEOUT)
+        except (ChunkedEncodingError, ConnectionError, Timeout) as error:
+            problem = f"{type(error).__name__}: {error}"
+        else:
+            if response.status_code not in RETRY_HTTP_STATUS_CODES:
+                return response
+            problem = f"HTTP {response.status_code}"
+        if attempt == tries:
+            raise ReleaseLookupError(f"GitHub did not answer the {what} after {tries} tries ({problem}).")
+        delay = _http_retry_delay(response, attempt)
+        print(f"   ⚠️ {what.capitalize()}: {problem} (attempt {attempt}/{tries}). Retrying in {delay:g}s...")
+        time.sleep(delay)
+    raise AssertionError("unreachable")  # the loop returns or raises on its last try
+
+
 def get_release_data(repo: str, tag: str) -> Any | None:
-    """Return release JSON for a repository tag, or None when unavailable."""
+    """Return release JSON for a repository tag, or None when GitHub says it does not exist (404).
+
+    Raises ReleaseLookupError when GitHub cannot be asked (server error, timeout, rate limit): the release may well
+    exist, so the caller must not treat that as "not found".
+    """
     url = f"https://api.github.com/repos/{repo}/releases/tags/{tag}"
 
     headers = {
@@ -895,7 +928,7 @@ def get_release_data(repo: str, tag: str) -> Any | None:
     if GITHUB_TOKEN:
         headers["Authorization"] = f"Bearer {GITHUB_TOKEN}"
 
-    response = requests.get(url, headers=headers)
+    response = _get_with_retries(url, headers, f"lookup of release {tag}")
 
     if response.status_code == 200:
         return response.json()
@@ -903,8 +936,8 @@ def get_release_data(repo: str, tag: str) -> Any | None:
         print(f"   ⚠️ Release tag {tag} not found yet on GitHub.")
         return None
 
-    print(f"   ❌ API Error ({response.status_code}): {response.text}")
-    return None
+    print(f"   ❌ API Error ({response.status_code}): {response.text[:300]}")
+    raise ReleaseLookupError(f"GitHub answered the lookup of release {tag} with HTTP {response.status_code}.")
 
 
 def get_release_attestation_url(release_data: Dict[str, Any], headers: Dict[str, str]) -> str | None:
@@ -917,7 +950,7 @@ def get_release_attestation_url(release_data: Dict[str, Any], headers: Dict[str,
         return None
 
     expanded_assets_url = release_page_url.replace("/releases/tag/", "/releases/expanded_assets/")
-    response = requests.get(expanded_assets_url, headers=headers, timeout=30)
+    response = _get_with_retries(expanded_assets_url, headers, "lookup of the attestation")
     response.raise_for_status()
 
     match = re.search(r'href="([^"]+/attestations/[^"]+/download)"', response.text)
@@ -931,6 +964,7 @@ def get_release_attestation_url(release_data: Dict[str, Any], headers: Dict[str,
 RETRY_HTTP_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
 HTTP_RETRY_DELAYS = (5, 15, 30)  # seconds before the 2nd, 3rd and 4th try of one file
 MAX_RETRY_AFTER_SECONDS = 60  # a longer Retry-After from the server is cut to this
+API_TIMEOUT = 30  # seconds, for the release and attestation lookups
 STOP_AFTER_FAILED_FILES = 2  # this many files in a row that used up their retries end the attempt
 
 
@@ -940,10 +974,10 @@ def _retryable_http_status(error: HTTPError) -> Optional[int]:
     return status if status in RETRY_HTTP_STATUS_CODES else None
 
 
-def _http_retry_delay(error: HTTPError, attempt: int) -> float:
+def _http_retry_delay(response: Any, attempt: int) -> float:
     """Return the seconds to wait after failed try number `attempt`: the server's Retry-After, else the schedule."""
     delay: float = HTTP_RETRY_DELAYS[min(attempt, len(HTTP_RETRY_DELAYS)) - 1]
-    headers = getattr(error.response, "headers", None) or {}
+    headers = getattr(response, "headers", None) or {}
     retry_after = str(headers.get("Retry-After", "")).strip()
     if retry_after.isdigit():  # the date form of the header is rare on downloads and falls back to the schedule
         delay = max(delay, min(int(retry_after), MAX_RETRY_AFTER_SECONDS))
@@ -1018,7 +1052,12 @@ def download_all_assets(
 
     for attempt in range(max_retries):
         print(f"🔍 Checking GitHub API for {repo} ({tag})...")
-        release_data = get_release_data(repo, tag)
+        try:
+            release_data = get_release_data(repo, tag)
+        except ReleaseLookupError as error:
+            # Not "release no longer exists": the job fails this attempt and is retried (or ends FAILED at the end).
+            print(f"   ❌ {error}")
+            return _build_download_result("FAILED", downloaded_count, skipped_count, 0, include_stats, skipped_items)
 
         if release_data:
             assets = release_data.get("assets", [])
@@ -1076,7 +1115,12 @@ def download_all_assets(
             "expected_updated_at": release_data.get("target_commitish"),
         })
 
-    attestation_url = get_release_attestation_url(release_data, headers_api)
+    try:
+        attestation_url = get_release_attestation_url(release_data, headers_api)
+    except (ReleaseLookupError, requests.RequestException) as error:
+        # The attestation is optional: go on without it rather than failing the whole release.
+        print(f"   ⚠️ Attestation lookup failed, continuing without it: {error}")
+        attestation_url = None
     if attestation_url:
         download_queue.append({
             "key": f"attestation:{attestation_url}",
@@ -1416,7 +1460,7 @@ def download_all_assets(
                             print(f"   ❌ Request error while downloading {file_name or 'attestation'}: {error}")
                             break
                         if download_attempt <= len(HTTP_RETRY_DELAYS):
-                            sleep_seconds = _http_retry_delay(error, download_attempt)
+                            sleep_seconds = _http_retry_delay(error.response, download_attempt)
                             print(
                                 f"   ⚠️ Server error {status} while downloading {file_name or 'attestation'} "
                                 f"(attempt {download_attempt}/{len(HTTP_RETRY_DELAYS) + 1}). "

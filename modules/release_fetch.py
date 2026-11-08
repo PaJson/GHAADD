@@ -134,7 +134,10 @@ def fetch_release(
     reason = busy_reason()
     if reason:
         raise ReleaseFetchError(reason)
-    data = asset_downloader.get_release_data(ref.repo, ref.tag)
+    try:
+        data = asset_downloader.get_release_data(ref.repo, ref.tag)
+    except asset_downloader.ReleaseLookupError as exc:
+        raise ReleaseFetchError(f"GitHub could not be asked about {ref.tag} of {ref.repo}: {exc}") from exc
     if not isinstance(data, dict):
         raise ReleaseFetchError(
             f"Release {ref.tag} of {ref.repo} was not found on GitHub. A draft, a private repository or a tag "

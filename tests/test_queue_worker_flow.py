@@ -21,7 +21,7 @@ from unittest import mock
 os.environ.setdefault("GMAIL_USER", "test@example.invalid")
 os.environ.setdefault("GMAIL_APP_PASSWORD", "unused")
 
-from modules import db_manager, mapping_manager, queue_worker  # noqa: E402
+from modules import asset_downloader, db_manager, mapping_manager, queue_worker  # noqa: E402
 
 REPO = "o/app"
 
@@ -39,6 +39,12 @@ def download_result(status: str = "SUCCESS", downloaded: int = 3, skipped: int =
 
 
 class WorkerTestCase(unittest.TestCase):
+    def fake_release_data(self, repo: Any, tag: Any) -> Any:
+        """Stand in for get_release_data: an exception in `release_data` is raised, anything else returned."""
+        if isinstance(self.release_data, Exception):
+            raise self.release_data
+        return self.release_data
+
     def setUp(self) -> None:
         self._temp_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.addCleanup(self._temp_dir.cleanup)
@@ -87,7 +93,7 @@ class WorkerTestCase(unittest.TestCase):
             (queue_worker, "publishing_current_job", lambda repo, tag: contextlib.nullcontext()),
             (queue_worker, "get_current_commit_hash", commit_hash),
             (queue_worker, "download_release", download),
-            (queue_worker, "get_release_data", lambda repo, tag: self.release_data),
+            (queue_worker, "get_release_data", self.fake_release_data),
             (queue_worker, "get_pending_notifications", fetch),
             (queue_worker, "mark_as_read_and_delete", lambda ids: self.calls["deleted"].append(list(ids)) or True),
             (queue_worker, "move_unread_to_trash", lambda ids: self.calls["trashed"].append(list(ids)) or True),
@@ -207,6 +213,12 @@ class IngestTests(WorkerTestCase):
         self.notifications = [notification(release_type="Release")]
         self.ingest()
         self.assertEqual(db_manager.get_pending_jobs(self.connection)[0]["release_type"], "Pre-release")
+
+    def test_a_release_lookup_that_fails_does_not_stop_the_notification(self) -> None:
+        self.release_data = asset_downloader.ReleaseLookupError("GitHub did not answer")
+        self.notifications = [notification(release_type="Pre-release")]
+        self.ingest()
+        self.assertEqual(db_manager.get_pending_jobs(self.connection)[0]["release_type"], "Pre-release")  # the email's
 
     def test_the_skiplist_uses_the_live_release_type(self) -> None:
         self.write_mapping({"repository": REPO, "skiplist": ["Pre-release"]})
