@@ -35,7 +35,12 @@ from modules.daemon_control import (
 from modules.daemon_lock import acquire_daemon_lock, update_daemon_status
 from modules.viewer_push import ViewerPusher
 from modules.db_manager import get_next_pending_job, open_database
-from modules.asset_downloader import check_folder_limits, clear_all_resolved_limit_warnings, download_release
+from modules.asset_downloader import (
+    check_folder_limits,
+    clear_all_resolved_limit_warnings,
+    download_release,
+    short_retry_pauses,
+)
 from modules.dry_run_mode import is_dry_run, set_dry_run
 from modules.backup_manager import run_scheduled_backup
 from modules.lifecycle_logger import log_cycle_summary, log_warning
@@ -228,7 +233,12 @@ def setup_terminal_logging(config: Optional[Dict[str, Any]]) -> TerminalLog:
 def run_internal_smoke_tests() -> None:
     """Run internal smoke tests for baseline release-download behavior."""
     print("🚀 Starting Internal Smoke Tests...")
-    
+    with short_retry_pauses():  # the checks use the live GitHub: retry, but do not wait a minute per file
+        _run_smoke_checks()
+
+
+def _run_smoke_checks() -> None:
+    """Run the three smoke checks against GitHub (see run_internal_smoke_tests)."""
     # Test graceful failure handling with a non-existent repository.
     print("\n--- Test 1: Verifying Failure Baseline (Invalid Repo) ---")
     fail_result = download_release("github/this-repo-does-not-exist", "v99.9.9")

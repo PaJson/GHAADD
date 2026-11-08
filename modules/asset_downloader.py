@@ -1,6 +1,7 @@
 """Download release assets into the destination folders from mapping.json, with duplicate guards and folder limits."""
 
 import datetime
+from contextlib import contextmanager
 import os
 import re
 import requests
@@ -34,7 +35,7 @@ from modules.mapping_manager import (
 )
 from modules.payload_types import DownloadReleaseResult, ReleaseAssetQueueItem, SkippedItemPayload
 from requests.exceptions import ChunkedEncodingError, ConnectionError, HTTPError, Timeout
-from typing import Any, cast, Dict, Literal, Optional
+from typing import Any, cast, Dict, Iterator, Literal, Optional
 from urllib.parse import quote, urljoin
 
 # Load environment variables from .env.
@@ -966,6 +967,21 @@ HTTP_RETRY_DELAYS = (5, 15, 30)  # seconds before the 2nd, 3rd and 4th try of on
 MAX_RETRY_AFTER_SECONDS = 60  # a longer Retry-After from the server is cut to this
 API_TIMEOUT = 30  # seconds, for the release and attestation lookups
 STOP_AFTER_FAILED_FILES = 2  # this many files in a row that used up their retries end the attempt
+
+
+@contextmanager
+def short_retry_pauses(seconds: int = 1) -> Iterator[None]:
+    """Shorten the pauses between retries inside the block (the smoke test, which talks to the live GitHub).
+
+    The tries stay the same; only the waiting shrinks, so a busy GitHub cannot stretch a check into minutes.
+    """
+    global HTTP_RETRY_DELAYS, MAX_RETRY_AFTER_SECONDS
+    saved = (HTTP_RETRY_DELAYS, MAX_RETRY_AFTER_SECONDS)
+    HTTP_RETRY_DELAYS, MAX_RETRY_AFTER_SECONDS = (seconds,) * len(saved[0]), seconds
+    try:
+        yield
+    finally:
+        HTTP_RETRY_DELAYS, MAX_RETRY_AFTER_SECONDS = saved
 
 
 def _retryable_http_status(error: HTTPError) -> Optional[int]:

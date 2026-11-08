@@ -334,6 +334,22 @@ class AttestationLookupTests(DownloadTestCase):
         self.assertIn("continuing without it", self.output)
 
 
+class ShortRetryPausesTests(DownloadTestCase):
+    def test_the_pauses_shrink_inside_the_block_and_come_back(self) -> None:
+        self.github.release_status = 504
+        with asset_downloader.short_retry_pauses(), contextlib.redirect_stdout(io.StringIO()):
+            self.assertRaises(asset_downloader.ReleaseLookupError, asset_downloader.get_release_data, REPO, TAG)
+        self.assertEqual(self.sleeps, [1, 1, 1])  # still four tries
+        self.assertEqual(asset_downloader.HTTP_RETRY_DELAYS, (5, 15, 30))
+        self.assertEqual(asset_downloader.MAX_RETRY_AFTER_SECONDS, 60)
+
+    def test_retry_after_is_cut_too(self) -> None:
+        self.github.get_failures[f"{BASE}/dl/app.zip"] = FakeResponse(429, headers={"Retry-After": "50"})
+        with asset_downloader.short_retry_pauses():
+            self.run_download()
+        self.assertEqual(self.sleeps, [1, 1, 1])
+
+
 class LookupFailureTests(DownloadTestCase):
     def test_a_release_lookup_that_stays_down_fails_the_download_instead_of_skipping_it(self) -> None:
         self.github.release_status = 504
