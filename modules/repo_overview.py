@@ -48,6 +48,7 @@ class RepoRow:
     has_skiplist: bool = False  # the entry names release types to ignore
     has_custom_recheck: bool = False  # the entry has its own recheck minutes instead of the global ones
     shared_folder: bool = False  # the entry is marked as sharing its destination folder on purpose
+    failed_tag: str = ""  # the tag of the latest job while the row reads "Failed" (what "Fetch again" fetches)
 
 
 # The Mappings tab's "Show" drop-down, in order; show_matches() holds the rule of each choice.
@@ -276,6 +277,7 @@ def build_rows(
                 has_skiplist=has_entries(entry.get("skiplist")),
                 has_custom_recheck=has_custom_intervals(entry.get("recheck_intervals")),
                 shared_folder=entry.get("shared_destination") is True,
+                failed_tag=str(summary.get("latest_tag") or "") if summary and status == STATUS_FAILED else "",
             )
         )
 

@@ -13,7 +13,7 @@ import time
 from contextlib import closing
 from dataclasses import dataclass
 from typing import Any, NamedTuple, Optional
-from urllib.parse import unquote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 from modules import asset_downloader, daemon_lock, db_manager, mapping_manager
 
@@ -49,6 +49,11 @@ class FetchOutcome:
 def _valid_name(text: str) -> bool:
     """Return True for a GitHub owner or repository name (letters, digits, dash, underscore, dot)."""
     return bool(text) and set(text) <= _NAME_CHARS
+
+
+def release_url(repo: str, tag: str) -> str:
+    """Return the GitHub link of one release (what parse_release_url reads back), for "Fetch again"."""
+    return f"https://github.com/{repo}/releases/tag/{quote(tag, safe='/')}"
 
 
 def parse_release_url(text: str) -> ReleaseRef:

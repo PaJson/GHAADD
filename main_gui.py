@@ -527,8 +527,10 @@ class FinishJobDialog(tk.Toplevel):
 class FetchReleaseDialog(tk.Toplevel):
     """Ask for the link of one GitHub release and queue it (see release_fetch); stays open on an error."""
 
-    def __init__(self, master: tk.Misc, on_done: Callable[[release_fetch.FetchOutcome], None]) -> None:
-        """Build the dialog: a link field, the skip-re-checks box and Fetch/Cancel."""
+    def __init__(
+        self, master: tk.Misc, on_done: Callable[[release_fetch.FetchOutcome], None], url: str = ""
+    ) -> None:
+        """Build the dialog: a link field (optionally filled in), the skip-re-checks box and Fetch/Cancel."""
         super().__init__(master)
         self.title("Fetch a release")
         self.resizable(False, False)
@@ -547,7 +549,7 @@ class FetchReleaseDialog(tk.Toplevel):
             "The Skiplist and the Active switch are ignored: you asked for this release.",
             wraplength=520, justify="left",
         ).grid(row=0, column=0, sticky="w", pady=(0, 8))
-        self.url_var = tk.StringVar()
+        self.url_var = tk.StringVar(value=url)
         self.url_entry = ttk.Entry(body, textvariable=self.url_var, width=70)
         self.url_entry.grid(row=1, column=0, sticky="ew")
         self.finish_var = tk.BooleanVar(value=True)
@@ -665,11 +667,13 @@ class MappingsTab(ttk.Frame):
         master: tk.Misc,
         set_status: Callable[[str], None],
         on_finish_now: Optional[Callable[[str], None]] = None,
+        on_fetch_again: Optional[Callable[[str, str], None]] = None,
     ) -> None:
         """Build the Mappings tab: filter bar, table and the editor form."""
         super().__init__(master, padding=10)
         self._set_status = set_status
         self._on_finish_now = on_finish_now  # takes the selected repository; the window does the rest
+        self._on_fetch_again = on_fetch_again  # takes the repository and the tag of its failed release
         self._table = gui_data.RepoTable()
         self._current_repo: Optional[str] = None  # repo shown in the editor
         self._loaded: dict[str, Any] = {}  # editable values as loaded, to detect changes
@@ -786,17 +790,20 @@ class MappingsTab(ttk.Frame):
         self.save_button = ttk.Button(actions, text="Save", command=self._save)
         self.open_button = ttk.Button(actions, text="Open folder", command=self._open_folder)
         self.finish_button = ttk.Button(actions, text="Finish now", command=self._finish_now)
+        self.fetch_again_button = ttk.Button(actions, text="Fetch again…", command=self._fetch_again)
         self.active_check.grid(row=0, column=0, sticky="w")  # the two check boxes stack; the buttons sit beside them
         self.shared_check.grid(row=1, column=0, sticky="w")
         self.open_button.grid(row=0, column=2, rowspan=2, padx=(0, 6))
         self.revert_button.grid(row=0, column=3, rowspan=2, padx=(0, 6))
         self.save_button.grid(row=0, column=4, rowspan=2, padx=(0, 18))
-        self.finish_button.grid(row=0, column=5, rowspan=2)
+        self.finish_button.grid(row=0, column=5, rowspan=2, padx=(0, 6))
+        self.fetch_again_button.grid(row=0, column=6, rowspan=2)
         # Finish now is not in form_widgets: _update_buttons enables it only while the repository has a waiting job.
         self.form_widgets.extend([self.active_check, self.shared_check, self.open_button])
         attach_tooltip(self.active_check, gui_tooltips.FIELD_HELP["active"])
         attach_tooltip(self.shared_check, gui_tooltips.FIELD_HELP["shared_destination"])
         attach_tooltip(self.finish_button, gui_tooltips.FIELD_HELP["finish_now"])
+        attach_tooltip(self.fetch_again_button, gui_tooltips.FIELD_HELP["fetch_again"])
         attach_tooltip(self.open_button, gui_tooltips.FIELD_HELP["open_folder"])
 
     def _add_form_row(
@@ -874,6 +881,17 @@ class MappingsTab(ttk.Frame):
         """Hand the repository shown in the editor to the window, which asks which pending job to finish."""
         if self._current_repo is not None and self._on_finish_now is not None:
             self._on_finish_now(self._current_repo)
+
+    def _failed_tag(self) -> str:
+        """Return the tag of the selected repository's failed release, or "" when its status is not Failed."""
+        row = next((row for row in self._table.rows if row.repo == self._current_repo), None)
+        return row.failed_tag if row is not None and row.status == repo_overview.STATUS_FAILED else ""
+
+    def _fetch_again(self) -> None:
+        """Hand the repository and its failed tag to the window, which opens the Fetch window with the link filled in."""
+        tag = self._failed_tag()
+        if self._current_repo is not None and tag and self._on_fetch_again is not None:
+            self._on_fetch_again(self._current_repo, tag)
 
     def _open_folder(self) -> None:
         """Open the repository's folder (destination/folder name/subfolder, or the longest part that exists)."""
@@ -1155,6 +1173,7 @@ class MappingsTab(ttk.Frame):
             widget.state(["!disabled"] if has_repo else ["disabled"])
         waiting = has_repo and any(row.repo == self._current_repo and row.pending_count > 0 for row in self._table.rows)
         self.finish_button.state(["!disabled"] if waiting else ["disabled"])
+        self.fetch_again_button.state(["!disabled"] if self._failed_tag() else ["disabled"])
 
     def _show_message(self, text: str, kind: str = "error") -> None:
         """Show a validation message (or hide the message row when the text is empty)."""
@@ -3873,7 +3892,7 @@ class MainWindow(tk.Tk):
         self.notebook = ttk.Notebook(self)
         self.notebook.pack(fill="both", expand=True, padx=8, pady=8)
 
-        self.mappings_tab = MappingsTab(self.notebook, self.set_status, self._on_finish_now)
+        self.mappings_tab = MappingsTab(self.notebook, self.set_status, self._on_finish_now, self._on_fetch_again)
         self.log_tab = TerminalLogTab(
             self.notebook,
             self._terminal_log_active,
@@ -4458,6 +4477,10 @@ class MainWindow(tk.Tk):
     def _on_fetch(self) -> None:
         """Fetch button: open the dialog that queues one release by its GitHub link."""
         FetchReleaseDialog(self, self._fetched)
+
+    def _on_fetch_again(self, repo: str, tag: str) -> None:
+        """Fetch again button: open the Fetch window with the link of the repository's failed release filled in."""
+        FetchReleaseDialog(self, self._fetched, url=release_fetch.release_url(repo, tag))
 
     def _fetched(self, outcome: release_fetch.FetchOutcome) -> None:
         """A release was queued from its link: say so, ask a running daemon to poll right away, refresh the table."""
