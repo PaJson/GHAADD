@@ -226,6 +226,7 @@ def load_settings_form() -> dict[str, Any]:
         "log_enabled": terminal_log["enabled"],
         "log_max_mb": str(terminal_log["max_file_mb"]),
         "log_keep": str(terminal_log["keep_files"]),
+        "terminal_log_lines": str(config_manager.get_gui_terminal_log_lines(config)),
         "start_minimized": config_manager.get_gui_start_minimized(config),
         "start_daemon": config_manager.get_gui_start_daemon(config),
         "tray": config_manager.get_gui_tray_enabled(config),

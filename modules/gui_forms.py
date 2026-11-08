@@ -31,6 +31,7 @@ SETTINGS_KEYS = {
     "log_enabled": "terminal_log.enabled",
     "log_max_mb": "terminal_log.max_file_mb",
     "log_keep": "terminal_log.keep_files",
+    "terminal_log_lines": "gui.terminal_log_lines",
     "start_minimized": "gui.start_minimized",
     "start_daemon": "gui.start_daemon",
     "tray": "gui.tray",
@@ -367,6 +368,12 @@ def build_settings_changes(form: Mapping[str, Any]) -> FormResult:
         errors.append("Jitter min must not be larger than jitter max.")
     log_max_mb = parse_int(form.get("log_max_mb"), "Max log file size", errors)
     log_keep = parse_int(form.get("log_keep"), "Keep log files", errors)
+    low, high = config_manager.GUI_TERMINAL_LOG_LINES_RANGE
+    log_lines = parse_int(
+        form.get("terminal_log_lines", config_manager.DEFAULT_GUI_TERMINAL_LOG_LINES), "Terminal log tab lines", errors
+    )
+    if log_lines is not None and not low <= log_lines <= high:
+        errors.append(f"Terminal log tab lines must be between {low} and {high}.")
 
     download_dir = str(form.get("download_dir", "")).strip()
     if not download_dir:
@@ -390,6 +397,7 @@ def build_settings_changes(form: Mapping[str, Any]) -> FormResult:
         "log_enabled": bool(form.get("log_enabled", False)),
         "log_max_mb": log_max_mb,
         "log_keep": log_keep,
+        "terminal_log_lines": log_lines,
         "start_minimized": bool(form.get("start_minimized", False)),
         "start_daemon": bool(form.get("start_daemon", False)),
         "tray": bool(form.get("tray", True)),

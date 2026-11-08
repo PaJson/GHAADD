@@ -138,7 +138,7 @@ class LogTailerTests(TailTestCase):
         self.assertEqual(len(update.lines), 3)
         self.assertTrue(update.lines[-1].startswith("row "))
 
-    def test_a_new_run_starts_a_fresh_view(self) -> None:
+    def test_a_new_run_starts_a_fresh_view_filled_up_from_the_earlier_run(self) -> None:
         self.write("20261006_100000.log", "old run line\n")
         tailer = self.tailer()
         tailer.poll()
@@ -147,7 +147,20 @@ class LogTailerTests(TailTestCase):
         update = changed(tailer.poll())
 
         self.assertTrue(update.reset and update.changed_file)
-        self.assertEqual(update.lines, ["Logging enabled. Writing terminal output to: x", "hello"])
+        self.assertEqual(
+            update.lines,
+            ["old run line", "--- 20261006_110000.log starts here ---",
+             "Logging enabled. Writing terminal output to: x", "hello"],
+        )
+        self.assertEqual(update.file_name, "20261006_110000.log")
+
+    def test_an_empty_new_file_still_shows_the_earlier_run(self) -> None:
+        self.write("20261006_100000.log", "last night\n")
+        self.write("20261006_110000.log", "")
+
+        update = changed(self.tailer().poll())
+
+        self.assertEqual(update.lines, ["last night", "--- 20261006_110000.log starts here ---"])
         self.assertEqual(update.file_name, "20261006_110000.log")
 
     def test_size_rollover_continues_without_a_reset_and_loses_nothing(self) -> None:
@@ -219,6 +232,72 @@ class LogTailerTests(TailTestCase):
         messages = [line for line in seen if line.startswith("message ")]
         self.assertEqual(messages, [f"message {n:03d} with some padding to fill the file" for n in range(40)])
         self.assertGreater(len(log_files.list_log_files(self.directory)), 2)  # it really rolled over
+
+
+class BackfillTests(TailTestCase):
+    def numbered(self, name: str, count: int) -> None:
+        self.write(name, "".join(f"{name[4:8]} line {i}\n" for i in range(count)))
+
+    def test_walks_back_from_the_newest_file_only_as_far_as_needed(self) -> None:
+        self.numbered("20261001_000000.log", 50)  # never opened: the two newer files are enough
+        self.numbered("20261002_000000.log", 4)
+        self.numbered("20261003_000000.log", 4)
+        self.numbered("20261004_000000.log", 3)
+
+        update = changed(self.tailer(max_lines=10).poll())
+
+        self.assertEqual(
+            update.lines,
+            ["1002 line 3", "--- 20261003_000000.log starts here ---",
+             "1003 line 0", "1003 line 1", "1003 line 2", "1003 line 3",
+             "--- 20261004_000000.log starts here ---",
+             "1004 line 0", "1004 line 1", "1004 line 2"],
+        )
+
+    def test_a_full_file_needs_no_earlier_one(self) -> None:
+        self.numbered("20261001_000000.log", 5)
+        self.numbered("20261002_000000.log", 12)
+
+        update = changed(self.tailer(max_lines=10).poll())
+
+        self.assertEqual(update.lines[0], "1002 line 2")
+        self.assertFalse(any(line.startswith("---") for line in update.lines))
+
+    def test_no_earlier_file_means_no_marker(self) -> None:
+        self.numbered("20261001_000000.log", 3)
+
+        self.assertEqual(len(changed(self.tailer().poll()).lines), 3)
+
+    def test_a_rollover_file_gets_no_marker_before_its_continued_header(self) -> None:
+        self.write("20261006_100000.log", "a\nb\n")
+        self.write("20261006_100000_2.log", "--- Log continued from 20261006_100000.log ---\nc\n")
+        self.write("20261007_100000.log", "d\n")
+
+        update = changed(self.tailer().poll())
+
+        self.assertEqual(
+            update.lines,
+            ["a", "b", "--- Log continued from 20261006_100000.log ---", "c",
+             "--- 20261007_100000.log starts here ---", "d"],
+        )
+
+    def test_at_most_ten_earlier_files_are_opened(self) -> None:
+        for day in range(1, 16):
+            self.write(f"202610{day:02d}_000000.log", f"day {day}\n")
+
+        lines = changed(self.tailer().poll()).lines
+
+        self.assertEqual(lines[0], "day 5")  # day 15 is the file followed; days 14 down to 5 are the ten earlier ones
+        self.assertEqual(sum(1 for line in lines if line.startswith("day ")), 11)
+
+    def test_following_a_file_that_is_already_open_is_not_backfilled_again(self) -> None:
+        self.numbered("20261001_000000.log", 3)
+        self.numbered("20261002_000000.log", 2)
+        tailer = self.tailer()
+        changed(tailer.poll())
+        self.append_bytes("20261002_000000.log", b"more\n")
+
+        self.assertEqual(changed(tailer.poll()).lines, ["more"])
 
 
 class MatchSpansTests(unittest.TestCase):

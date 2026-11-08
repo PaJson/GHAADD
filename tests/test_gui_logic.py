@@ -204,6 +204,16 @@ class SettingsFormTests(unittest.TestCase):
         self.assertIs(result.changes["terminal_log.enabled"], True)
         self.assertEqual(set(result.changes), set(gui_forms.SETTINGS_KEYS.values()))
 
+    def test_terminal_log_lines_are_saved_and_kept_inside_their_limits(self) -> None:
+        saved = gui_forms.build_settings_changes(self.valid_form(terminal_log_lines="20000"))
+        self.assertEqual(saved.changes["gui.terminal_log_lines"], 20000)
+        self.assertEqual(gui_forms.build_settings_changes(self.valid_form()).changes["gui.terminal_log_lines"], 5000)
+        for bad in ("199", "100001", "many", ""):
+            with self.subTest(value=bad):
+                result = gui_forms.build_settings_changes(self.valid_form(terminal_log_lines=bad))
+                self.assertFalse(result.ok)
+                self.assertIn("Terminal log tab lines", " ".join(result.errors))
+
     def test_invalid_values_are_reported(self) -> None:
         result = gui_forms.build_settings_changes(
             self.valid_form(recheck="", interval="5", jitter_min="40", log_keep="x", download_dir="")

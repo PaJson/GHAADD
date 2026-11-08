@@ -2089,6 +2089,12 @@ class SettingsDialog(tk.Toplevel):
         )
         row(logging_box, 1, "Max log file (MB, 0 = no rollover)", spin(logging_box, "log_max_mb", 0, 1000))
         row(logging_box, 2, "Keep log files (0 = all)", spin(logging_box, "log_keep", 0, 9999))
+        row(
+            logging_box,
+            3,
+            "Terminal log tab lines (restart GUI)",
+            spin(logging_box, "terminal_log_lines", *config_manager.GUI_TERMINAL_LOG_LINES_RANGE),
+        )
 
         warnings_box = ttk.LabelFrame(right, text="Warning notifications", padding=10)
         warnings_box.grid(row=3, column=0, sticky="ew", pady=(10, 0))
