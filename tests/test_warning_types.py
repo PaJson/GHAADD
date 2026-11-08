@@ -37,6 +37,13 @@ class TypeTests(unittest.TestCase):
         self.assertEqual(warning_types.count_notifying([], ["API"]), 0)
         self.assertEqual(warning_types.count_notifying(["api"], ["API"]), 0)  # case does not matter
 
+    def test_a_failed_job_notifies_by_default_and_has_its_own_tick(self) -> None:
+        self.assertIn("JOB_FAILED", warning_types.KNOWN_TYPES)
+        self.assertNotIn("JOB_FAILED", warning_types.DEFAULT_SILENCED)
+        self.assertNotIn("JOB_FAILED", warning_types.OWN_TAB_TYPES)  # a tick in "Choose warnings…", not a tab of its own
+        self.assertTrue(warning_types.wants_notice("JOB_FAILED", warning_types.DEFAULT_SILENCED))
+        self.assertFalse(warning_types.wants_notice("Job failed", ["JOB_FAILED"]))
+
     def test_a_type_nobody_listed_notifies(self) -> None:
         self.assertTrue(warning_types.wants_notice("SOMETHING_NEW", warning_types.DEFAULT_SILENCED))
 

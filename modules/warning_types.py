@@ -29,6 +29,7 @@ WARNING_TYPES: tuple[tuple[str, str], ...] = (
     ("MAILBOX", "Emails could not be marked as read or moved to the Trash."),
     ("LIMIT", "A repository has more release folders than its limit. Shown in the Folder limits tab, not here: its pop-up and the red dot are always on."),
     ("BACKUP", "A scheduled backup of state.db and the settings files could not be made."),
+    ("JOB_FAILED", "A job ended FAILED on its last re-check (often a GitHub hiccup); its folder was finalized with the files it had."),
     ("PARTIAL_MOVE", "A superseded release was moved to the Partial folder (shown as \"Partial move\" in the Warnings tab)."),
 )
 

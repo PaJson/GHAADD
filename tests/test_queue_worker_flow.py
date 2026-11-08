@@ -372,6 +372,44 @@ class ProcessQueueTests(WorkerTestCase):
         self.assertEqual((self.row(job_id)["status"], self.row(job_id)["last_result"]), ("FAILED", "FAILED"))
         self.assertEqual((stats["failed"], stats["completed"]), (1, 0))
 
+    def test_a_job_that_fails_its_last_recheck_after_a_full_download_says_so_in_a_warning(self) -> None:
+        job_id = self.job()
+        self.at_attempt(job_id, 2, downloaded=3, skipped=7, total=10, working_dir=self.staged_dir())
+        self.download_results = [download_result(status="FAILED", downloaded=0, skipped=0, total=0)]
+        self.process()
+        self.assertEqual(self.row(job_id)["status"], "FAILED")
+        self.assertEqual(self.warning_kinds(), ["JOB_FAILED"])
+        message = self.calls["warnings"][0][1]
+        self.assertIn(f"Job #{job_id} ({REPO} v1)", message)
+        self.assertIn("earlier checks had all 10 files", message)
+        self.assertIn("Fetch again", message)
+
+    def test_a_job_that_fails_with_files_missing_says_how_many(self) -> None:
+        job_id = self.job()
+        self.at_attempt(job_id, 2, downloaded=2, skipped=1, total=10, working_dir=self.staged_dir())
+        self.download_results = [download_result(status="FAILED", downloaded=0, skipped=0, total=0)]
+        self.process()
+        self.assertIn("3 of 10 files", self.calls["warnings"][0][1])
+
+    def test_a_job_that_fails_before_any_file_was_known_still_warns(self) -> None:
+        job_id = self.job()
+        self.at_attempt(job_id, 2)
+        self.download_results = [download_result(status="FAILED", downloaded=0, skipped=0, total=0)]
+        self.process()
+        self.assertIn("before any file was known", self.calls["warnings"][0][1])
+
+    def test_a_failed_attempt_with_rechecks_left_and_a_success_do_not_warn(self) -> None:
+        retried = self.job(tag="a")
+        self.download_results = [download_result(status="FAILED", downloaded=0, skipped=0, total=0)]
+        self.process()
+        self.assertEqual(self.row(retried)["status"], "PENDING")
+        done = self.job(tag="b")
+        self.at_attempt(done, 2)
+        self.download_results = [download_result()]
+        self.process()
+        self.assertEqual(self.row(done)["status"], "COMPLETED")
+        self.assertNotIn("JOB_FAILED", self.warning_kinds())
+
     def test_a_crashing_download_is_a_failed_attempt_not_a_crashed_worker(self) -> None:
         first, second = self.job(tag="a"), self.job(tag="b")
         self.download_results = [RuntimeError("boom"), download_result()]

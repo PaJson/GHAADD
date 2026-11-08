@@ -342,6 +342,20 @@ class ShortRetryPausesTests(DownloadTestCase):
         self.assertEqual(self.sleeps, [1, 1, 1])  # still four tries
         self.assertEqual(asset_downloader.HTTP_RETRY_DELAYS, (5, 15, 30))
         self.assertEqual(asset_downloader.MAX_RETRY_AFTER_SECONDS, 60)
+        self.assertEqual(asset_downloader.API_TIMEOUT, 30)
+
+    def test_the_lookup_timeout_is_shorter_inside_the_block(self) -> None:
+        seen = []
+
+        def capture(url: Any, headers: Any = None, **kwargs: Any) -> Any:
+            seen.append(kwargs["timeout"])
+            return FakeResponse(200, json_data={})
+
+        with mock.patch.object(asset_downloader, "requests", types.SimpleNamespace(get=capture)):
+            with asset_downloader.short_retry_pauses():
+                asset_downloader.get_release_data(REPO, TAG)
+            asset_downloader.get_release_data(REPO, TAG)
+        self.assertEqual(seen, [10, 30])
 
     def test_retry_after_is_cut_too(self) -> None:
         self.github.get_failures[f"{BASE}/dl/app.zip"] = FakeResponse(429, headers={"Retry-After": "50"})
