@@ -39,6 +39,7 @@ Automated Python utility that reads GitHub release notification emails from Gmai
 - Records lifecycle events (completed moves, superseded partial moves, typed warnings) in state.db, viewable with --lifecycle-log.
 - Supports config-based download path routing by repo and release type.
 - Retries marking processed notification emails as read/deleted once on transient IMAP failures before logging a warning; the job is still queued even if the email cleanup ultimately fails.
+- Retries a file download that fails: a dropped connection or timeout up to 3 tries (2 s, 4 s pauses); a busy GitHub (HTTP 429, 500, 502, 503, 504) up to 4 tries with 5 s, 15 s and 30 s pauses (a `Retry-After` header is honoured, up to 60 s). A file that still fails does not stop the others (the job is FAILED at the end, or retried at the next re-check); two files in a row that give up end the attempt, and a disk write error does too.
 - Prevents accidentally running two mutating instances at once (default run, --once, --poll, --drain-queue) using a singleton file lock; read-only commands (--doctor, --queue-status, --mapping-validate, etc.) are unaffected and can run anytime.
 - Has a Tkinter GUI (`python main_gui.py`) to monitor the daemon, edit repository mappings and read warnings (see Graphical interface below).
 - Supports a tightly-scoped --single mode (at most one notification/queue item per run) and an orthogonal --dry-run modifier (no writes/deletes, full preview) for safe, controlled testing against real data.
