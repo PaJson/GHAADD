@@ -42,7 +42,7 @@ class FakeResponse:
 
     def raise_for_status(self) -> None:
         if self.status_code >= 400:
-            raise requests.HTTPError(f"{self.status_code} error")
+            raise requests.HTTPError(f"{self.status_code} error", response=self)  # type: ignore[arg-type]
 
     def iter_content(self, chunk_size: int = 8192) -> Iterator[bytes]:
         if self.fail_after is not None:
@@ -89,6 +89,7 @@ class FakeGitHub:
         self.attestation_href: str | None = None
         self.get_errors: dict[str, list] = {}  # url -> errors to raise, one per attempt
         self.get_failures: dict[str, FakeResponse] = {}
+        self.failures_allowed: dict[str, int] = {}  # url -> how many times its failure is served (default: always)
         self.requests: list[tuple[str, str]] = []
 
     # --- API (requests.get) -------------------------------------------------------------
@@ -132,7 +133,9 @@ class FakeGitHub:
                 errors = github.get_errors.get(url)
                 if errors:
                     raise errors.pop(0)
-                if url in github.get_failures:
+                if url in github.get_failures and github.failures_allowed.get(url, 1) > 0:
+                    if url in github.failures_allowed:
+                        github.failures_allowed[url] -= 1
                     return github.get_failures[url]
                 return FakeResponse(200, body=github.files[url], headers=github.headers_for(url))
 
@@ -488,6 +491,73 @@ class FailureTests(DownloadTestCase):
         self.assertEqual(self.sleeps, [])
         self.assertIn("Request error", self.output)
 
+    def test_a_server_error_is_retried_with_growing_pauses_and_then_succeeds(self) -> None:
+        self.github.get_failures[self.URL] = FakeResponse(504)
+        self.github.failures_allowed[self.URL] = 2  # the third try finds GitHub back
+        result = self.run_download()
+        self.assertEqual(result["status"], "SUCCESS")
+        self.assertEqual(self.sleeps, [5, 15])
+        self.assertIn("Server error 504", self.output)
+        self.assertIn("Retrying in 5s", self.output)
+
+    def test_a_server_error_that_never_clears_gives_up_after_four_tries(self) -> None:
+        self.github.get_failures[self.URL] = FakeResponse(503)
+        result = self.run_download()
+        self.assertEqual(result["status"], "FAILED")
+        self.assertEqual(self.sleeps, [5, 15, 30])
+        self.assertIn("after 4 attempts", self.output)
+
+    def test_every_retried_status_code_is_retried_and_the_others_are_not(self) -> None:
+        for status in (429, 500, 502, 503, 504):
+            with self.subTest(status=status):
+                self.sleeps.clear()
+                self.github.get_failures[self.URL] = FakeResponse(status)
+                self.run_download()
+                self.assertEqual(self.sleeps[:1], [5])
+        for status in (400, 401, 403, 404):
+            with self.subTest(status=status):
+                self.sleeps.clear()
+                self.github.get_failures[self.URL] = FakeResponse(status)
+                self.run_download()
+                self.assertEqual(self.sleeps, [])
+
+    def test_retry_after_lengthens_the_pause_but_not_beyond_a_minute(self) -> None:
+        self.github.get_failures[self.URL] = FakeResponse(429, headers={"Retry-After": "20"})
+        self.run_download()
+        self.assertEqual(self.sleeps, [20, 20, 30])  # never shorter than the schedule
+        self.sleeps.clear()
+        self.github.get_failures[self.URL] = FakeResponse(503, headers={"Retry-After": "3600"})
+        self.run_download()
+        self.assertEqual(self.sleeps, [60, 60, 60])
+        self.sleeps.clear()
+        self.github.get_failures[self.URL] = FakeResponse(503, headers={"Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT"})
+        self.run_download()
+        self.assertEqual(self.sleeps, [5, 15, 30])
+
+    def test_a_refused_file_does_not_stop_the_others(self) -> None:
+        self.github.get_failures[f"{BASE}/dl/app.zip"] = FakeResponse(404)
+        result = self.run_download()
+        self.assertEqual(result["status"], "FAILED")
+        self.assertEqual(result["downloaded_count"], 3)  # app.exe and both source archives came in
+        self.assertIn("app.exe", self.files_in_release_dir())
+        self.assertIn("1 file(s) could not be downloaded", self.output)
+
+    def test_one_file_that_gives_up_does_not_stop_the_others(self) -> None:
+        self.github.get_failures[f"{BASE}/dl/app.zip"] = FakeResponse(504)
+        result = self.run_download()
+        self.assertEqual(result["status"], "FAILED")
+        self.assertEqual(result["downloaded_count"], 3)
+
+    def test_two_files_in_a_row_that_give_up_end_the_attempt(self) -> None:
+        self.github.get_failures[f"{BASE}/dl/app.zip"] = FakeResponse(504)
+        self.github.get_failures[f"{BASE}/dl/app.exe"] = FakeResponse(504)
+        result = self.run_download()
+        self.assertEqual(result["status"], "FAILED")
+        self.assertEqual(result["downloaded_count"], 0)  # the two source archives were never tried
+        self.assertEqual(self.sleeps, [5, 15, 30, 5, 15, 30])
+        self.assertIn("2 files in a row", self.output)
+        self.assertFalse([url for method, url in self.github.requests if method == "GET" and "/dl/source" in url])
+
     def test_a_write_error_fails_the_download(self) -> None:
         with mock.patch.object(asset_downloader.os, "replace", side_effect=OSError("disk full")):
             result = self.run_download()
@@ -535,11 +605,11 @@ class FailureTests(DownloadTestCase):
         self.assertEqual(result["downloaded_count"], 0)
         self.assertEqual(result["skipped_count"], 4)
 
-    def test_the_items_already_done_are_counted_when_a_later_one_fails(self) -> None:
+    def test_the_items_already_done_are_counted_when_one_fails(self) -> None:
         self.github.get_failures[f"{BASE}/dl/app.exe"] = FakeResponse(500)
         result = self.run_download()
         self.assertEqual(result["status"], "FAILED")
-        self.assertEqual(result["downloaded_count"], 1)
+        self.assertEqual(result["downloaded_count"], 3)  # app.zip and both source archives; only app.exe failed
 
 
 class SkipDecisionTests(DownloadTestCase):

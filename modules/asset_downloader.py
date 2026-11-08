@@ -33,7 +33,7 @@ from modules.mapping_manager import (
     load_mapping,
 )
 from modules.payload_types import DownloadReleaseResult, ReleaseAssetQueueItem, SkippedItemPayload
-from requests.exceptions import ChunkedEncodingError, ConnectionError, Timeout
+from requests.exceptions import ChunkedEncodingError, ConnectionError, HTTPError, Timeout
 from typing import Any, cast, Dict, Literal, Optional
 from urllib.parse import quote, urljoin
 
@@ -927,6 +927,29 @@ def get_release_attestation_url(release_data: Dict[str, Any], headers: Dict[str,
     return None
 
 
+# A busy or briefly broken GitHub answers a download with one of these; they usually clear within a minute.
+RETRY_HTTP_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
+HTTP_RETRY_DELAYS = (5, 15, 30)  # seconds before the 2nd, 3rd and 4th try of one file
+MAX_RETRY_AFTER_SECONDS = 60  # a longer Retry-After from the server is cut to this
+STOP_AFTER_FAILED_FILES = 2  # this many files in a row that used up their retries end the attempt
+
+
+def _retryable_http_status(error: HTTPError) -> Optional[int]:
+    """Return the status code of an HTTP error worth retrying, or None (404, 403 and so on never get better)."""
+    status = getattr(error.response, "status_code", None)
+    return status if status in RETRY_HTTP_STATUS_CODES else None
+
+
+def _http_retry_delay(error: HTTPError, attempt: int) -> float:
+    """Return the seconds to wait after failed try number `attempt`: the server's Retry-After, else the schedule."""
+    delay: float = HTTP_RETRY_DELAYS[min(attempt, len(HTTP_RETRY_DELAYS)) - 1]
+    headers = getattr(error.response, "headers", None) or {}
+    retry_after = str(headers.get("Retry-After", "")).strip()
+    if retry_after.isdigit():  # the date form of the header is rare on downloads and falls back to the schedule
+        delay = max(delay, min(int(retry_after), MAX_RETRY_AFTER_SECONDS))
+    return delay
+
+
 def _build_download_result(
     status: Literal["SUCCESS", "SKIP", "FAILED"],
     downloaded_count: int,
@@ -1113,8 +1136,11 @@ def download_all_assets(
         source_fallback_timestamp = fallback_timestamp
 
     total_files = len(ordered_download_queue)
-    per_file_retries = 3
+    per_file_retries = 3  # tries for a dropped connection or a timeout
     per_file_retry_delay = 2
+    max_file_tries = max(per_file_retries, len(HTTP_RETRY_DELAYS) + 1)  # the most tries any one kind of error gets
+    failed_files = 0
+    gave_up_in_a_row = 0  # files in a row that used up their retries
     normal_downloaded_count = 0
 
     def refresh_release_state() -> None:
@@ -1258,7 +1284,9 @@ def download_all_assets(
                     continue
 
                 file_saved = False
-                for download_attempt in range(1, per_file_retries + 1):
+                gave_up = False  # the retries ran out (a server that does not answer), as opposed to a refusal
+                write_failed = False
+                for download_attempt in range(1, max_file_tries + 1):
                     temp_file_path = None
                     try:
                         with session.get(download_url, stream=True, timeout=(10, 60)) as response:
@@ -1378,6 +1406,30 @@ def download_all_assets(
                                 f"   ❌ Failed to download {file_name or 'attestation'} after "
                                 f"{per_file_retries} attempts: {error}"
                             )
+                            gave_up = True
+                            break
+                    except HTTPError as error:
+                        if temp_file_path and os.path.exists(temp_file_path):
+                            os.remove(temp_file_path)
+                        status = _retryable_http_status(error)
+                        if status is None:
+                            print(f"   ❌ Request error while downloading {file_name or 'attestation'}: {error}")
+                            break
+                        if download_attempt <= len(HTTP_RETRY_DELAYS):
+                            sleep_seconds = _http_retry_delay(error, download_attempt)
+                            print(
+                                f"   ⚠️ Server error {status} while downloading {file_name or 'attestation'} "
+                                f"(attempt {download_attempt}/{len(HTTP_RETRY_DELAYS) + 1}). "
+                                f"Retrying in {sleep_seconds:g}s..."
+                            )
+                            time.sleep(sleep_seconds)
+                        else:
+                            print(
+                                f"   ❌ Request error while downloading {file_name or 'attestation'} after "
+                                f"{download_attempt} attempts: {error}"
+                            )
+                            gave_up = True
+                            break
                     except requests.RequestException as error:
                         if temp_file_path and os.path.exists(temp_file_path):
                             os.remove(temp_file_path)
@@ -1387,18 +1439,36 @@ def download_all_assets(
                         if temp_file_path and os.path.exists(temp_file_path):
                             os.remove(temp_file_path)
                         print(f"   ❌ File write error for {file_name or 'attestation'}: {error}")
+                        write_failed = True
                         break
 
-                if not file_saved:
-                    return _build_download_result(
-                        "FAILED",
-                        downloaded_count,
-                        skipped_count,
-                        total_files,
-                        include_stats,
-                        skipped_items,
-                        working_dir=final_download_dir,
+                if file_saved:
+                    gave_up_in_a_row = 0
+                    continue
+                # A failed file does not end the attempt: the others still get their chance, and the job is
+                # FAILED at the end. A write error (disk full, bad path) would hit every file, so it stops here.
+                failed_files += 1
+                if write_failed:
+                    break
+                gave_up_in_a_row = gave_up_in_a_row + 1 if gave_up else 0
+                if gave_up_in_a_row >= STOP_AFTER_FAILED_FILES:
+                    print(
+                        f"   ⏹️ {gave_up_in_a_row} files in a row could not be downloaded; "
+                        "GitHub looks unavailable, so the remaining files wait for the next attempt."
                     )
+                    break
+
+        if failed_files:
+            print(f"   ⚠️ {failed_files} file(s) could not be downloaded.")
+            return _build_download_result(
+                "FAILED",
+                downloaded_count,
+                skipped_count,
+                total_files,
+                include_stats,
+                skipped_items,
+                working_dir=final_download_dir,
+            )
     finally:
         if state_db is not None:
             state_db.close()
