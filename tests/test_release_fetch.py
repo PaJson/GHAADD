@@ -10,7 +10,7 @@ import unittest
 from typing import Any
 from unittest import mock
 
-from modules import cli_commands, daemon_lock, mapping_manager, release_fetch
+from modules import asset_downloader, cli_commands, daemon_lock, mapping_manager, release_fetch
 from tests.test_cli_dispatch import DispatchTestCase
 from tests.test_queue_worker_flow import REPO, WorkerTestCase
 
@@ -74,6 +74,16 @@ class FetchTests(WorkerTestCase):
 
     def fetch(self, url: str = f"https://github.com/{REPO}/releases/tag/v1", **kwargs: Any) -> Any:
         return self.quietly(release_fetch.fetch_release, url, connection=self.connection, **kwargs)
+
+    def test_a_lookup_that_fails_is_reported_as_such_not_as_a_missing_release(self) -> None:
+        def broken(repo: Any, tag: Any) -> Any:
+            raise asset_downloader.ReleaseLookupError("GitHub did not answer")
+
+        with mock.patch.object(release_fetch.asset_downloader, "get_release_data", broken):
+            with self.assertRaises(release_fetch.ReleaseFetchError) as caught:
+                self.fetch()
+        self.assertIn("could not be asked", str(caught.exception))
+        self.assertNotIn("was not found", str(caught.exception))
 
     def test_a_new_repository_is_added_and_the_release_queued(self) -> None:
         outcome = self.fetch()

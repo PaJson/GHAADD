@@ -89,12 +89,21 @@ class FakeGitHub:
         self.attestation_href: str | None = None
         self.get_errors: dict[str, list] = {}  # url -> errors to raise, one per attempt
         self.get_failures: dict[str, FakeResponse] = {}
+        self.release_failures: list[Any] = []  # answers (status code or error) served before the real release answer
+        self.expanded_failures: list[Any] = []  # the same for the attestation page
         self.failures_allowed: dict[str, int] = {}  # url -> how many times its failure is served (default: always)
         self.requests: list[tuple[str, str]] = []
 
     # --- API (requests.get) -------------------------------------------------------------
     def api_get(self, url: Any, headers: Any = None, timeout: Any = None, **kwargs: Any) -> Any:
         self.requests.append(("GET", url))
+        queue = self.release_failures if "/releases/tags/" in url else (
+            self.expanded_failures if "/releases/expanded_assets/" in url else [])
+        if queue:
+            served = queue.pop(0)
+            if isinstance(served, Exception):
+                raise served
+            return FakeResponse(served, text="<html>Unicorn</html>")
         if "/releases/tags/" in url:
             if self.release_status == 200:
                 return FakeResponse(200, json_data=self.release)
@@ -233,11 +242,45 @@ class GitHubLookupTests(DownloadTestCase):
             self.assertIsNone(asset_downloader.get_release_data(REPO, TAG))
         self.assertIn("not found yet", output.getvalue())
 
-    def test_an_api_error_gives_none_and_is_reported(self) -> None:
-        self.github.release_status = 500
+    def test_a_server_error_is_retried_and_then_the_release_is_returned(self) -> None:
+        self.github.release_failures = [504, 503]
         with contextlib.redirect_stdout(io.StringIO()) as output:
-            self.assertIsNone(asset_downloader.get_release_data(REPO, TAG))
-        self.assertIn("API Error (500)", output.getvalue())
+            data = asset_downloader.get_release_data(REPO, TAG)
+        self.assertEqual((data or {})["tag_name"], TAG)
+        self.assertEqual(self.sleeps, [5, 15])
+        self.assertIn("HTTP 504", output.getvalue())
+
+    def test_a_timeout_is_retried_too(self) -> None:
+        self.github.release_failures = [requests.ReadTimeout("slow")]
+        with contextlib.redirect_stdout(io.StringIO()):
+            data = asset_downloader.get_release_data(REPO, TAG)
+        self.assertIsNotNone(data)
+        self.assertEqual(self.sleeps, [5])
+
+    def test_a_server_error_that_never_clears_is_not_a_missing_release(self) -> None:
+        self.github.release_status = 504
+        with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(asset_downloader.ReleaseLookupError) as caught:
+            asset_downloader.get_release_data(REPO, TAG)
+        self.assertEqual(self.sleeps, [5, 15, 30])
+        self.assertIn("4 tries", str(caught.exception))
+
+    def test_a_refusal_is_reported_without_retrying(self) -> None:
+        self.github.release_status = 403
+        with contextlib.redirect_stdout(io.StringIO()) as output, self.assertRaises(asset_downloader.ReleaseLookupError):
+            asset_downloader.get_release_data(REPO, TAG)
+        self.assertEqual(self.sleeps, [])
+        self.assertIn("API Error (403)", output.getvalue())
+
+    def test_the_lookup_has_a_timeout(self) -> None:
+        seen = {}
+
+        def capture(url: Any, headers: Any = None, **kwargs: Any) -> Any:
+            seen.update(kwargs)
+            return FakeResponse(200, json_data={})
+
+        with mock.patch.object(asset_downloader, "requests", types.SimpleNamespace(get=capture)):
+            asset_downloader.get_release_data(REPO, TAG)
+        self.assertEqual(seen["timeout"], asset_downloader.API_TIMEOUT)
 
     def test_the_token_is_sent_when_there_is_one(self) -> None:
         seen = {}
@@ -273,6 +316,54 @@ class AttestationLookupTests(DownloadTestCase):
 
     def test_a_page_without_a_link_gives_none(self) -> None:
         self.assertIsNone(asset_downloader.get_release_attestation_url(self.github.release, {}))
+
+    def test_a_busy_page_is_retried(self) -> None:
+        self.github.attestation_href = "/owner/app/attestations/99/download"
+        self.github.expanded_failures = [502]
+        with contextlib.redirect_stdout(io.StringIO()):
+            url = asset_downloader.get_release_attestation_url(self.github.release, {})
+        self.assertEqual(url, "https://github.com/owner/app/attestations/99/download")
+        self.assertEqual(self.sleeps, [5])
+
+    def test_a_page_that_stays_down_does_not_fail_the_release(self) -> None:
+        self.github.expanded_failures = [requests.ReadTimeout("slow")] * 4
+        result = self.run_download()
+        self.assertEqual(result["status"], "SUCCESS")
+        self.assertEqual(result["downloaded_count"], 4)
+        self.assertEqual(self.sleeps, [5, 15, 30])
+        self.assertIn("continuing without it", self.output)
+
+
+class ShortRetryPausesTests(DownloadTestCase):
+    def test_the_pauses_shrink_inside_the_block_and_come_back(self) -> None:
+        self.github.release_status = 504
+        with asset_downloader.short_retry_pauses(), contextlib.redirect_stdout(io.StringIO()):
+            self.assertRaises(asset_downloader.ReleaseLookupError, asset_downloader.get_release_data, REPO, TAG)
+        self.assertEqual(self.sleeps, [1, 1, 1])  # still four tries
+        self.assertEqual(asset_downloader.HTTP_RETRY_DELAYS, (5, 15, 30))
+        self.assertEqual(asset_downloader.MAX_RETRY_AFTER_SECONDS, 60)
+
+    def test_retry_after_is_cut_too(self) -> None:
+        self.github.get_failures[f"{BASE}/dl/app.zip"] = FakeResponse(429, headers={"Retry-After": "50"})
+        with asset_downloader.short_retry_pauses():
+            self.run_download()
+        self.assertEqual(self.sleeps, [1, 1, 1])
+
+
+class LookupFailureTests(DownloadTestCase):
+    def test_a_release_lookup_that_stays_down_fails_the_download_instead_of_skipping_it(self) -> None:
+        self.github.release_status = 504
+        result = self.run_download()
+        self.assertEqual(result["status"], "FAILED")
+        self.assertIsNone(result["skip_reason"])
+        self.assertNotIn("no longer exists", self.output)
+        self.assertEqual(self.sleeps, [5, 15, 30])
+
+    def test_a_missing_release_is_still_a_skip(self) -> None:
+        self.github.release_status = 404
+        result = self.run_download()
+        self.assertEqual((result["status"], result["skip_reason"]), ("SKIP", "release_not_found"))
+        self.assertEqual(self.sleeps, [])
 
 
 class ResultShapeTests(unittest.TestCase):
