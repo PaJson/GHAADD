@@ -58,6 +58,11 @@ FIELD_HELP = {
                   "the daemon makes one more check at once, downloads what is still missing and finalizes the "
                   "release. Use it when you know the release is complete.\n"
                   "Greyed out while this repository has no waiting job.",
+    "fetch_again": "Open the Fetch window with the link of this repository's failed release filled in, so you can "
+                   "queue it again (one final check, then finalize). Files that are missing get downloaded; the "
+                   "folder the failed job finalized stays where it is, a new one is made next to it and you remove "
+                   "the old one yourself if you want to.\n"
+                   "Greyed out unless the Status reads Failed.",
     "open_folder": "Open this repository's folder in the file manager: destination + folder name + subfolder. "
                    "If that folder does not exist yet, the closest existing parent opens. "
                    "Double-clicking a row in the table does the same.",
