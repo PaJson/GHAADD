@@ -120,6 +120,34 @@ def _record_folder_size(connection: Optional[sqlite3.Connection], job_id: Option
         log_warning("FOLDER_SIZE", f"Could not record the size of job #{job_id}'s folder: {exc}")
 
 
+def _failed_job_message(
+    job_id: int, repo: str, tag: str, downloaded_count: int, skipped_count: int, total_items: int
+) -> str:
+    """Return the text of the JOB_FAILED warning: what the job ended with, and what the user can do about it."""
+    held = downloaded_count + skipped_count
+    label = f"Job #{job_id} ({repo} {tag})"
+    if total_items > 0 and held >= total_items:
+        # Typical for a GitHub hiccup on the final check: every file came in on an earlier check.
+        what = (
+            f"failed its last re-check, but earlier checks had all {total_items} files; "
+            "the folder was finalized as it was."
+        )
+    elif total_items > 0:
+        what = f"ended FAILED with {held} of {total_items} files; the folder was finalized with what it had."
+    else:
+        what = "ended FAILED before any file was known; the folder was finalized as it was."
+    return f"{label} {what} Use Fetch again in the Mappings tab to try it again."
+
+
+def _warn_failed_job(
+    job_id: int, repo: str, tag: str, downloaded_count: int, skipped_count: int, total_items: int
+) -> None:
+    """Record a JOB_FAILED warning for a job that ended FAILED (a dry run records nothing)."""
+    if is_dry_run():
+        return
+    log_warning("JOB_FAILED", _failed_job_message(job_id, repo, tag, downloaded_count, skipped_count, total_items))
+
+
 def _handle_working_dir_relocation(
     previous_working_dir: Optional[str],
     new_working_dir: Optional[str],
@@ -1079,6 +1107,7 @@ def process_selected_pending_jobs(connection: sqlite3.Connection, github_token: 
                     total_items=total_items,
                     last_result="FAILED",
                 )
+                _warn_failed_job(job_id, repo, tag, downloaded_count, skipped_count, total_items)
             save_job_skip_details(connection, job_id, attempt_count, skipped_items)
             if result_status in ("SUCCESS", "SKIP"):
                 print(
@@ -1435,6 +1464,7 @@ def _process_queue_once(
                         total_items=total_items,
                         last_result="FAILED",
                     )
+                    _warn_failed_job(job_id, repo, tag, downloaded_count, skipped_count, total_items)
             if not is_dry_run():
                 save_job_skip_details(connection, job_id, current_attempt_count, skipped_items)
             if result_status in ("SUCCESS", "SKIP"):

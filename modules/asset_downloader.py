@@ -970,18 +970,18 @@ STOP_AFTER_FAILED_FILES = 2  # this many files in a row that used up their retri
 
 
 @contextmanager
-def short_retry_pauses(seconds: int = 1) -> Iterator[None]:
-    """Shorten the pauses between retries inside the block (the smoke test, which talks to the live GitHub).
+def short_retry_pauses(seconds: int = 1, lookup_timeout: int = 10) -> Iterator[None]:
+    """Shorten the pauses between retries and the lookup timeout inside the block (the smoke test, live GitHub).
 
     The tries stay the same; only the waiting shrinks, so a busy GitHub cannot stretch a check into minutes.
     """
-    global HTTP_RETRY_DELAYS, MAX_RETRY_AFTER_SECONDS
-    saved = (HTTP_RETRY_DELAYS, MAX_RETRY_AFTER_SECONDS)
-    HTTP_RETRY_DELAYS, MAX_RETRY_AFTER_SECONDS = (seconds,) * len(saved[0]), seconds
+    global HTTP_RETRY_DELAYS, MAX_RETRY_AFTER_SECONDS, API_TIMEOUT
+    saved = (HTTP_RETRY_DELAYS, MAX_RETRY_AFTER_SECONDS, API_TIMEOUT)
+    HTTP_RETRY_DELAYS, MAX_RETRY_AFTER_SECONDS, API_TIMEOUT = (seconds,) * len(saved[0]), seconds, lookup_timeout
     try:
         yield
     finally:
-        HTTP_RETRY_DELAYS, MAX_RETRY_AFTER_SECONDS = saved
+        HTTP_RETRY_DELAYS, MAX_RETRY_AFTER_SECONDS, API_TIMEOUT = saved
 
 
 def _retryable_http_status(error: HTTPError) -> Optional[int]:
