@@ -195,6 +195,8 @@ CONTROL_HELP = {
                   "Without a token GitHub allows only 60 an hour, which is too few for many repositories.",
     "doctor_attention": "This looks like a first run, or something needed is missing. Click to see what to set up.",
     "clear_filter": "Clear the filter (Esc)",
+    "filter_field": "Show only rows that contain every word you type, in any order (not case sensitive). "
+                    "Put \"quotes\" around words that belong together, for example \"queue: due\".",
     "open_log": "Open the log file this tab is following in your default program for .log files "
                 "(usually a text editor).",
     "clear_tab": "Permanently delete ALL events of this kind from the database, including older ones the tab "

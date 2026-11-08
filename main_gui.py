@@ -246,6 +246,7 @@ class FilterEntry(ttk.Frame):
         self.clear_button = ttk.Button(self, text="✕", width=3, command=self.clear)
         self.clear_button.grid(row=0, column=1, padx=(4, 0))
         attach_tooltip(self.clear_button, gui_tooltips.CONTROL_HELP["clear_filter"])
+        attach_tooltip(self.entry, gui_tooltips.CONTROL_HELP["filter_field"])
         self.entry.bind("<Escape>", lambda _event: self.clear())
         textvariable.trace_add("write", lambda *_: self._sync())
         self._sync()
@@ -1056,8 +1057,8 @@ class MappingsTab(ttk.Frame):
 
     def _matches(self, row: Any) -> bool:
         """True when the row passes the text filter and the Active/Inactive selector."""
-        needle = self.filter_var.get().strip().casefold()
-        if needle and needle not in f"{row.folder} {row.repo} {row.destination}".casefold():
+        terms = gui_forms.filter_terms(self.filter_var.get())
+        if not gui_forms.matches_terms(f"{row.folder} {row.repo} {row.destination}", terms):
             return False
         return repo_overview.show_matches(row, self.show_var.get())
 
@@ -1468,24 +1469,23 @@ class TerminalLogTab(ttk.Frame):
 
     # ----- rendering -----
 
-    def _filter_text(self) -> str:
-        """Return the filter text, lower-cased for comparison."""
-        return self.filter_var.get().strip().casefold()
+    def _filter_terms(self) -> list[str]:
+        """Return the filter's search terms (case-folded); a line has to contain all of them."""
+        return gui_forms.filter_terms(self.filter_var.get())
 
     def _matching(self, lines: Iterable[str], first_seq: int) -> list[tuple[int, str]]:
-        """Return (running number, line) for the lines that contain the filter text (all when it is empty)."""
-        needle = self._filter_text()
-        numbered = enumerate(lines, first_seq)
-        return [(seq, line) for seq, line in numbered if not needle or needle in line.casefold()]
+        """Return (running number, line) for the lines that contain every filter term (all when it is empty)."""
+        terms = self._filter_terms()
+        return [(seq, line) for seq, line in enumerate(lines, first_seq) if gui_forms.matches_terms(line, terms)]
 
     def _insert(self, numbered: list[tuple[int, str]]) -> None:
         """Append lines to the text, coloured by level, with the filter text highlighted."""
-        needle = self._filter_text()
+        terms = self._filter_terms()
         for seq, line in numbered:
             level = log_tail.line_level(line)
             row = len(self._shown) + 1
             self.text.insert("end", line + "\n", (level,) if level else ())
-            for start, end in log_tail.match_spans(line, needle):
+            for start, end in log_tail.match_spans(line, terms):
                 self.text.tag_add(self.MATCH_TAG, f"{row}.{start}", f"{row}.{end}")
             self._shown.append(seq)
 
@@ -1544,7 +1544,7 @@ class TerminalLogTab(ttk.Frame):
 
     def _on_double_click(self, event: tk.Event) -> Optional[str]:
         """While a filter is active, show the whole log around the double-clicked line."""
-        if not self._filter_text():
+        if not self._filter_terms():
             return None
         row = int(str(self.text.index(f"@{event.x},{event.y}")).split(".")[0])
         if not 1 <= row <= len(self._shown):
@@ -1828,9 +1828,9 @@ class StatusTab(ttk.Frame):
 
     def _apply_filter(self) -> None:
         """Keep the rows that contain the filter text in any cell (the row lists stay index-aligned)."""
-        needle = self.filter_var.get().strip().casefold()
-        if needle:
-            keep = [i for i, row in enumerate(self._all_rows) if needle in " ".join(row).casefold()]
+        terms = gui_forms.filter_terms(self.filter_var.get())
+        if terms:
+            keep = [i for i, row in enumerate(self._all_rows) if gui_forms.matches_terms(" ".join(row), terms)]
         else:
             keep = list(range(len(self._all_rows)))
         self._rows = [self._all_rows[i] for i in keep]

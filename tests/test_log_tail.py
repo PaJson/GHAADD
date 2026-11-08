@@ -303,17 +303,22 @@ class BackfillTests(TailTestCase):
 class MatchSpansTests(unittest.TestCase):
     def test_finds_every_occurrence_ignoring_case(self) -> None:
         line = "Lic found, duplicates_collapsed=0, LIC again"
-        self.assertEqual(log_tail.match_spans(line, "lic"), [(0, 3), (14, 17), (35, 38)])
+        self.assertEqual(log_tail.match_spans(line, ["lic"]), [(0, 3), (14, 17), (35, 38)])
 
-    def test_overlapping_matches_are_not_counted_twice(self) -> None:
-        self.assertEqual(log_tail.match_spans("aaaa", "aa"), [(0, 2), (2, 4)])
+    def test_touching_matches_are_merged(self) -> None:
+        self.assertEqual(log_tail.match_spans("aaaa", ["aa"]), [(0, 4)])
 
-    def test_empty_filter_or_no_match_gives_nothing(self) -> None:
-        self.assertEqual(log_tail.match_spans("anything", ""), [])
-        self.assertEqual(log_tail.match_spans("anything", "zzz"), [])
+    def test_several_terms_are_marked_and_overlaps_merged(self) -> None:
+        self.assertEqual(log_tail.match_spans("Lichii staging run", ["staging", "lichii"]), [(0, 6), (7, 14)])
+        self.assertEqual(log_tail.match_spans("abcdef", ["abcd", "cdef"]), [(0, 6)])
+
+    def test_no_terms_or_no_match_gives_nothing(self) -> None:
+        self.assertEqual(log_tail.match_spans("anything", []), [])
+        self.assertEqual(log_tail.match_spans("anything", [""]), [])
+        self.assertEqual(log_tail.match_spans("anything", ["zzz"]), [])
 
     def test_a_line_whose_folding_changes_length_is_not_marked(self) -> None:
-        self.assertEqual(log_tail.match_spans("Straße strasse", "strasse"), [])
+        self.assertEqual(log_tail.match_spans("Straße strasse", ["strasse"]), [])
 
 
 class LineLevelTests(unittest.TestCase):

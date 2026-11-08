@@ -407,3 +407,21 @@ def build_settings_changes(form: Mapping[str, Any]) -> FormResult:
     }
     result.changes = {SETTINGS_KEYS[key]: value for key, value in values.items()}
     return result
+
+
+_FILTER_TERM = re.compile(r'"([^"]*)(?:"|$)|(\S+)')
+
+
+def filter_terms(text: str) -> list[str]:
+    """Split the filter text into case-folded search terms: words, or "quoted phrases" kept whole.
+
+    A line has to contain every term. An unfinished quote (still being typed) counts as a phrase to the end.
+    """
+    terms = [(quoted or word).casefold() for quoted, word in _FILTER_TERM.findall(text)]
+    return [term for term in terms if term.strip()]
+
+
+def matches_terms(text: str, terms: list[str]) -> bool:
+    """True when `text` contains every term (case-insensitive); no terms match everything."""
+    folded = text.casefold()
+    return all(term in folded for term in terms)
