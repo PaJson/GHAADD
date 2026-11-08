@@ -55,23 +55,28 @@ def line_level(line: str) -> Optional[str]:
     return None
 
 
-def match_spans(line: str, needle: str) -> list[tuple[int, int]]:
-    """Return the (start, end) character positions where `needle` occurs in `line`, ignoring case.
+def match_spans(line: str, terms: list[str]) -> list[tuple[int, int]]:
+    """Return the sorted (start, end) character positions where any of `terms` occurs in `line`, ignoring case.
 
-    `needle` is already case-folded, like the filter. Where folding changes a text's length (for example the German
-    sharp s), the positions would not fit the line, so no spans are returned for that line.
+    `terms` are already case-folded, like the filter; spans that touch or overlap are merged. Where folding changes
+    a text's length (for example the German sharp s), the positions would not fit the line, so none are returned.
     """
-    if not needle:
-        return []
     folded = line.casefold()
-    if len(folded) != len(line):
+    if not terms or len(folded) != len(line):
         return []
-    spans: list[tuple[int, int]] = []
-    start = folded.find(needle)
-    while start != -1:
-        spans.append((start, start + len(needle)))
-        start = folded.find(needle, start + len(needle))
-    return spans
+    found: list[tuple[int, int]] = []
+    for term in terms:
+        start = folded.find(term) if term else -1
+        while start != -1:
+            found.append((start, start + len(term)))
+            start = folded.find(term, start + len(term))
+    merged: list[tuple[int, int]] = []
+    for start, end in sorted(found):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
 
 
 def _split_lines(data: bytes) -> list[str]:
