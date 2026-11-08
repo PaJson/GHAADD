@@ -8,6 +8,7 @@ validation, ordering and data loading live in the toolkit-independent modules (g
 from __future__ import annotations
 
 import argparse
+import bisect
 import collections
 import os
 import subprocess
@@ -75,13 +76,16 @@ COLOR_FIELD = "#ffffff"  # entries, text areas, canvases
 COLOR_DETAIL = "#fbfbfb"  # the detail pane under the tables
 COLOR_BORDER = "#c8c8c8"
 COLOR_AXIS = "#999999"  # chart axes
+COLOR_MATCH = "#ffe27a"  # the filter text inside a Terminal log line
+COLOR_TARGET = "#cfe4f7"  # the Terminal log line a double-click on a filtered row jumped to
 
 
 def set_palette(dark: bool) -> None:
     """Point the COLOR_* constants at the light or dark palette (widgets built afterwards pick them up)."""
     global COLOR_ERROR, COLOR_WARNING, COLOR_MUTED, COLOR_STRIPE, COLOR_HEADER_BG, COLOR_HEADER_FG
-    global COLOR_SELECTED, COLOR_OK, COLOR_FIELD, COLOR_DETAIL, COLOR_BORDER, COLOR_AXIS
+    global COLOR_SELECTED, COLOR_OK, COLOR_FIELD, COLOR_DETAIL, COLOR_BORDER, COLOR_AXIS, COLOR_MATCH, COLOR_TARGET
     colors = gui_theme.palette(dark)
+    COLOR_MATCH, COLOR_TARGET = colors["match"], colors["target"]
     COLOR_ERROR, COLOR_WARNING, COLOR_MUTED = colors["error"], colors["warning"], colors["muted"]
     COLOR_STRIPE, COLOR_HEADER_BG, COLOR_HEADER_FG = colors["stripe"], colors["header_bg"], colors["header_fg"]
     COLOR_SELECTED, COLOR_OK, COLOR_FIELD = colors["selected"], colors["ok"], colors["field"]
@@ -1264,9 +1268,10 @@ class MappingsTab(ttk.Frame):
 
 
 class TerminalLogTab(ttk.Frame):
-    """Follows the newest terminal log file: last ~1000 lines, smart auto-scroll, filter, copy."""
+    """Follows the newest terminal log file: its last lines (gui.terminal_log_lines), auto-scroll, filter, copy."""
 
-    MAX_LINES = log_tail.DEFAULT_MAX_LINES
+    MATCH_TAG = "filter_match"  # the filter text inside a line
+    TARGET_TAG = "jump_target"  # the line a double-click jumped to
     POLL_INTERVAL_MS = 300
     IDLE_INTERVAL_MS = 1000  # while the tab is hidden or the window minimized
     DIRECTORY_REFRESH_SECONDS = 5.0
@@ -1278,16 +1283,24 @@ class TerminalLogTab(ttk.Frame):
         is_active: Callable[[], bool],
         on_enable_log: Callable[[], None],
         set_status: Callable[[str], None],
+        max_lines: int = log_tail.DEFAULT_MAX_LINES,
     ) -> None:
         """Build the Terminal log tab.
 
         The callbacks tell whether the log is active, switch it on, and set the footer status text.
+        `max_lines` is how many lines the tab holds (gui.terminal_log_lines).
         """
         super().__init__(master, padding=10)
         self._is_active = is_active
         self._on_enable_log = on_enable_log
         self._set_status = set_status
-        self._lines: collections.deque[str] = collections.deque(maxlen=self.MAX_LINES)
+        self._max_lines = max_lines
+        self._lines: collections.deque[str] = collections.deque(maxlen=max_lines)
+        # Every stored line has a running number: _first_seq is the number of _lines[0], and _shown holds the number
+        # of each line in the text widget (the filter hides lines), so a double-click can find its line again.
+        self._first_seq = 0
+        self._shown: list[int] = []
+        self._jump_target: Optional[int] = None  # set by a double-click; the next redraw scrolls to it
         self._updating = False  # True while we change the text ourselves (not a user scroll)
         self._user_input_at = -1e9  # monotonic time of the last wheel/key/scrollbar input on the log
         self._daemon_running = False
@@ -1296,7 +1309,7 @@ class TerminalLogTab(ttk.Frame):
         self._directory = ""
         self._directory_checked = 0.0
         self._poll_job: Optional[str] = None
-        self._tailer = log_tail.LogTailer(self._log_directory, max_lines=self.MAX_LINES)
+        self._tailer = log_tail.LogTailer(self._log_directory, max_lines=max_lines)
 
         self.columnconfigure(0, weight=1)
         self.rowconfigure(2, weight=1)
@@ -1326,7 +1339,7 @@ class TerminalLogTab(ttk.Frame):
         ttk.Label(toolbar, text="Filter:").grid(row=0, column=0, padx=(0, 4))
         self.filter_var = tk.StringVar()
         FilterEntry(toolbar, self.filter_var, width=75).grid(row=0, column=1, sticky="w")
-        self.filter_var.trace_add("write", lambda *_: self._render_all())
+        self.filter_var.trace_add("write", lambda *_: self._filter_changed())
         # Follow sits right of the filter's clear button, away from the tab headers (a stray click there unticked it)
         self.follow_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(toolbar, text="Follow", variable=self.follow_var, command=self._on_follow_toggle).grid(
@@ -1345,12 +1358,17 @@ class TerminalLogTab(ttk.Frame):
         self.text = tk.Text(self, wrap="none", height=10, font=("Consolas", 10), state="disabled", undo=False)
         self.text.tag_configure(log_tail.LEVEL_ERROR, foreground=COLOR_ERROR)
         self.text.tag_configure(log_tail.LEVEL_WARNING, foreground=COLOR_WARNING)
+        self.text.tag_configure(self.MATCH_TAG, background=COLOR_MATCH)
+        self.text.tag_configure(self.TARGET_TAG, background=COLOR_TARGET)
+        self.text.tag_raise(self.MATCH_TAG)
         self.text.grid(row=2, column=0, sticky="nsew")
         yscroll = ttk.Scrollbar(self, orient="vertical", command=self.text.yview)
         self._xscroll = ttk.Scrollbar(self, orient="horizontal", command=self.text.xview)
         self.text.configure(yscrollcommand=lambda first, last: self._on_yview(yscroll, first, last), xscrollcommand=self._set_xscroll)
         yscroll.grid(row=2, column=1, sticky="ns")
         self._xscroll.grid(row=3, column=0, sticky="ew")
+        self.text.bind("<ButtonPress-1>", self._on_click, add="+")
+        self.text.bind("<Double-Button-1>", self._on_double_click)
         for widget, sequences in (
             (self.text, ("<MouseWheel>", "<Button-4>", "<Button-5>", "<ButtonPress-1>", "<B1-Motion>", "<Key>")),
             (yscroll, ("<MouseWheel>", "<ButtonPress-1>", "<B1-Motion>")),
@@ -1439,11 +1457,14 @@ class TerminalLogTab(ttk.Frame):
             self._update_notice()
         if update.reset:
             self._lines.clear()
+            self._first_seq = 0
             self._lines.extend(update.lines)
             self._render_all()
         elif update.lines:
+            first_new = self._first_seq + len(self._lines)
             self._lines.extend(update.lines)
-            self._append(update.lines)
+            self._first_seq = first_new + len(update.lines) - len(self._lines)  # the deque dropped the oldest
+            self._append(update.lines, first_new)
 
     # ----- rendering -----
 
@@ -1451,44 +1472,91 @@ class TerminalLogTab(ttk.Frame):
         """Return the filter text, lower-cased for comparison."""
         return self.filter_var.get().strip().casefold()
 
-    def _matching(self, lines: Iterable[str]) -> list[str]:
-        """Return the lines that contain the filter text (all of them when it is empty)."""
+    def _matching(self, lines: Iterable[str], first_seq: int) -> list[tuple[int, str]]:
+        """Return (running number, line) for the lines that contain the filter text (all when it is empty)."""
         needle = self._filter_text()
-        return [line for line in lines if needle in line.casefold()] if needle else list(lines)
+        numbered = enumerate(lines, first_seq)
+        return [(seq, line) for seq, line in numbered if not needle or needle in line.casefold()]
 
-    def _insert(self, lines: list[str]) -> None:
-        """Append lines to the text, coloured by level."""
-        for line in lines:
+    def _insert(self, numbered: list[tuple[int, str]]) -> None:
+        """Append lines to the text, coloured by level, with the filter text highlighted."""
+        needle = self._filter_text()
+        for seq, line in numbered:
             level = log_tail.line_level(line)
+            row = len(self._shown) + 1
             self.text.insert("end", line + "\n", (level,) if level else ())
+            for start, end in log_tail.match_spans(line, needle):
+                self.text.tag_add(self.MATCH_TAG, f"{row}.{start}", f"{row}.{end}")
+            self._shown.append(seq)
 
-    def _render_all(self) -> None:
-        """Redraw the whole text from the stored lines (after a filter change)."""
+    def _filter_changed(self) -> None:
+        """Redraw for the new filter text; after a double-click jump, also scroll to the clicked line."""
+        target, self._jump_target = self._jump_target, None
+        self._render_all(target)
+
+    def _render_all(self, target: Optional[int] = None) -> None:
+        """Redraw the whole text from the stored lines (after a filter change).
+
+        `target` is the running number of a line to scroll to and mark (the jump from a filtered view).
+        """
         self._updating = True
         try:
             self.text.configure(state="normal")
             self.text.delete("1.0", "end")
-            self._insert(self._matching(self._lines))
+            self._shown.clear()
+            self._insert(self._matching(self._lines, self._first_seq))
+            if target is not None and target in self._shown:
+                self._show_target(self._shown.index(target) + 1)
+            elif self.follow_var.get():
+                self.text.see("end")
+            self.text.configure(state="disabled")
+        finally:
+            self._updating = False
+
+    def _show_target(self, row: int) -> None:
+        """Mark the given text row and scroll so it sits in the middle of the view."""
+        self.text.tag_add(self.TARGET_TAG, f"{row}.0", f"{row}.0 lineend + 1c")
+        line_height = max(1, tkfont.Font(font=str(self.text.cget("font"))).metrics("linespace"))
+        visible = max(1, self.text.winfo_height() // line_height)
+        self.text.yview(f"{max(1, row - visible // 2)}.0")
+
+    def _append(self, lines: list[str], first_seq: int) -> None:
+        """Add new lines at the end, drop the oldest beyond the cap, and follow if asked to."""
+        self._updating = True
+        try:
+            self.text.configure(state="normal")
+            self._insert(self._matching(lines, first_seq))
+            excess = bisect.bisect_left(self._shown, self._first_seq)  # rows whose line the buffer has dropped
+            if excess > 0:
+                self.text.delete("1.0", f"{excess + 1}.0")
+                del self._shown[:excess]
             self.text.configure(state="disabled")
             if self.follow_var.get():
                 self.text.see("end")
         finally:
             self._updating = False
 
-    def _append(self, lines: list[str]) -> None:
-        """Add new lines at the end, drop the oldest beyond the cap, and follow if asked to."""
-        self._updating = True
-        try:
-            self.text.configure(state="normal")
-            self._insert(self._matching(lines))
-            excess = int(self.text.index("end-1c").split(".")[0]) - 1 - self.MAX_LINES
-            if excess > 0:
-                self.text.delete("1.0", f"{excess + 1}.0")
-            self.text.configure(state="disabled")
-            if self.follow_var.get():
-                self.text.see("end")
-        finally:
-            self._updating = False
+    # ----- jump from a filtered view -----
+
+    def _on_click(self, _event: object = None) -> None:
+        """Remove the mark of the line a jump went to (the next click anywhere in the log)."""
+        self.text.tag_remove(self.TARGET_TAG, "1.0", "end")
+
+    def _on_double_click(self, event: tk.Event) -> Optional[str]:
+        """While a filter is active, show the whole log around the double-clicked line."""
+        if not self._filter_text():
+            return None
+        row = int(str(self.text.index(f"@{event.x},{event.y}")).split(".")[0])
+        if not 1 <= row <= len(self._shown):
+            return "break"
+        seq = self._shown[row - 1]
+        if seq < self._first_seq:
+            self._set_status("That line is no longer in the log window.")
+            return "break"
+        self.follow_var.set(False)  # else the view would jump straight back to the newest line
+        self._jump_target = seq
+        self.filter_var.set("")  # redraws everything and, through _render_all, scrolls to the target
+        return "break"
 
     # ----- notice about the detailed log -----
 
@@ -2021,6 +2089,12 @@ class SettingsDialog(tk.Toplevel):
         )
         row(logging_box, 1, "Max log file (MB, 0 = no rollover)", spin(logging_box, "log_max_mb", 0, 1000))
         row(logging_box, 2, "Keep log files (0 = all)", spin(logging_box, "log_keep", 0, 9999))
+        row(
+            logging_box,
+            3,
+            "Terminal log tab lines (restart GUI)",
+            spin(logging_box, "terminal_log_lines", *config_manager.GUI_TERMINAL_LOG_LINES_RANGE),
+        )
 
         warnings_box = ttk.LabelFrame(right, text="Warning notifications", padding=10)
         warnings_box.grid(row=3, column=0, sticky="ew", pady=(10, 0))
@@ -3800,7 +3874,13 @@ class MainWindow(tk.Tk):
         self.notebook.pack(fill="both", expand=True, padx=8, pady=8)
 
         self.mappings_tab = MappingsTab(self.notebook, self.set_status, self._on_finish_now)
-        self.log_tab = TerminalLogTab(self.notebook, self._terminal_log_active, self._on_enable_log, self.set_status)
+        self.log_tab = TerminalLogTab(
+            self.notebook,
+            self._terminal_log_active,
+            self._on_enable_log,
+            self.set_status,
+            max_lines=config_manager.get_gui_terminal_log_lines(config),
+        )
         self.notebook.add(self.mappings_tab, text="Mappings")
         self.notebook.add(self.log_tab, text="Terminal log")
         self.status_feed = gui_data.StatusFeed()

@@ -180,6 +180,26 @@ class GuiTimingTests(unittest.TestCase):
         self.assertEqual(cm.get_gui_refresh_seconds({"gui": "text"}), 3.0)
 
 
+class TerminalLogLinesTests(unittest.TestCase):
+    def lines(self, value: Any) -> int:
+        return cm.get_gui_terminal_log_lines({"gui": {"terminal_log_lines": value}})
+
+    def test_default_is_5000(self) -> None:
+        self.assertEqual(cm.get_gui_terminal_log_lines({}), 5000)
+        self.assertEqual(cm.get_gui_terminal_log_lines({"gui": {"window": {"width": 900}}}), 5000)
+
+    def test_configured_values_are_used_and_kept_inside_the_limits(self) -> None:
+        self.assertEqual((self.lines(20000), self.lines("8000")), (20000, 8000))
+        self.assertEqual((self.lines(0), self.lines(-5), self.lines(10)), (200, 200, 200))
+        self.assertEqual(self.lines(10**9), 100000)
+
+    def test_unusable_values_give_the_default(self) -> None:
+        for bad in ("many", "", None, True, [3], {"a": 1}):
+            with self.subTest(value=bad):
+                self.assertEqual(self.lines(bad), 5000)
+        self.assertEqual(cm.get_gui_terminal_log_lines({"gui": "text"}), 5000)
+
+
 class FingerprintTests(unittest.TestCase):
     BASE = {
         "polling": {"enabled": True, "interval_seconds": 300},

@@ -15,6 +15,8 @@ LIGHT: Dict[str, str] = {
     "warning": "#9a6700",
     "ok": "#2e7d32",
     "stripe": "#f2f5f9",  # every second table row
+    "match": "#ffe27a",  # the filter text inside a Terminal log line
+    "target": "#cfe4f7",  # the line a double-click on a filtered row jumped to
     "header_bg": "#dde5ef",
     "header_fg": "#1f2d3d",
     "header_active": "#cbd7e6",
@@ -37,6 +39,8 @@ DARK: Dict[str, str] = {
     "warning": "#e3b341",
     "ok": "#56d364",
     "stripe": "#26282b",
+    "match": "#6b5a14",
+    "target": "#2f4a66",
     "header_bg": "#3a3d41",
     "header_fg": "#e6e8eb",
     "header_active": "#4a4e53",

@@ -4,7 +4,8 @@ The GUI cannot read the daemon's stdout, so it follows the newest
 YYYYMMDD_HHMMSS[_n].log file instead (see modules/log_files.py). `LogTailer.poll()`
 is cheap (one `stat` when nothing changed) and returns only what is new:
 
-- first call / switched file: the last `max_lines` lines (`reset=True`);
+- first call / switched file: the last `max_lines` lines (`reset=True`); when the file is shorter than that, the
+  view is filled up with the ends of the earlier log files, newest first, with a marker line between files;
 - afterwards: the lines appended since the previous call;
 - a trailing partial line is held back until its newline arrives;
 - a size rollover (the new file starts with "--- Log continued from X ---")
@@ -23,7 +24,8 @@ from typing import Callable, Optional
 
 from modules.log_files import list_log_files
 
-DEFAULT_MAX_LINES = 1000
+DEFAULT_MAX_LINES = 5000  # the same as config_manager.DEFAULT_GUI_TERMINAL_LOG_LINES (the tab passes its setting)
+BACKFILL_MAX_FILES = 10  # earlier log files opened at most to fill a short view
 MAX_CATCHUP_BYTES = 512 * 1024  # a bigger backlog is replaced by "the last max_lines lines"
 _CHUNK_BYTES = 64 * 1024
 _CONTINUED_HEADER = re.compile(r"^--- Log continued from (\S+\.log) ---$")
@@ -51,6 +53,25 @@ def line_level(line: str) -> Optional[str]:
     if any(marker in line for marker in _WARNING_MARKERS):
         return LEVEL_WARNING
     return None
+
+
+def match_spans(line: str, needle: str) -> list[tuple[int, int]]:
+    """Return the (start, end) character positions where `needle` occurs in `line`, ignoring case.
+
+    `needle` is already case-folded, like the filter. Where folding changes a text's length (for example the German
+    sharp s), the positions would not fit the line, so no spans are returned for that line.
+    """
+    if not needle:
+        return []
+    folded = line.casefold()
+    if len(folded) != len(line):
+        return []
+    spans: list[tuple[int, int]] = []
+    start = folded.find(needle)
+    while start != -1:
+        spans.append((start, start + len(needle)))
+        start = folded.find(needle, start + len(needle))
+    return spans
 
 
 def _split_lines(data: bytes) -> list[str]:
@@ -136,25 +157,38 @@ class LogTailer:
         except OSError:
             return None
         previous_path, self._path, self._offset = self._path, path, offset
-        if prefill_continued and lines and len(lines) < self._max_lines:
-            lines = self._prefill(path, lines)
+        if prefill_continued and len(lines) < self._max_lines:
+            lines = self._backfill(path, lines)
         return TailUpdate(reset=reset, lines=lines, file_name=os.path.basename(path), changed_file=path != previous_path)
 
-    def _prefill(self, path: str, lines: list[str]) -> list[str]:
-        """Prepend the tail of the file a rollover continued from, so the view has context."""
-        for _ in range(3):  # a few hops back at most
-            match = _CONTINUED_HEADER.match(lines[0]) if lines else None
-            if match is None:
+    def _backfill(self, path: str, lines: list[str]) -> list[str]:
+        """Fill the view up to `max_lines` with the ends of the earlier log files, newest first.
+
+        A new run (or a size rollover) starts a new file, so its own lines would leave the view nearly empty.
+        Only as many earlier files are opened as the view needs (at most BACKFILL_MAX_FILES). A marker line
+        names the file that starts after each earlier one, except after a size rollover: its first line already
+        says "Log continued from ...".
+        """
+        files = list_log_files(os.path.dirname(path))
+        names = [os.path.abspath(name) for name in files]
+        if os.path.abspath(path) not in names:
+            return lines
+        older = files[: names.index(os.path.abspath(path))][-BACKFILL_MAX_FILES:]
+        later_name = os.path.basename(path)
+        for earlier_path in reversed(older):
+            continued = bool(lines) and _CONTINUED_HEADER.match(lines[0]) is not None
+            marker = [] if continued else [f"--- {later_name} starts here ---"]
+            room = self._max_lines - len(lines) - len(marker)
+            if room <= 0:
                 break
-            previous = os.path.join(os.path.dirname(path), match.group(1))
             try:
-                earlier, _ = read_last_lines(previous, self._max_lines - len(lines))
+                earlier, _ = read_last_lines(earlier_path, room)
             except OSError:
-                break
-            lines = earlier + lines
-            path = previous
-            if len(lines) >= self._max_lines:
-                break
+                continue
+            if not earlier:
+                continue
+            lines = earlier + marker + lines
+            later_name = os.path.basename(earlier_path)
         return lines[-self._max_lines:]
 
     def _read_new_lines(self, path: str) -> Optional[TailUpdate]:

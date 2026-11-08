@@ -27,6 +27,8 @@ DEFAULT_DESTINATION_CHECK_EVERY_N_POLLS = 10
 DEFAULT_SUBFOLDER = ""  # no subfolder: Release / Pre-release folders sit straight in the repository folder
 DEFAULT_GUI_REFRESH_SECONDS = 3.0  # how often the GUI re-reads the data it shows
 DEFAULT_GUI_STATUS_MESSAGE_SECONDS = 6.0  # how long a status-bar message stays
+DEFAULT_GUI_TERMINAL_LOG_LINES = 5000  # lines the GUI's Terminal log tab holds (was a fixed 1000 before 2.11.0)
+GUI_TERMINAL_LOG_LINES_RANGE = (200, 100000)
 GUI_REFRESH_SECONDS_RANGE = (1.0, 60.0)
 GUI_STATUS_MESSAGE_SECONDS_RANGE = (2.0, 60.0)
 DEFAULT_REPOSITORY_LIMIT = 10
@@ -297,6 +299,7 @@ def _hand_edited_defaults() -> List[Tuple[str, Any]]:
     return [
         ("gui.refresh_seconds", 3),
         ("gui.status_message_seconds", 6),
+        ("gui.terminal_log_lines", DEFAULT_GUI_TERMINAL_LOG_LINES),
         ("gui.tray", True),
         ("gui.notifications", True),
         ("gui.minimize_to_tray", sys.platform != "linux"),
@@ -444,6 +447,16 @@ def get_gui_status_message_seconds(config: Optional[Dict[str, Any]] = None) -> f
     return _gui_seconds(
         config, "status_message_seconds", DEFAULT_GUI_STATUS_MESSAGE_SECONDS, GUI_STATUS_MESSAGE_SECONDS_RANGE
     )
+
+
+def get_gui_terminal_log_lines(config: Optional[Dict[str, Any]] = None) -> int:
+    """Return how many lines the Terminal log tab holds (gui.terminal_log_lines, default 5000, 200 to 100000)."""
+    config = config if config is not None else load_config()
+    value = _get_nested(config, "gui", "terminal_log_lines")
+    if isinstance(value, bool):
+        return DEFAULT_GUI_TERMINAL_LOG_LINES
+    low, high = GUI_TERMINAL_LOG_LINES_RANGE
+    return min(max(_as_int(value, DEFAULT_GUI_TERMINAL_LOG_LINES), low), high)
 
 
 def _gui_flag(config: Dict[str, Any], key: str, default: bool) -> bool:
