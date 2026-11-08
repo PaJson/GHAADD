@@ -23,7 +23,7 @@ from typing import Callable, Optional
 
 from modules.log_files import list_log_files
 
-DEFAULT_MAX_LINES = 1000
+DEFAULT_MAX_LINES = 5000  # the same as config_manager.DEFAULT_GUI_TERMINAL_LOG_LINES (the tab passes its setting)
 MAX_CATCHUP_BYTES = 512 * 1024  # a bigger backlog is replaced by "the last max_lines lines"
 _CHUNK_BYTES = 64 * 1024
 _CONTINUED_HEADER = re.compile(r"^--- Log continued from (\S+\.log) ---$")
@@ -51,6 +51,25 @@ def line_level(line: str) -> Optional[str]:
     if any(marker in line for marker in _WARNING_MARKERS):
         return LEVEL_WARNING
     return None
+
+
+def match_spans(line: str, needle: str) -> list[tuple[int, int]]:
+    """Return the (start, end) character positions where `needle` occurs in `line`, ignoring case.
+
+    `needle` is already case-folded, like the filter. Where folding changes a text's length (for example the German
+    sharp s), the positions would not fit the line, so no spans are returned for that line.
+    """
+    if not needle:
+        return []
+    folded = line.casefold()
+    if len(folded) != len(line):
+        return []
+    spans: list[tuple[int, int]] = []
+    start = folded.find(needle)
+    while start != -1:
+        spans.append((start, start + len(needle)))
+        start = folded.find(needle, start + len(needle))
+    return spans
 
 
 def _split_lines(data: bytes) -> list[str]:
