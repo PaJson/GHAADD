@@ -2049,10 +2049,14 @@ class SettingsDialog(tk.Toplevel):
             for key, value in current.items()
         }
 
-        def row(frame: ttk.LabelFrame, index: int, label: str, widget: tk.Widget) -> None:
-            """Add a labelled widget to a settings group."""
-            ttk.Label(frame, text=label).grid(row=index, column=0, sticky="w", pady=4, padx=(0, 12))
+        def row(frame: ttk.LabelFrame, index: int, label: str, widget: tk.Widget, help_key: str = "") -> None:
+            """Add a labelled widget to a settings group; a help key gives both the label and the widget a hover text."""
+            title = ttk.Label(frame, text=label)
+            title.grid(row=index, column=0, sticky="w", pady=4, padx=(0, 12))
             widget.grid(row=index, column=1, sticky="ew", pady=4)
+            if help_key:
+                attach_tooltip(title, gui_tooltips.CONTROL_HELP[help_key])
+                attach_tooltip(widget, gui_tooltips.CONTROL_HELP[help_key])
 
         def spin(frame: ttk.LabelFrame, key: str, low: int, high: int) -> ttk.Spinbox:
             """Create a number box for a settings key with the given range."""
@@ -2093,16 +2097,19 @@ class SettingsDialog(tk.Toplevel):
         logging_box = ttk.LabelFrame(right, text="Logging", padding=10)
         logging_box.grid(row=2, column=0, sticky="ew", pady=(10, 0))
         logging_box.columnconfigure(1, weight=1)
-        ttk.Checkbutton(logging_box, text="Terminal log on at startup", variable=self.vars["log_enabled"]).grid(
-            row=0, column=0, columnspan=2, sticky="w", pady=4
+        startup_log_check = ttk.Checkbutton(
+            logging_box, text="Terminal log on at startup", variable=self.vars["log_enabled"]
         )
-        row(logging_box, 1, "Max log file (MB, 0 = no rollover)", spin(logging_box, "log_max_mb", 0, 1000))
-        row(logging_box, 2, "Keep log files (0 = all)", spin(logging_box, "log_keep", 0, 9999))
+        startup_log_check.grid(row=0, column=0, columnspan=2, sticky="w", pady=4)
+        attach_tooltip(startup_log_check, gui_tooltips.CONTROL_HELP["terminal_log_startup"])
+        row(logging_box, 1, "Max log file (MB, 0 = no rollover)", spin(logging_box, "log_max_mb", 0, 1000), "log_max_mb")
+        row(logging_box, 2, "Keep log files (0 = all)", spin(logging_box, "log_keep", 0, 9999), "log_keep")
         row(
             logging_box,
             3,
             "Terminal log tab lines (restart GUI)",
             spin(logging_box, "terminal_log_lines", *config_manager.GUI_TERMINAL_LOG_LINES_RANGE),
+            "terminal_log_lines",
         )
 
         warnings_box = ttk.LabelFrame(right, text="Warning notifications", padding=10)

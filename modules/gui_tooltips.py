@@ -183,6 +183,23 @@ CONTROL_HELP = {
         "A running daemon applies it within about a second. Each switch-on starts a new file; switch-off closes it. "
         "Needs a running daemon; the startup default is in Settings."
     ),
+    "terminal_log_startup": (
+        "Start the daemon with the terminal log already on (config.json: terminal_log.enabled). "
+        "A running daemon is not affected: use the Terminal log checkbox in the main view to switch it live. "
+        "Applies the next time the daemon starts."
+    ),
+    "log_max_mb": (
+        "Largest size of one .log file in megabytes (config.json: terminal_log.max_file_mb). "
+        "When a file reaches it, a new, newer-named file is started. 0 = never start a new file for size."
+    ),
+    "log_keep": (
+        "How many .log files to keep in the Logs folder (config.json: terminal_log.keep_files). "
+        "The oldest are deleted beyond that. 0 = keep them all."
+    ),
+    "terminal_log_lines": (
+        "How many of the newest log lines the Terminal log tab holds (config.json: gui.terminal_log_lines, 200 to "
+        "100000). Older lines are dropped from the tab, not from the file. Applies the next time the GUI starts."
+    ),
     "folder_logs": "Open the Logs folder with the terminal log files. The number is how many files it holds.",
     "folder_partial": "Open the Partial folder: downloads that did not finish completely. "
                       "The number is how many items it holds.",
