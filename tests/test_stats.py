@@ -373,6 +373,39 @@ class BuildRangeTests(unittest.TestCase):
         self.assertIn("Jobs per day, 2026-10-01 to 2026-10-05, 5 days", stats.format_report(report))
 
 
+class LatestPerRepositoryTests(unittest.TestCase):
+    def test_counts_the_newest_release_and_pre_release_of_each_repository(self) -> None:
+        jobs = [("a/b", "v3", "Release", 300, 3), ("a/b", "v3-rc", "Pre-release", 50, 1), ("c/d", "v1", "Release", 10, 2)]
+        self.assertEqual(
+            stats.latest_per_repository(jobs, {}), {"releases": 2, "prereleases": 1, "files": 6, "bytes": 360}
+        )
+
+    def test_a_job_without_a_measured_size_uses_asset_state(self) -> None:
+        sizes = {"a/b|v1": {"bytes": 70, "files": 4}}
+        result = stats.latest_per_repository([("a/b", "v1", "Release", None, None)], sizes)
+        self.assertEqual((result["bytes"], result["files"]), (70, 4))
+
+    def test_nothing_known_gives_zeros(self) -> None:
+        self.assertEqual(stats.latest_per_repository([], {}), {"releases": 0, "prereleases": 0, "files": 0, "bytes": 0})
+
+    def test_the_database_keeps_only_the_newest_completed_job_per_type(self) -> None:
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(
+            db_manager, "get_state_db_path", return_value=os.path.join(folder, "state.db")
+        ):
+            with closing(db_manager.open_database()) as connection:
+                for repo, tag, kind, status, created in (
+                    ("A/B", "v1", "Release", "COMPLETED", 1), ("a/b", "v2", "Release", "COMPLETED", 2),
+                    ("a/b", "v3", "Release", "SUPERSEDED", 3), ("a/b", "v2-rc", "Pre-release", "COMPLETED", 4),
+                    ("a/b", "v4", "Release", "FAILED", 5), ("x/y", "t", None, "COMPLETED", 6),
+                ):
+                    job_id = db_manager.enqueue_job(connection, repo, tag, kind, 0)
+                    connection.execute("UPDATE job_queue SET status = ?, created_at = ? WHERE id = ?", (status, created, job_id))
+                connection.commit()
+                found = db_manager.get_latest_completed_jobs(connection)
+        self.assertEqual(sorted((tag, kind) for _repo, tag, kind, _b, _f in found),
+                         [("t", "Release"), ("v2", "Release"), ("v2-rc", "Pre-release")])
+
+
 class TextReportTests(unittest.TestCase):
     def setUp(self) -> None:
         self.report = stats.build(ENTRIES, jobs_fixture(), [NOW - HOUR], SIZES, {}, NOW)
@@ -384,9 +417,10 @@ class TextReportTests(unittest.TestCase):
             self.assertIn(heading, self.text)
 
     def test_the_two_kinds_of_size_are_worded_apart(self) -> None:
-        # Lifetime Files/Data count every build downloaded; the tracked line is the newest build per release only.
-        self.assertIn("Newest build of each release:", self.text)
+        # Lifetime Files/Data count every build downloaded; the latest line is the newest Release/Pre-release per repo.
+        self.assertIn("Latest per repository:", self.text)
         self.assertNotIn("Kept on record", self.text)
+        self.assertNotIn("Newest build of each release", self.text)
         self.assertIn("everything downloaded", self.text)
 
     def test_the_figures_are_readable(self) -> None:

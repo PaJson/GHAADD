@@ -3649,7 +3649,7 @@ class StatsDialog(tk.Toplevel):
         self._show_lists()
         self.daily_title.configure(text=stats.daily_title(report))
         self._draw_chart()
-        self.footer.configure(text="  |  ".join(stats.storage_lines(report)) + "   (the newest build of each release only; older builds of a reused tag are not in these sizes)")
+        self.footer.configure(text="  |  ".join(stats.storage_lines(report)))
 
     def _shown_report(self) -> dict:
         """The report cut to what the two "Show" drop-downs ask for (what is on screen and what Copy gives)."""
