@@ -309,8 +309,13 @@ class ControlBar(ttk.Frame):
         daemon_box = ttk.LabelFrame(groups, text="Daemon", padding=box_padding, labelanchor="n")
         polling_box = ttk.LabelFrame(groups, text="Polling", padding=box_padding, labelanchor="n")
         folders_box = ttk.LabelFrame(groups, text="Folders", padding=box_padding, labelanchor="n")
+        logging_box = ttk.LabelFrame(groups, text="Logging", padding=box_padding, labelanchor="n")
         tools_box = ttk.LabelFrame(groups, text="Tools", padding=box_padding, labelanchor="n")
-        self.folder_buttons = {key: ttk.Button(folders_box, text=label) for key, label in work_folders.FOLDER_BUTTONS}
+        # The Logs folder button lives in the Logging box, beside the Terminal log checkbox.
+        self.folder_buttons = {
+            key: ttk.Button(logging_box if key == "logs" else folders_box, text=label)
+            for key, label in work_folders.FOLDER_BUTTONS
+        }
         self.move_button = ttk.Button(folders_box, text="↻", width=3)  # shown only while Complete holds movable repos
         self.start_button = ttk.Button(daemon_box, text="Start")
         self.stop_button = ttk.Button(daemon_box, text="Stop")
@@ -319,7 +324,7 @@ class ControlBar(ttk.Frame):
         self.single_button = ttk.Button(polling_box, text="Poll one")
         self.fetch_button = ttk.Button(polling_box, text="Fetch\u2026")
         self.detailed_log = tk.BooleanVar(value=False)
-        self.log_check = ttk.Checkbutton(tools_box, text="Terminal log", variable=self.detailed_log)
+        self.log_check = ttk.Checkbutton(logging_box, text="Terminal log", variable=self.detailed_log)
         self.restart_button = ttk.Button(daemon_box, text="\u21bb Restart")  # shown only while it is needed
         self.doctor_button = ttk.Button(tools_box, text="Doctor")
         self.stats_button = ttk.Button(tools_box, text="Stats")
@@ -342,13 +347,14 @@ class ControlBar(ttk.Frame):
         for box, widgets in (
             (daemon_box, (self.start_button, self.stop_button, self.pause_button, self.restart_button)),
             (polling_box, (self.poll_button, self.single_button, self.fetch_button)),
-            (folders_box, (self.move_button, *self.folder_buttons.values())),
-            (tools_box, (self.log_check, self.doctor_button, self.stats_button, self.settings_button)),
+            (folders_box, (self.move_button, *(b for k, b in self.folder_buttons.items() if k != "logs"))),
+            (logging_box, (self.folder_buttons["logs"], self.log_check)),
+            (tools_box, (self.doctor_button, self.stats_button, self.settings_button)),
         ):
             box.pack(side="left", padx=(0, 10))
             for column, widget in enumerate(widgets):
                 widget.grid(row=0, column=column, padx=(0, 6) if widget is not widgets[-1] else 0)
-        self.log_check.grid_configure(padx=(0, 12))
+        attach_tooltip(self.log_check, gui_tooltips.CONTROL_HELP["terminal_log"])
         attach_tooltip(self.poll_button, gui_tooltips.CONTROL_HELP["poll_now"])
         attach_tooltip(self.single_button, gui_tooltips.CONTROL_HELP["poll_one"])
         attach_tooltip(self.fetch_button, gui_tooltips.CONTROL_HELP["fetch_release"])

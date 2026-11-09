@@ -178,6 +178,11 @@ CONTROL_HELP = {
     "move_complete": "Finished downloads of repositories that now have a destination are still waiting in Complete. "
                      "Click to move them there. It does not run while the "
                      "daemon is busy with a job. Each moved release is listed in the Completed tab as \"Moved\".",
+    "terminal_log": (
+        "Write what the daemon prints to a .log file in the Logs folder and show it in the Terminal log tab. "
+        "A running daemon applies it within about a second. Each switch-on starts a new file; switch-off closes it. "
+        "Needs a running daemon; the startup default is in Settings."
+    ),
     "folder_logs": "Open the Logs folder with the terminal log files. The number is how many files it holds.",
     "folder_partial": "Open the Partial folder: downloads that did not finish completely. "
                       "The number is how many items it holds.",
