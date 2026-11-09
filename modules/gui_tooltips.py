@@ -169,9 +169,10 @@ CONTROL_HELP = {
     "restart_version": "The daemon runs {daemon}, this app is {app}.\n"
                        "Click to restart it: the job in progress finishes, the daemon stops,\n"
                        "then starts again with the new version.",
-    "check_folders": "Check now that every mapped destination exists, count the folders of each repository with a "
-                     "limit (the \"12 / 15\" in the table) and warn about repositories over their limit. "
-                     "It does not poll the mailbox.",
+    "check_folders": "Ask the daemon to check now that every mapped destination exists and to count the folders of "
+                     "each repository with a limit (the \"12 / 15\" in the table). Warnings of repositories that are "
+                     "back under their limit, whose folder cannot be found or that left mapping.json are removed; "
+                     "the others stay until the folders are fixed. It does not poll the mailbox and needs a running daemon.",
     "folder_complete": "Open the Complete folder: finished downloads of repositories without a destination wait here. "
                        "The number is how many items it holds.",
     "move_complete": "Finished downloads of repositories that now have a destination are still waiting in Complete. "
@@ -206,6 +207,4 @@ CONTROL_HELP = {
                 "(usually a text editor).",
     "clear_tab": "Permanently delete ALL events of this kind from the database, including older ones the tab "
                  "does not show (it lists the newest 500). Downloads and the job queue are not touched.",
-    "clear_repo": "Delete every warning of the selected row's repository. They also clear themselves once the "
-                  "folder is back under its limit (checked every poll).",
 }

@@ -75,10 +75,11 @@ class LimitWarningCleanupTests(unittest.TestCase):
         self.write_mapping(limit=0)
         self.assertEqual(self.sweep(), 2)
 
-    def test_a_missing_destination_keeps_the_warnings(self) -> None:
+    def test_a_missing_destination_drops_the_warnings(self) -> None:
+        # Nothing can be counted, so the warning goes; a later check raises it again if the folder returns over limit.
         os.rename(self.destination, self.destination + "_gone")
-        self.assertEqual(self.sweep(), 0)
-        self.assertEqual(self.warnings(), {self.REPO})
+        self.assertEqual(self.sweep(), 2)
+        self.assertEqual(self.warnings(), set())
 
     def test_the_check_after_a_move_clears_them_too(self) -> None:
         os.rmdir(os.path.join(self.release_dir, "a"))

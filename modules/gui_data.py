@@ -330,25 +330,6 @@ class StatusFeed:
         failed, self._new_failed = self._new_failed, []
         return failed
 
-    def count_repo_limit_warnings(self, repo: str) -> int:
-        """Count the stored limit warnings of one repository without deleting them."""
-        return self._purge_repo(repo, dry_run=True)
-
-    def clear_repo_limit_warnings(self, repo: str) -> int:
-        """Delete one repository's folder-limit warnings and drop them from the Folder limits tab."""
-        removed = self._purge_repo(repo, dry_run=False)
-        self.model.drop_repo("limits", repo)
-        self._signature = None
-        return removed
-
-    def _purge_repo(self, repo: str, dry_run: bool) -> int:
-        """Delete (or with dry_run only count) the limit warnings of one repository."""
-        connection = db_manager.open_database()
-        try:
-            return db_manager.purge_limit_warnings_for_repo(connection, repo, dry_run=dry_run)
-        finally:
-            connection.close()
-
     def count_tab(self, key: str) -> int:
         """How many stored events the tab lists (all of them, not only the rows on screen)."""
         return self._purge(key, dry_run=True)
