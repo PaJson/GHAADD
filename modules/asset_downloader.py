@@ -302,17 +302,33 @@ def _clear_resolved_limit_warnings(repo: Optional[str], reason: str) -> None:
         print(f"   ✅ {repo} is within its folder limit again ({reason}); cleared {removed} old warning(s).")
 
 
+def _drop_limit_warnings(repo: str, reason: str) -> int:
+    """Delete a repository's stored folder-limit warnings for a reason other than "back under the limit"."""
+    removed = clear_limit_warnings(repo)
+    if removed:
+        print(f"   ✅ {repo}: {reason}; cleared {removed} old folder-limit warning(s).")
+    return removed
+
+
+def _drop_warnings_of_unmapped_repositories(warned: set[str], entries: list[dict[str, Any]]) -> int:
+    """Delete the folder-limit warnings of repositories that are no longer in mapping.json."""
+    mapped = {str(entry.get("repository") or "").strip().lower() for entry in entries}
+    return sum(_drop_limit_warnings(repo, "it is no longer in mapping.json") for repo in sorted(warned - mapped))
+
+
 def clear_all_resolved_limit_warnings() -> int:
     """Re-check every repository that has folder-limit warnings on record and clear the resolved ones.
 
     Called once per poll cycle, so cleaning a folder up clears its warning without waiting for the
-    repository's next release. A repository whose folder cannot be found keeps its warnings.
+    repository's next release. Warnings of a repository that left mapping.json, or whose folder cannot be
+    found, are dropped too (a later check raises them again if the folder returns and is still over).
     """
     warned = repos_with_limit_warnings()
     if not warned:
         return 0
-    cleared = 0
-    for entry in load_mapping().get("repositories", []):
+    entries = load_mapping().get("repositories", [])
+    cleared = _drop_warnings_of_unmapped_repositories(warned, entries)
+    for entry in entries:
         repo = str(entry.get("repository") or "").strip()
         if not repo or repo.lower() not in warned:
             continue
@@ -320,6 +336,7 @@ def clear_all_resolved_limit_warnings() -> int:
         if folder_limit > 0:
             base_dir, uses_mapping, _warning = _resolve_finalized_base_directory(repo, "")
             if not uses_mapping or not os.path.isdir(base_dir):
+                cleared += _drop_limit_warnings(repo, "its folder cannot be found")
                 continue
             count = _count_repository_release_folders(base_dir, _resolve_tracked_release_type_folders(repo))
             _record_folder_count(repo, count)
@@ -379,15 +396,20 @@ def check_folder_limits() -> int:
     raised = 0
     entries = load_mapping().get("repositories", [])
     _prune_folder_counts([str(entry.get("repository") or "") for entry in entries])
+    _drop_warnings_of_unmapped_repositories(warned, entries)
     for entry in entries:
         repo = str(entry.get("repository") or "").strip()
         if not repo:
             continue
         if _resolve_repository_limit(repo) <= 0:
             _record_folder_count(repo, None)
+            if repo.lower() in warned:
+                _clear_resolved_limit_warnings(repo, "its limit is switched off")
             continue
         base_dir, uses_mapping, _warning = _resolve_finalized_base_directory(repo, "")
         if not uses_mapping or not os.path.isdir(base_dir):
+            if repo.lower() in warned:  # nothing to count: the warning returns when the folder does and is still over
+                _drop_limit_warnings(repo, "its folder cannot be found")
             continue
         if repo.lower() in warned:  # already on record: no second warning, but refresh the count / clear it
             count = _count_repository_release_folders(base_dir, _resolve_tracked_release_type_folders(repo))

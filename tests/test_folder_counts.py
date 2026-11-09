@@ -115,6 +115,44 @@ class FolderCountTests(unittest.TestCase):
         with closing(db_manager.open_database()) as connection:
             self.assertEqual(db_manager.get_repos_with_limit_warnings(connection), set())
 
+    def warned(self) -> set:
+        with closing(db_manager.open_database()) as connection:
+            return db_manager.get_repos_with_limit_warnings(connection)
+
+    def test_the_check_drops_the_warning_of_a_folder_that_cannot_be_found_and_raises_it_again_when_it_returns(self) -> None:
+        self.write_mapping(limit=2)
+        self.assertEqual(self.check(), 1)
+        moved = self.release_dir + "_away"
+        os.rename(self.release_dir, moved)
+        self.assertEqual(self.check(), 0)
+        self.assertEqual(self.warned(), set())
+        os.rename(moved, self.release_dir)
+        self.assertEqual(self.check(), 1)  # still over the limit: warned afresh
+        self.assertEqual(len(self.warned()), 1)
+
+    def test_the_check_drops_the_warning_of_a_repository_that_left_the_mapping(self) -> None:
+        self.write_mapping(limit=2)
+        self.check()
+        with open(self.mapping_path, "w", encoding="utf-8") as handle:
+            json.dump({"repositories": []}, handle)
+        self.check()
+        self.assertEqual(self.warned(), set())
+
+    def test_the_check_drops_the_warning_when_the_limit_is_switched_off(self) -> None:
+        self.write_mapping(limit=2)
+        self.check()
+        self.write_mapping(limit=0)
+        self.check()
+        self.assertEqual(self.warned(), set())
+
+    def test_the_per_poll_clean_up_drops_missing_folders_and_unmapped_repositories_too(self) -> None:
+        self.write_mapping(limit=2)
+        self.check()
+        os.rename(self.release_dir, self.release_dir + "_away")
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(asset_downloader.clear_all_resolved_limit_warnings(), 1)
+        self.assertEqual(self.warned(), set())
+
     def test_the_per_poll_clean_up_records_the_count_too(self) -> None:
         self.write_mapping(limit=2)
         self.check()

@@ -318,7 +318,6 @@ class ControlBar(ttk.Frame):
         self.poll_button = ttk.Button(polling_box, text="Poll now")
         self.single_button = ttk.Button(polling_box, text="Poll one")
         self.fetch_button = ttk.Button(polling_box, text="Fetch\u2026")
-        self.check_button = ttk.Button(polling_box, text="Check folders")
         self.detailed_log = tk.BooleanVar(value=False)
         self.log_check = ttk.Checkbutton(tools_box, text="Terminal log", variable=self.detailed_log)
         self.restart_button = ttk.Button(daemon_box, text="\u21bb Restart")  # shown only while it is needed
@@ -342,7 +341,7 @@ class ControlBar(ttk.Frame):
 
         for box, widgets in (
             (daemon_box, (self.start_button, self.stop_button, self.pause_button, self.restart_button)),
-            (polling_box, (self.poll_button, self.single_button, self.fetch_button, self.check_button)),
+            (polling_box, (self.poll_button, self.single_button, self.fetch_button)),
             (folders_box, (self.move_button, *self.folder_buttons.values())),
             (tools_box, (self.log_check, self.doctor_button, self.stats_button, self.settings_button)),
         ):
@@ -353,7 +352,6 @@ class ControlBar(ttk.Frame):
         attach_tooltip(self.poll_button, gui_tooltips.CONTROL_HELP["poll_now"])
         attach_tooltip(self.single_button, gui_tooltips.CONTROL_HELP["poll_one"])
         attach_tooltip(self.fetch_button, gui_tooltips.CONTROL_HELP["fetch_release"])
-        attach_tooltip(self.check_button, gui_tooltips.CONTROL_HELP["check_folders"])
         attach_tooltip(self.stats_button, gui_tooltips.CONTROL_HELP["stats"])
         for key, button in self.folder_buttons.items():
             attach_tooltip(button, gui_tooltips.CONTROL_HELP[f"folder_{key}"])
@@ -407,7 +405,6 @@ class ControlBar(ttk.Frame):
             (self.pause_button, view.pause_enabled),
             (self.poll_button, view.poll_enabled),
             (self.single_button, view.poll_enabled),  # the same moments as Poll now
-            (self.check_button, view.check_enabled),
             (self.log_check, view.log_enabled),
         ):
             widget.state(["!disabled"] if enabled else ["disabled"])
@@ -1673,7 +1670,7 @@ class StatusTab(ttk.Frame):
         hint: str = "",
         on_mark_read: Optional[Callable[[], None]] = None,
         on_clear: Optional[Callable[[], None]] = None,
-        on_clear_repo: Optional[Callable[[str], None]] = None,
+        on_check: Optional[Callable[[], None]] = None,
         detail: bool = False,
         filterable: bool = False,
         on_open_folder: Optional[Callable[[str], None]] = None,
@@ -1750,12 +1747,11 @@ class StatusTab(ttk.Frame):
             self.clear_button = ttk.Button(bottom, text="Clear…", command=on_clear)
             self.clear_button.grid(row=0, column=4, padx=(6, 0))
             attach_tooltip(self.clear_button, gui_tooltips.CONTROL_HELP["clear_tab"])
-        self.clear_repo_button: Optional[ttk.Button] = None  # deletes one repository's events
-        if on_clear_repo is not None:
-            self._clear_repo = on_clear_repo
-            self.clear_repo_button = ttk.Button(bottom, text="Clear selected", command=self._on_clear_repo, state="disabled")
-            self.clear_repo_button.grid(row=0, column=3, padx=(0, 6))
-            attach_tooltip(self.clear_repo_button, gui_tooltips.CONTROL_HELP["clear_repo"])
+        self.check_button: Optional[ttk.Button] = None  # Folder limits only: the daemon re-counts and drops fixed warnings
+        if on_check is not None:
+            self.check_button = ttk.Button(bottom, text="Check folders", command=on_check)
+            self.check_button.grid(row=0, column=3, padx=(0, 6))
+            attach_tooltip(self.check_button, gui_tooltips.CONTROL_HELP["check_folders"])
 
         font_spec = ttk.Style(self).lookup("Treeview", "font") or "TkDefaultFont"
         try:
@@ -1764,7 +1760,6 @@ class StatusTab(ttk.Frame):
             self._cell_font = tkfont.nametofont("TkDefaultFont")
         self._tooltip = Tooltip(self.tree)
         self.tree.bind("<<TreeviewSelect>>", self._show_detail)
-        self.tree.bind("<<TreeviewSelect>>", lambda _event: self._update_clear_repo_button(), add="+")
         self.tree.bind("<<TreeviewSelect>>", lambda _event: self._update_open_folder_button(), add="+")
         self.tree.bind("<Double-1>", self._on_double_click)
         self.tree.bind("<Return>", self._on_double_click)
@@ -1981,17 +1976,6 @@ class StatusTab(ttk.Frame):
         self._hide_tip()
 
     # ----- actions -----
-
-    def _update_clear_repo_button(self) -> None:
-        """Enable "Clear selected" only while a row with a repository is selected."""
-        if self.clear_repo_button is not None:
-            self.clear_repo_button.state(["!disabled"] if self.selected_repo() else ["disabled"])
-
-    def _on_clear_repo(self) -> None:
-        """Clear the selected repository's rows (after the caller's confirmation)."""
-        repo = self.selected_repo()
-        if repo:
-            self._clear_repo(repo)
 
     def selected_repo(self) -> str:
         """Return the repository of the selected row, or ""."""
@@ -3862,7 +3846,6 @@ class MainWindow(tk.Tk):
         self.control_bar.poll_button.configure(command=self._on_poll_now)
         self.control_bar.single_button.configure(command=self._on_single_poll)
         self.control_bar.fetch_button.configure(command=self._on_fetch)
-        self.control_bar.check_button.configure(command=self._on_check_folders)
         self.control_bar.log_check.configure(command=self._on_log_toggle)
         self.control_bar.restart_button.configure(command=self._on_restart)
         self.control_bar.doctor_button.configure(command=self._open_doctor)
@@ -4015,8 +3998,9 @@ class MainWindow(tk.Tk):
                     if definition.key == "warnings" else ""),
             on_open_folder=self._open_repo_folder,  # every event tab; Unmapped has no folder to open
             on_mark_read=(lambda key=definition.key: self._mark_status_read(key)) if definition.counter else None,
-            on_clear=lambda key=definition.key: self._clear_status_tab(key),
-            on_clear_repo=(lambda repo: self._clear_repo_limit_warnings(repo)) if definition.key == "limits" else None,
+            # Folder limits has no Clear buttons: a check drops the fixed warnings, the rest stay until fixed
+            on_clear=None if definition.key == "limits" else (lambda key=definition.key: self._clear_status_tab(key)),
+            on_check=self._on_check_folders if definition.key == "limits" else None,
             detail=True,
             filterable=definition.key in self.FILTERABLE_TABS,
         )
@@ -4253,31 +4237,6 @@ class MainWindow(tk.Tk):
         self._set_status_title(key, self.status_feed.model.title(key))
         self.set_status(f"Cleared {removed:,} {title.lower()} event(s).")
 
-    def _clear_repo_limit_warnings(self, repo: str) -> None:
-        """Delete one repository's folder-limit warnings (after a confirmation that names the number)."""
-        try:
-            count = self.status_feed.count_repo_limit_warnings(repo)
-        except Exception as exc:
-            self.set_status(f"Cannot read the database: {describe_error(exc)}")
-            return
-        if count == 0:
-            self.set_status(f"No folder-limit warnings for {repo}.")
-            return
-        if not messagebox.askyesno(
-            "Clear folder-limit warnings",
-            f"Delete {count:,} folder-limit warning(s) for {repo}?\n\n"
-            "They also clear themselves once the folder is back under its limit.",
-            icon="warning", default="no", parent=self,
-        ):
-            return
-        try:
-            removed = self.status_feed.clear_repo_limit_warnings(repo)
-        except Exception as exc:
-            self.set_status(f"Could not clear the warnings: {describe_error(exc)}")
-            return
-        self._show_event_rows("limits", None)
-        self.set_status(f"Cleared {removed:,} folder-limit warning(s) for {repo}.")
-
     def _terminal_log_active(self) -> bool:
         """True when somebody can see the Terminal log tab (window not minimized, its tab selected)."""
         return not self._window_hidden() and self.notebook.select() == str(self.log_tab)
@@ -4360,9 +4319,11 @@ class MainWindow(tk.Tk):
                     self.set_status(error or "Daemon restarting with the current settings\u2026")
                     if error is None:
                         self._starting_since = self._gui_started_at = now
-            self.control_bar.apply_view(
-                gui_daemon.build_view(self._snapshot, now, self._starting_since, self._stopping_since)
-            )
+            view = gui_daemon.build_view(self._snapshot, now, self._starting_since, self._stopping_since)
+            self.control_bar.apply_view(view)
+            check_button = self._status_tabs["limits"].check_button  # needs the daemon: it does the counting
+            if check_button is not None:
+                check_button.state(["!disabled"] if view.check_enabled else ["disabled"])
             self.log_tab.set_daemon_state(self._snapshot.running, self._snapshot.log_on)
             self._update_queue_label(now)
             self._update_tray_icon()
@@ -4495,10 +4456,11 @@ class MainWindow(tk.Tk):
         self.mappings_tab.refresh()
 
     def _on_check_folders(self) -> None:
-        """Check folders button: ask the daemon to check destinations and folder limits."""
+        """Folder limits tab's Check folders button: ask the daemon to check destinations and folder limits."""
         self._report(
             gui_daemon.do_check_folders(),
-            "Folder check requested; the counts in the Limit column update within a few seconds.",
+            "Folder check requested; fixed warnings leave this list and the counts in the Limit column update "
+            "within a few seconds.",
         )
 
     def _on_log_toggle(self) -> None:
