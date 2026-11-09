@@ -1576,6 +1576,25 @@ def get_job_history(connection: sqlite3.Connection) -> list[tuple[Any, Any, Any,
     return [(row[0], row[1], row[2], float(row[3])) for row in rows]
 
 
+def get_latest_completed_jobs(connection: sqlite3.Connection) -> list[tuple[Any, Any, str, Optional[int], Optional[int]]]:
+    """Newest COMPLETED job per repository and release type as (repo, tag, type, folder_bytes, folder_files).
+
+    "Newest" is by creation time, not by version. A job without a release type counts as a Release; the sizes are
+    None for a job from before folder sizes were measured (read-only; feeds the Stats "Latest per repository" line).
+    """
+    rows = connection.execute(
+        """
+        SELECT repo, tag, release_type, folder_bytes, folder_files FROM job_queue
+        WHERE status = 'COMPLETED' ORDER BY created_at, id
+        """
+    ).fetchall()
+    newest: dict[tuple[str, str], tuple[Any, Any, str, Optional[int], Optional[int]]] = {}
+    for repo, tag, release_type, folder_bytes, folder_files in rows:
+        kind = "Pre-release" if release_type == "Pre-release" else "Release"
+        newest[(str(repo).lower(), kind)] = (repo, tag, kind, folder_bytes, folder_files)
+    return list(newest.values())
+
+
 def add_job_folder_size(connection: sqlite3.Connection, job_id: int, folder_bytes: int, folder_files: int) -> None:
     """Add the size of one of a job's folders (finished, or quarantined in Partial) to what the job brought in."""
     connection.execute(

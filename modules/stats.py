@@ -5,8 +5,9 @@ Read-only: it reads mapping.json and state.db and never writes either. The figur
   * job_queue: one row per release GHAADD was told about (status COMPLETED / FAILED / SUPERSEDED / PENDING),
     counted per period and per repository;
   * job_queue.folder_bytes (measured per job) for the data volumes: every build counts, also each build of a
-    reused tag; it is what was downloaded, not what is on disk now. asset_state (newest build per release) only
-    feeds the "Newest build of each release" line and the fallback for jobs from before 2.4.
+    reused tag; it is what was downloaded, not what is on disk now. The "latest" block (newest completed Release and
+    Pre-release per repository) is the size of a mirror that kept only those; asset_state is the fallback for
+    jobs from before 2.4. report["tracked"] (newest build per TAG) stays in the JSON only.
 
 collect() builds a plain dict (also what `--stats --json` prints); format_report() renders it as text. The window
 only fills the dict, so the dialog and the CLI show the same numbers. Tests: tests/test_stats.py.
@@ -228,6 +229,24 @@ def _busiest_repositories(
     return ranked
 
 
+def latest_per_repository(
+    latest_jobs: Sequence[tuple[str, str, str, Optional[int], Optional[int]]], sizes: Mapping[str, Mapping[str, int]]
+) -> dict[str, int]:
+    """Count the newest Release and the newest Pre-release of every repository and add up their size.
+
+    The size is the job's measured folder; a job without one (before 2.4) falls back to asset_state by tag.
+    """
+    result = {"releases": 0, "prereleases": 0, "files": 0, "bytes": 0}
+    for repo, tag, kind, folder_bytes, folder_files in latest_jobs:
+        result["prereleases" if kind == "Pre-release" else "releases"] += 1
+        if folder_bytes is None:
+            fallback = sizes.get(f"{repo}|{tag}", {})
+            folder_bytes, folder_files = fallback.get("bytes", 0), fallback.get("files", 0)
+        result["bytes"] += int(folder_bytes)
+        result["files"] += int(folder_files or 0)
+    return result
+
+
 def _biggest(
     sizes: Mapping[str, Mapping[str, int]], limit: Optional[int]
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, int]]:
@@ -309,7 +328,7 @@ def list_titles(report: Mapping[str, Any]) -> tuple[str, str, str]:
     return (
         heading(len(report["busiest_repositories"]), totals["busiest_repositories"], "busiest repositories (most jobs)"),
         heading(len(report["biggest_repositories"]), totals["biggest_repositories"],
-                "biggest repositories (newest build of each release)"),
+                "biggest repositories (everything downloaded)"),
         heading(len(report["biggest_releases"]), totals["biggest_releases"], "biggest single releases"),
     )
 
@@ -325,6 +344,7 @@ def build(
     date_range: Optional[DateRange] = None,
     job_sizes: Sequence[tuple[str, str, float, int, int]] = (),
     whole_history: bool = False,
+    latest_jobs: Sequence[tuple[str, str, str, Optional[int], Optional[int]]] = (),
 ) -> dict[str, Any]:
     """Assemble the report from already loaded data (no file or database access; this is what the tests feed).
 
@@ -435,6 +455,7 @@ def build(
             "files": sum(size["files"] for size in sizes.values()),
             "releases": len(sizes),
         },
+        "latest": latest_per_repository(latest_jobs, sizes),
         "storage": {},
     }
 
@@ -449,6 +470,7 @@ def load() -> dict[str, Any]:
             "cycles": db_manager.get_cycle_times(connection),
             "sizes": db_manager.get_release_sizes(connection),
             "job_sizes": db_manager.get_job_folder_sizes(connection),
+            "latest_jobs": db_manager.get_latest_completed_jobs(connection),
             "folder_counts": db_manager.get_folder_counts(connection),
         }
         storage = db_manager.get_storage_stats(connection)
@@ -473,6 +495,7 @@ def report_from(
     report = build(
         data["entries"], data["jobs"], data["cycles"], data["sizes"], data["folder_counts"],
         time.time() if now is None else now, top, date_range, data.get("job_sizes", ()), whole_history,
+        data.get("latest_jobs", ()),
     )
     report["storage"] = data["storage"]
     return report
@@ -579,9 +602,10 @@ def summary_lines(report: Mapping[str, Any]) -> list[str]:
             f"  {reliability['completed']:,} completed, {reliability['failed']:,} failed ({success} of the finished ones "
             f"succeeded), {reliability['superseded']:,} superseded by a newer release, {reliability['pending']:,} waiting"
         )
-    tracked = report["tracked"]
+    latest = report["latest"]
     lines.append(
-        f"  Newest build of each release: {tracked['releases']:,} releases, {tracked['files']:,} files, {format_bytes(tracked['bytes'])}"
+        f"  Latest per repository: {latest['releases']:,} releases + {latest['prereleases']:,} pre-releases, "
+        f"{latest['files']:,} files, {format_bytes(latest['bytes'])}"
     )
     return lines
 
