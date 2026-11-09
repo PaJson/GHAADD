@@ -4,9 +4,9 @@ Read-only: it reads mapping.json and state.db and never writes either. The figur
   * mapping.json: how many repositories are mapped, active, without a destination, ...
   * job_queue: one row per release GHAADD was told about (status COMPLETED / FAILED / SUPERSEDED / PENDING),
     counted per period and per repository;
-  * asset_state: the size of every file kept per release, joined to the job times, for the data volumes.
-    ("Data" is what the releases weigh on disk when they were fetched; it is not network traffic and a file
-    that was fetched twice counts once.)
+  * job_queue.folder_bytes (measured per job) for the data volumes: every build counts, also each build of a
+    reused tag; it is what was downloaded, not what is on disk now. asset_state (newest build per release) only
+    feeds the "Newest build of each release" line and the fallback for jobs from before 2.4.
 
 collect() builds a plain dict (also what `--stats --json` prints); format_report() renders it as text. The window
 only fills the dict, so the dialog and the CLI show the same numbers. Tests: tests/test_stats.py.
@@ -309,7 +309,7 @@ def list_titles(report: Mapping[str, Any]) -> tuple[str, str, str]:
     return (
         heading(len(report["busiest_repositories"]), totals["busiest_repositories"], "busiest repositories (most jobs)"),
         heading(len(report["biggest_repositories"]), totals["biggest_repositories"],
-                "biggest repositories (total size of the releases on record)"),
+                "biggest repositories (newest build of each release)"),
         heading(len(report["biggest_releases"]), totals["biggest_releases"], "biggest single releases"),
     )
 
@@ -491,6 +491,8 @@ def sparkline(values: Sequence[int]) -> str:
     return "".join(SPARK_BLOCKS[min(len(SPARK_BLOCKS) - 1, int(value / peak * (len(SPARK_BLOCKS) - 1) + 0.5))] for value in values)
 
 
+# Files and Data count every build ever downloaded (a reused tag such as "latest" once per build), not what is on disk.
+ACTIVITY_HEADING = "Activity (Files and Data = everything downloaded)"
 PERIOD_HEADERS = ("Period", "Jobs", "Done", "Failed", "Replaced", "Per day", "Polls", "Files", "Data")
 BUSIEST_HEADERS = ("Repository", "Jobs", "30 days", "Failed", "Data", "Latest job")
 BIGGEST_HEADERS = ("Repository", "Total", "Releases", "Files", "Average", "Largest")
@@ -579,7 +581,7 @@ def summary_lines(report: Mapping[str, Any]) -> list[str]:
         )
     tracked = report["tracked"]
     lines.append(
-        f"  Kept on record: {tracked['releases']:,} releases, {tracked['files']:,} files, {format_bytes(tracked['bytes'])}"
+        f"  Newest build of each release: {tracked['releases']:,} releases, {tracked['files']:,} files, {format_bytes(tracked['bytes'])}"
     )
     return lines
 
@@ -614,7 +616,7 @@ def format_report(report: Mapping[str, Any]) -> str:
     """Human-readable text version of collect()."""
     lines = [f"GHAADD {report['version']} statistics ({report['generated_at']})", "", *summary_lines(report)]
 
-    lines += ["", "Activity", *_table(PERIOD_HEADERS, period_rows(report))]
+    lines += ["", ACTIVITY_HEADING, *_table(PERIOD_HEADERS, period_rows(report))]
     daily = report["daily"]
     lines += ["", f"{daily_title(report)} (oldest first, busiest day = {max((d['jobs'] for d in daily), default=0)})",
               "  " + sparkline([day["jobs"] for day in daily])]

@@ -3382,7 +3382,7 @@ class StatsDialog(tk.Toplevel):
         self._overview_width = 0
         self.overview_text.bind("<Configure>", self._on_overview_resized)  # lines re-wrap when the width changes
         self.overview_text.bind("<MouseWheel>", lambda _event: "break")  # it is sized to fit, never scrolled
-        ttk.Label(overview, text="Activity", font=self._bold).grid(row=2, column=0, sticky="w", pady=(10, 2))
+        ttk.Label(overview, text=stats.ACTIVITY_HEADING, font=self._bold).grid(row=2, column=0, sticky="w", pady=(10, 2))
         self.periods = self._make_table(overview, stats.PERIOD_HEADERS, row=3)
         self.notebook.add(overview, text="Overview")
 
@@ -3649,7 +3649,7 @@ class StatsDialog(tk.Toplevel):
         self._show_lists()
         self.daily_title.configure(text=stats.daily_title(report))
         self._draw_chart()
-        self.footer.configure(text="  |  ".join(stats.storage_lines(report)) + "   (data sizes are those of the releases on record)")
+        self.footer.configure(text="  |  ".join(stats.storage_lines(report)) + "   (the newest build of each release only; older builds of a reused tag are not in these sizes)")
 
     def _shown_report(self) -> dict:
         """The report cut to what the two "Show" drop-downs ask for (what is on screen and what Copy gives)."""
