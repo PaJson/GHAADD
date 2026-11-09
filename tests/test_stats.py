@@ -383,6 +383,12 @@ class TextReportTests(unittest.TestCase):
                         "Top 4 biggest repositories", "Top 5 biggest single releases"):
             self.assertIn(heading, self.text)
 
+    def test_the_two_kinds_of_size_are_worded_apart(self) -> None:
+        # Lifetime Files/Data count every build downloaded; the tracked line is the newest build per release only.
+        self.assertIn("Newest build of each release:", self.text)
+        self.assertNotIn("Kept on record", self.text)
+        self.assertIn("everything downloaded", self.text)
+
     def test_the_figures_are_readable(self) -> None:
         self.assertIn("4 mapped: 3 active, 1 inactive, 1 without a destination", self.text)
         self.assertIn("Last 24 hours", self.text)
