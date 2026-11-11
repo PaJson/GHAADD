@@ -377,7 +377,7 @@ class TrayIcon:
                     lambda *_: self._actions.put(ACTION_RESTART_DAEMON),
                     enabled=_dynamic(lambda _item: self._menu_state.can_restart_daemon),
                 ),
-                pystray.MenuItem("Restart GUI",lambda *_: self._actions.put(ACTION_RESTART_GUI)),
+                pystray.MenuItem(f"Restart {self._app_name}", lambda *_:self._actions.put(ACTION_RESTART_GUI)),
                 pystray.Menu.SEPARATOR,
                 pystray.MenuItem(f"Quit {self._app_name}", lambda *_: self._actions.put(ACTION_QUIT)),
             )
