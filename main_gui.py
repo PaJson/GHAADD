@@ -4454,7 +4454,7 @@ class MainWindow(tk.Tk):
         Settings -> "Save and restart GUI" passes confirm=False: that button already says what it does.
         """
         if confirm and not messagebox.askyesno(
-            "Restart GUI",
+            f"Restart {APP_NAME}",
             "Restart the GUI window?\n\nThe window closes and opens again with the current settings. "
             "The daemon is not touched and keeps running.",
             parent=self,
