@@ -30,7 +30,7 @@ STATE_COLORS = {
 }
 ATTENTION_COLOR = "#d32f2f"  # the red dot: something unread needs a look
 
-ACTION_SHOW = "show"
+ACTION_SHOW = "show"  # bring the window forward (left click on the icon); never hides it
 ACTION_TOGGLE = "toggle"  # show the window if it is hidden, hide it if it is open
 ACTION_START = "start"
 ACTION_POLL = "poll"
@@ -350,10 +350,12 @@ class TrayIcon:
             import pystray
 
             menu = pystray.Menu(
+                # A left click on the icon only ever brings the window forward (it never hides it); the item is not
+                # listed in the menu. The menu's own first entry still toggles Hide/Show.
+                pystray.MenuItem("Show", lambda *_: self._actions.put(ACTION_SHOW), default=True, visible=False),
                 pystray.MenuItem(
                     lambda _item: toggle_label(self._app_name, self._menu_state.window_visible),
                     lambda *_: self._actions.put(ACTION_TOGGLE),
-                    default=True,
                 ),
                 pystray.MenuItem(
                     "Start daemon", lambda *_: self._actions.put(ACTION_START), visible=_dynamic(lambda _item: self._menu_state.can_start)
