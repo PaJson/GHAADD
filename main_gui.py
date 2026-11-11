@@ -329,6 +329,10 @@ class ControlBar(ttk.Frame):
         self.doctor_button = ttk.Button(tools_box, text="Doctor")
         self.stats_button = ttk.Button(tools_box, text="Stats")
         self.settings_button = ttk.Button(tools_box, text="Settings\u2026")
+        # Restart is a small menu: the GUI window or the daemon (each asks first; see MainWindow).
+        self.restart_menu_button = ttk.Menubutton(tools_box, text="Restart \u25be")
+        self.restart_menu = tk.Menu(self.restart_menu_button, tearoff=False)
+        self.restart_menu_button.configure(menu=self.restart_menu)
         bold = tkfont.nametofont("TkDefaultFont").copy()
         bold.configure(weight="bold")
         self._attention_font = bold  # keep a reference or Tk drops it
@@ -349,7 +353,7 @@ class ControlBar(ttk.Frame):
             (polling_box, (self.poll_button, self.single_button, self.fetch_button)),
             (folders_box, (self.move_button, *(b for k, b in self.folder_buttons.items() if k != "logs"))),
             (logging_box, (self.folder_buttons["logs"], self.log_check)),
-            (tools_box, (self.doctor_button, self.stats_button, self.settings_button)),
+            (tools_box, (self.doctor_button, self.stats_button, self.settings_button, self.restart_menu_button)),
         ):
             box.pack(side="left", padx=(0, 10))
             for column, widget in enumerate(widgets):
@@ -359,6 +363,7 @@ class ControlBar(ttk.Frame):
         attach_tooltip(self.single_button, gui_tooltips.CONTROL_HELP["poll_one"])
         attach_tooltip(self.fetch_button, gui_tooltips.CONTROL_HELP["fetch_release"])
         attach_tooltip(self.stats_button, gui_tooltips.CONTROL_HELP["stats"])
+        attach_tooltip(self.restart_menu_button, gui_tooltips.CONTROL_HELP["restart_menu"])
         for key, button in self.folder_buttons.items():
             attach_tooltip(button, gui_tooltips.CONTROL_HELP[f"folder_{key}"])
         attach_tooltip(self.move_button, gui_tooltips.CONTROL_HELP["move_complete"])
@@ -2107,7 +2112,7 @@ class SettingsDialog(tk.Toplevel):
         row(
             logging_box,
             3,
-            "Terminal log tab lines (restart GUI)",
+            "Terminal log tab lines (needs GUI restart)",
             spin(logging_box, "terminal_log_lines", *config_manager.GUI_TERMINAL_LOG_LINES_RANGE),
             "terminal_log_lines",
         )
@@ -3863,6 +3868,9 @@ class MainWindow(tk.Tk):
         self.control_bar.restart_button.configure(command=self._on_restart)
         self.control_bar.doctor_button.configure(command=self._open_doctor)
         self.control_bar.stats_button.configure(command=self._open_stats)
+        self.control_bar.restart_menu.add_command(label="Restart GUI", command=self._on_restart_gui)
+        self.control_bar.restart_menu.add_command(label="Restart daemon", command=self._on_restart_daemon)
+        self.control_bar.restart_menu.configure(postcommand=self._sync_restart_menu)
         for key, button in self.control_bar.folder_buttons.items():
             button.configure(command=lambda key=key: self._open_work_folder(key))
         self.control_bar.move_button.configure(command=self._on_move_complete)
@@ -4419,7 +4427,7 @@ class MainWindow(tk.Tk):
         """Restart button: after a confirmation, stop the daemon and start it again."""
         if not messagebox.askyesno(
             "Restart daemon",
-            "Restart the polling daemon to apply the changed settings?\n\n"
+            "Restart the polling daemon?\n\n"
             "The job in progress finishes first, then the daemon stops and starts again.",
             parent=self,
         ):
@@ -4428,6 +4436,34 @@ class MainWindow(tk.Tk):
             self._stopping_since = time.time()
             self._restart_pending = True
             self._update_daemon_view()
+
+    def _sync_restart_menu(self) -> None:
+        """Grey out "Restart daemon" unless a daemon runs and no start/stop is in progress."""
+        usable = bool(self._snapshot.running) and not self._is_stopping(time.time())
+        self.control_bar.restart_menu.entryconfigure("Restart daemon", state="normal" if usable else "disabled")
+
+    def _on_restart_daemon(self) -> None:
+        """Restart menu: restart the daemon (the same confirmation and path as the Restart button)."""
+        if not self._snapshot.running:
+            self.set_status("No daemon is running. Use Start.")
+            return
+        self._on_restart()
+
+    def _on_restart_gui(self) -> None:
+        """Restart menu: after a confirmation, start a new GUI that takes over once this window has closed."""
+        if not messagebox.askyesno(
+            "Restart GUI",
+            "Restart the GUI window?\n\nThe window closes and opens again with the current settings. "
+            "The daemon is not touched and keeps running.",
+            parent=self,
+        ):
+            return
+        try:
+            gui_instance.start_restarted_gui(os.path.abspath(__file__), self._theme_name)
+        except OSError as exc:
+            self.set_status(f"Could not restart the GUI: {describe_error(exc)}")
+            return
+        self._on_close()
 
     def _on_pause(self) -> None:
         """Pause/Resume button: toggle the global pause."""
@@ -4641,6 +4677,12 @@ class MainWindow(tk.Tk):
                         self._on_single_poll()
                     elif action == gui_tray.ACTION_PAUSE:
                         self._on_pause()
+                    elif action in (gui_tray.ACTION_RESTART_GUI, gui_tray.ACTION_RESTART_DAEMON):
+                        self._show_from_tray()  # the confirmation must be seen, not hidden with the window
+                        if action == gui_tray.ACTION_RESTART_GUI:
+                            self._on_restart_gui()
+                            return
+                        self._on_restart_daemon()
                     elif action == gui_tray.ACTION_QUIT:
                         self._on_close()
                         return
@@ -4933,8 +4975,13 @@ def main() -> None:
     parser.add_argument("--theme", help="ttk theme to use (default: native Windows theme; try 'clam')")
     parser.add_argument("--minimized", action="store_true", help="Start minimized (like the minimize button: in the tray, or on the taskbar), whatever the Settings say.")
     parser.add_argument("--start-daemon", action="store_true", help="Start the daemon when the window opens if none is running, whatever the Settings say.")
+    parser.add_argument("--restarted", action="store_true", help=argparse.SUPPRESS)  # set by Restart GUI
     args = parser.parse_args()
-    if not gui_instance.acquire():
+    if args.restarted:
+        if not gui_instance.acquire_waiting():
+            gui_instance.request_show()  # the old window did not close: bring it forward instead of staying silent
+            return
+    elif not gui_instance.acquire():
         # Another window is already open (maybe hidden in the tray): bring it forward instead of opening a second one.
         # This also holds for a start that asked to be minimized: someone starting the GUI again most likely cannot
         # find the window, so showing it is more useful than staying quiet.
