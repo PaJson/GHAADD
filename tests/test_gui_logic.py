@@ -225,6 +225,32 @@ class SettingsFormTests(unittest.TestCase):
             self.assertIn(fragment, joined)
 
 
+class NeedsGuiRestartTests(unittest.TestCase):
+    """Save & Restart is offered only for settings the GUI reads at its start."""
+
+    RUNNING: dict[str, Any] = {
+        "terminal_log_lines": "5000", "tray": True, "notifications": True, "minimize_to_tray": False, "close_to_tray": False,
+    }
+
+    def test_an_unchanged_form_needs_no_restart(self) -> None:
+        """The form equal to what the GUI runs with: nothing to restart for."""
+        self.assertFalse(gui_forms.needs_gui_restart(dict(self.RUNNING, interval="300"), self.RUNNING))
+
+    def test_a_changed_start_setting_needs_a_restart(self) -> None:
+        """A tray choice or the log lines differing from the running GUI asks for a restart."""
+        self.assertTrue(gui_forms.needs_gui_restart(dict(self.RUNNING, tray=False), self.RUNNING))
+        self.assertTrue(gui_forms.needs_gui_restart(dict(self.RUNNING, terminal_log_lines="15000"), self.RUNNING))
+
+    def test_a_number_typed_with_zeros_is_the_same_value(self) -> None:
+        """"05000" is 5000: no restart for a difference that is only in the writing."""
+        self.assertFalse(gui_forms.needs_gui_restart(dict(self.RUNNING, terminal_log_lines="05000"), self.RUNNING))
+
+    def test_launch_options_and_daemon_settings_do_not_count(self) -> None:
+        """Start minimized, start daemon and the polling settings are not read at GUI start in a way a restart applies."""
+        form = dict(self.RUNNING, start_minimized=True, start_daemon=True, interval="60")
+        self.assertFalse(gui_forms.needs_gui_restart(form, self.RUNNING))
+
+
 class OverviewTests(unittest.TestCase):
     NOW = 1_800_000_000.0
 

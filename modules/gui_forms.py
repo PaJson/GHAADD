@@ -346,6 +346,22 @@ def build_viewer_changes(form: Mapping[str, Any]) -> FormResult:
     return result
 
 
+# Settings of the form that the GUI reads only while it starts (a restart applies them). The two launch options
+# (start_minimized, start_daemon) are not here: a restarted GUI deliberately ignores them.
+GUI_START_KEYS = ("terminal_log_lines", "tray", "notifications", "minimize_to_tray", "close_to_tray")
+
+
+def _comparable(value: Any) -> str:
+    """Return a form value as text for comparing: numbers as written or typed ("015000") compare equal."""
+    text = str(value).strip()
+    return str(int(text)) if text.isdigit() else text
+
+
+def needs_gui_restart(form: Mapping[str, Any], running: Mapping[str, Any]) -> bool:
+    """Return True when a setting that is read at GUI start differs from what the running GUI started with."""
+    return any(_comparable(form.get(key)) != _comparable(running.get(key)) for key in GUI_START_KEYS if key in running)
+
+
 def build_settings_changes(form: Mapping[str, Any]) -> FormResult:
     """Validate the Settings dialog; `changes` maps dotted config.json keys to values."""
     result = FormResult()

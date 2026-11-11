@@ -2018,6 +2018,7 @@ class SettingsDialog(tk.Toplevel):
         on_warnings_saved: Optional[Callable[[], None]] = None,
         on_credentials_saved: Optional[Callable[[str], None]] = None,
         on_restart_gui: Optional[Callable[[], None]] = None,
+        running_gui_settings: Optional[dict[str, Any]] = None,
     ) -> None:
         """Build the Settings dialog from gui_forms.SETTINGS_KEYS; the callbacks report saves to the main window."""
         super().__init__(master)
@@ -2025,7 +2026,7 @@ class SettingsDialog(tk.Toplevel):
         self.resizable(False, False)
         self.transient(master)  # type: ignore[arg-type]
         self._on_saved = on_saved
-        self._on_restart_gui = on_restart_gui  # "Save and restart GUI": called after a successful save
+        self._on_restart_gui = on_restart_gui  # "Save & Restart": called after a successful save
         self._on_warnings_saved = on_warnings_saved  # the warning checklist saves by itself; tell the main window
         self._on_credentials_saved = on_credentials_saved  # so does the Gmail & GitHub window
 
@@ -2196,7 +2197,7 @@ class SettingsDialog(tk.Toplevel):
             body,
             text="Changes apply the next time the daemon starts (new-repository defaults apply at once). "
             "The System tray and Startup choices and the terminal log tab lines apply the next time the GUI starts: "
-            "use \"Save and restart GUI\".",
+            "use \"Save & Restart\".",
             foreground=COLOR_MUTED,
             wraplength=860,
         ).grid(
@@ -2223,15 +2224,26 @@ class SettingsDialog(tk.Toplevel):
         attach_tooltip(viewer_button, gui_tooltips.CONTROL_HELP["viewer"])
         ttk.Button(buttons, text="Cancel", command=self._close_request).grid(row=0, column=2, padx=(0, 6))
         if on_restart_gui is not None:
-            restart_save = ttk.Button(buttons, text="Save and restart GUI", command=lambda: self._save(restart=True))
-            restart_save.grid(row=0, column=3, padx=(0, 6))
-            attach_tooltip(restart_save, gui_tooltips.CONTROL_HELP["save_restart_gui"])
+            self._restart_save = ttk.Button(buttons, text="Save & Restart", command=lambda: self._save(restart=True))
+            self._restart_save.grid(row=0, column=3, padx=(0, 6))
+            attach_tooltip(self._restart_save, gui_tooltips.CONTROL_HELP["save_restart_gui"])
+            # Enabled only while a setting that is read at GUI start differs from what this GUI is running with.
+            self._running_gui = dict(running_gui_settings or {})
+            for var in self.vars.values():
+                var.trace_add("write", lambda *_: self._sync_restart_button())
+            self._sync_restart_button()
         ttk.Button(buttons, text="Save", command=self._save).grid(row=0, column=4)
 
         self.bind("<Escape>", lambda _event: self._close_request())
         self.protocol("WM_DELETE_WINDOW", self._close_request)
         center_dialog(self, master, focus=first_entry)
         self.grab_set()
+
+    def _sync_restart_button(self) -> None:
+        """Enable "Save & Restart" only while the form holds a setting that needs a GUI restart."""
+        form = {key: var.get() for key, var in self.vars.items()}
+        needed = gui_forms.needs_gui_restart(form, self._running_gui)
+        self._restart_save.state(["!disabled"] if needed else ["disabled"])
 
     def _close_request(self) -> None:
         """Escape, Cancel and the window's X: ask first when the form holds changes that were not saved."""
@@ -3809,7 +3821,13 @@ class MainWindow(tk.Tk):
     _dark_active = False  # the mode in use, for the static style helper
     MIN_SIZE = (1080, 520)  # narrower and the editor's last column (Active / Shared folder / buttons) is cut off
 
-    def __init__(self, theme: Optional[str] = None, start_minimized: bool = False, start_daemon: bool = False) -> None:
+    def __init__(
+        self,
+        theme: Optional[str] = None,
+        start_minimized: bool = False,
+        start_daemon: bool = False,
+        restarted: bool = False,
+    ) -> None:
         """Build the main window: theme, tabs, control bar, footer, timers, tray and the single-instance poll."""
         super().__init__()
         self.title(APP_TITLE)
@@ -3853,6 +3871,9 @@ class MainWindow(tk.Tk):
         self._notifications = config_manager.get_gui_notifications_enabled(config)
         self._silenced_warning_types = set(config_manager.get_gui_silenced_warning_types(config))
         self._minimize_to_tray = config_manager.get_gui_minimize_to_tray(config)
+        # What this GUI started with, for the Settings window's "Save & Restart" (enabled while the form differs).
+        running_form = gui_data.load_settings_form()
+        self._running_gui_settings = {key: running_form[key] for key in gui_forms.GUI_START_KEYS}
         self._close_to_tray = config_manager.get_gui_close_to_tray(config)
         self._notified_warning_id: Optional[int] = None  # newest warning already announced (None = not looked yet)
         self._limit_tracker = gui_tray.NewItemTracker()
@@ -3934,9 +3955,11 @@ class MainWindow(tk.Tk):
         self._refresh_status_tabs()  # titles and read marks from the start, not after the first tick
         self._refresh_doctor_attention()
         self._start_tray(config)
+        # A restart (Settings -> Save & Restart) only applies settings: the launch options of the settings (start
+        # minimized, start the daemon) would hide the window or start a daemon that was stopped on purpose.
         self._apply_launch_options(
-            start_minimized or config_manager.get_gui_start_minimized(config),
-            start_daemon or config_manager.get_gui_start_daemon(config),
+            start_minimized or (not restarted and config_manager.get_gui_start_minimized(config)),
+            start_daemon or (not restarted and config_manager.get_gui_start_daemon(config)),
         )
 
     def _apply_launch_options(self, start_minimized: bool, start_daemon: bool) -> None:
@@ -4451,7 +4474,7 @@ class MainWindow(tk.Tk):
     def _on_restart_gui(self, confirm: bool = True) -> None:
         """Start a new GUI that takes over once this window has closed (tray menu: after a confirmation).
 
-        Settings -> "Save and restart GUI" passes confirm=False: that button already says what it does.
+        Settings -> "Save & Restart" passes confirm=False: that button already says what it does.
         """
         if confirm and not messagebox.askyesno(
             f"Restart {APP_NAME}",
@@ -4549,6 +4572,7 @@ class MainWindow(tk.Tk):
             self._reload_silenced_warnings,
             self._after_credentials_saved,
             lambda: self._on_restart_gui(confirm=False),
+            self._running_gui_settings,
         )
 
     def _after_credentials_saved(self, message: str) -> None:
@@ -4996,7 +5020,9 @@ def main() -> None:
         gui_instance.request_show()
         return
     try:
-        MainWindow(theme=args.theme, start_minimized=args.minimized, start_daemon=args.start_daemon).mainloop()
+        MainWindow(
+            theme=args.theme, start_minimized=args.minimized, start_daemon=args.start_daemon, restarted=args.restarted
+        ).mainloop()
     finally:
         gui_instance.release()
 

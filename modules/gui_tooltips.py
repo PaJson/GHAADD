@@ -136,7 +136,7 @@ CONTROL_HELP = {
                        "does a single run and exits when this is off. Applies the next time the daemon starts.",
     "tray": "Show a GHAADD icon in the system tray (the notification area). Its menu shows or hides the window and "
             "controls the daemon, and its colour shows the daemon's state. Needs the optional packages "
-            "(pip install -r requirements-optional.txt). Applies after restarting the GUI (Settings -> Save and restart GUI).",
+            "(pip install -r requirements-optional.txt). Applies after restarting the GUI (Settings -> Save & Restart).",
     "notifications": "Pop up a notification for new warnings, failed jobs, a stopped daemon, new folder-limit warnings and "
                      "new unmapped repositories. Only while the window is hidden or minimized. Applies the next time the GUI starts.",
     "minimize_to_tray": "Minimizing hides the window in the tray instead of leaving it on the taskbar. "
@@ -167,7 +167,8 @@ CONTROL_HELP = {
                "Click to restart it: the job in progress finishes, the daemon stops,\n"
                "then starts again with the new settings.",
     "save_restart_gui": "Save the settings, then restart the GUI window so the settings that are read when it starts "
-                        "(tray, startup, terminal log tab lines, refresh times) apply at once.\n"
+                        "(the tray choices and the terminal log tab lines) apply at once. Available while one of them "
+                        "differs from what this window is running with.\n"
                         "The daemon is not touched and keeps running.",
     "restart_version": "The daemon runs {daemon}, this app is {app}.\n"
                        "Click to restart it: the job in progress finishes, the daemon stops,\n"
