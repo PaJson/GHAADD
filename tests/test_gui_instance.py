@@ -124,5 +124,48 @@ class SecondStartTests(unittest.TestCase):
         self.assertEqual(self.second_start("--minimized", start_minimized_setting=True), [True])
 
 
+class RestartTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._temp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(self._temp.cleanup)
+        self.addCleanup(gui_instance.release)
+        self.directory = self._temp.name
+
+    def test_the_restart_command_keeps_the_theme_and_drops_the_launch_options(self) -> None:
+        command = gui_instance.restart_command("main_gui.py", theme="clam", python="py")
+        self.assertEqual(command, ["py", "main_gui.py", "--restarted", "--theme", "clam"])
+        self.assertEqual(gui_instance.restart_command("main_gui.py", python="py"), ["py", "main_gui.py", "--restarted"])
+
+    def test_waiting_gets_the_lock_once_the_old_window_lets_go(self) -> None:
+        holder = gui_instance.FileLock(gui_instance.lock_path(self.directory), timeout=0)
+        holder.acquire()
+        sleeps: list[float] = []
+
+        def sleep(seconds: float) -> None:
+            sleeps.append(seconds)
+            if len(sleeps) == 3:
+                holder.release()
+
+        self.assertTrue(gui_instance.acquire_waiting(self.directory, timeout=60, sleep=sleep))
+        self.assertEqual(len(sleeps), 3)
+
+    def test_waiting_gives_up_after_the_timeout(self) -> None:
+        holder = gui_instance.FileLock(gui_instance.lock_path(self.directory), timeout=0)
+        holder.acquire()
+        self.addCleanup(holder.release)
+        ticks = iter(range(0, 100))
+        self.assertFalse(
+            gui_instance.acquire_waiting(self.directory, timeout=3, sleep=lambda _s: None, clock=lambda: float(next(ticks)))
+        )
+
+    def test_starting_the_new_window_launches_the_restart_command_detached(self) -> None:
+        with mock.patch.object(gui_instance.subprocess, "Popen") as popen:
+            gui_instance.start_restarted_gui(os.path.join(ROOT, "main_gui.py"), "clam")
+        command = popen.call_args.args[0]
+        self.assertIn("--restarted", command)
+        self.assertEqual(command[-2:], ["--theme", "clam"])
+        self.assertEqual(popen.call_args.kwargs["cwd"], ROOT)
+
+
 if __name__ == "__main__":
     unittest.main()

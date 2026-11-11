@@ -301,6 +301,10 @@ class ToastTests(unittest.TestCase):
 
 
 class MenuStateTests(unittest.TestCase):
+    def test_restart_daemon_is_offered_only_while_a_daemon_runs(self) -> None:
+        self.assertFalse(gui_tray.MenuState(True, False, False).can_restart_daemon)
+        self.assertTrue(gui_tray.MenuState(True, True, False).can_restart_daemon)
+
     def test_nothing_to_poll_or_pause_without_a_daemon(self) -> None:
         state = gui_tray.MenuState(window_visible=True, daemon_running=False, daemon_paused=False)
         self.assertTrue(state.can_start)

@@ -11,8 +11,11 @@ Toolkit-independent; the paths are parameters so the tests never touch the real 
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 import tempfile
-from typing import Optional
+import time
+from typing import Callable, Optional
 
 from filelock import FileLock, Timeout
 
@@ -95,3 +98,47 @@ def take_show_request(directory: Optional[str] = None) -> bool:
     except OSError:
         return False
     return True
+
+
+RESTART_WAIT_SECONDS = 20.0  # how long a restarted GUI waits for the old window to let go of the lock
+_WINDOWS_DETACH_FLAGS = 0x00000008 | 0x00000200  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+
+
+def acquire_waiting(
+    directory: Optional[str] = None,
+    timeout: float = RESTART_WAIT_SECONDS,
+    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
+) -> bool:
+    """Become the one GUI, retrying for up to `timeout` seconds while the old window is still closing."""
+    deadline = clock() + timeout
+    while True:
+        if acquire(directory):
+            return True
+        if clock() >= deadline:
+            return False
+        sleep(0.2)
+
+
+def restart_command(script: str, theme: Optional[str] = None, python: Optional[str] = None) -> list[str]:
+    """Return the command line of a restarted GUI: same interpreter and theme, never --minimized/--start-daemon."""
+    command = [python or sys.executable, script, "--restarted"]
+    if theme:
+        command += ["--theme", theme]
+    return command
+
+
+def start_restarted_gui(script: str, theme: Optional[str] = None) -> None:
+    """Launch a new GUI process that waits for this one to exit. Raises OSError when it cannot be started."""
+    options: dict = {
+        "cwd": os.path.dirname(os.path.abspath(script)),
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+        "close_fds": True,
+    }
+    if sys.platform == "win32":
+        options["creationflags"] = _WINDOWS_DETACH_FLAGS
+    else:
+        options["start_new_session"] = True
+    subprocess.Popen(restart_command(script, theme), **options)

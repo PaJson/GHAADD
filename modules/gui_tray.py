@@ -36,6 +36,8 @@ ACTION_START = "start"
 ACTION_POLL = "poll"
 ACTION_SINGLE = "single"
 ACTION_PAUSE = "pause"
+ACTION_RESTART_GUI = "restart_gui"
+ACTION_RESTART_DAEMON = "restart_daemon"
 ACTION_QUIT = "quit"
 
 MAX_NOTIFICATION_NAMES = 3  # repositories listed by name in one notification
@@ -303,6 +305,11 @@ class MenuState:
         return self.daemon_running  # also while paused: it polls once and stays paused
 
     @property
+    def can_restart_daemon(self) -> bool:
+        """Restart daemon is offered while a daemon runs (a stopped one is started with Start daemon)."""
+        return self.daemon_running
+
+    @property
     def can_pause(self) -> bool:
         """Pause/Resume is offered while a daemon runs."""
         return self.daemon_running  # also while paused: the entry then reads "Resume polling"
@@ -362,6 +369,13 @@ class TrayIcon:
                     lambda *_: self._actions.put(ACTION_PAUSE),
                     enabled=_dynamic(lambda _item: self._menu_state.can_pause),
                 ),
+                pystray.Menu.SEPARATOR,
+                pystray.MenuItem(
+                    "Restart daemon",
+                    lambda *_: self._actions.put(ACTION_RESTART_DAEMON),
+                    enabled=_dynamic(lambda _item: self._menu_state.can_restart_daemon),
+                ),
+                pystray.MenuItem(f"Restart {self._app_name} window", lambda *_: self._actions.put(ACTION_RESTART_GUI)),
                 pystray.Menu.SEPARATOR,
                 pystray.MenuItem(f"Quit {self._app_name} window", lambda *_: self._actions.put(ACTION_QUIT)),
             )
