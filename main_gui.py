@@ -329,10 +329,6 @@ class ControlBar(ttk.Frame):
         self.doctor_button = ttk.Button(tools_box, text="Doctor")
         self.stats_button = ttk.Button(tools_box, text="Stats")
         self.settings_button = ttk.Button(tools_box, text="Settings\u2026")
-        # Restart is a small menu: the GUI window or the daemon (each asks first; see MainWindow).
-        self.restart_menu_button = ttk.Menubutton(tools_box, text="Restart \u25be")
-        self.restart_menu = tk.Menu(self.restart_menu_button, tearoff=False)
-        self.restart_menu_button.configure(menu=self.restart_menu)
         bold = tkfont.nametofont("TkDefaultFont").copy()
         bold.configure(weight="bold")
         self._attention_font = bold  # keep a reference or Tk drops it
@@ -353,7 +349,7 @@ class ControlBar(ttk.Frame):
             (polling_box, (self.poll_button, self.single_button, self.fetch_button)),
             (folders_box, (self.move_button, *(b for k, b in self.folder_buttons.items() if k != "logs"))),
             (logging_box, (self.folder_buttons["logs"], self.log_check)),
-            (tools_box, (self.doctor_button, self.stats_button, self.settings_button, self.restart_menu_button)),
+            (tools_box, (self.doctor_button, self.stats_button, self.settings_button)),
         ):
             box.pack(side="left", padx=(0, 10))
             for column, widget in enumerate(widgets):
@@ -363,7 +359,6 @@ class ControlBar(ttk.Frame):
         attach_tooltip(self.single_button, gui_tooltips.CONTROL_HELP["poll_one"])
         attach_tooltip(self.fetch_button, gui_tooltips.CONTROL_HELP["fetch_release"])
         attach_tooltip(self.stats_button, gui_tooltips.CONTROL_HELP["stats"])
-        attach_tooltip(self.restart_menu_button, gui_tooltips.CONTROL_HELP["restart_menu"])
         for key, button in self.folder_buttons.items():
             attach_tooltip(button, gui_tooltips.CONTROL_HELP[f"folder_{key}"])
         attach_tooltip(self.move_button, gui_tooltips.CONTROL_HELP["move_complete"])
@@ -2022,6 +2017,7 @@ class SettingsDialog(tk.Toplevel):
         on_saved: Callable[[str], None],
         on_warnings_saved: Optional[Callable[[], None]] = None,
         on_credentials_saved: Optional[Callable[[str], None]] = None,
+        on_restart_gui: Optional[Callable[[], None]] = None,
     ) -> None:
         """Build the Settings dialog from gui_forms.SETTINGS_KEYS; the callbacks report saves to the main window."""
         super().__init__(master)
@@ -2029,6 +2025,7 @@ class SettingsDialog(tk.Toplevel):
         self.resizable(False, False)
         self.transient(master)  # type: ignore[arg-type]
         self._on_saved = on_saved
+        self._on_restart_gui = on_restart_gui  # "Save and restart GUI": called after a successful save
         self._on_warnings_saved = on_warnings_saved  # the warning checklist saves by itself; tell the main window
         self._on_credentials_saved = on_credentials_saved  # so does the Gmail & GitHub window
 
@@ -2198,7 +2195,8 @@ class SettingsDialog(tk.Toplevel):
         ttk.Label(
             body,
             text="Changes apply the next time the daemon starts (new-repository defaults apply at once). "
-            "The System tray and Startup choices apply the next time the GUI starts.",
+            "The System tray and Startup choices and the terminal log tab lines apply the next time the GUI starts: "
+            "use \"Save and restart GUI\".",
             foreground=COLOR_MUTED,
             wraplength=860,
         ).grid(
@@ -2224,7 +2222,11 @@ class SettingsDialog(tk.Toplevel):
         viewer_button.grid(row=0, column=3)
         attach_tooltip(viewer_button, gui_tooltips.CONTROL_HELP["viewer"])
         ttk.Button(buttons, text="Cancel", command=self._close_request).grid(row=0, column=2, padx=(0, 6))
-        ttk.Button(buttons, text="Save", command=self._save).grid(row=0, column=3)
+        if on_restart_gui is not None:
+            restart_save = ttk.Button(buttons, text="Save and restart GUI", command=lambda: self._save(restart=True))
+            restart_save.grid(row=0, column=3, padx=(0, 6))
+            attach_tooltip(restart_save, gui_tooltips.CONTROL_HELP["save_restart_gui"])
+        ttk.Button(buttons, text="Save", command=self._save).grid(row=0, column=4)
 
         self.bind("<Escape>", lambda _event: self._close_request())
         self.protocol("WM_DELETE_WINDOW", self._close_request)
@@ -2379,8 +2381,11 @@ class SettingsDialog(tk.Toplevel):
         except tk.TclError:  # the dialog was closed meanwhile
             pass
 
-    def _save(self) -> None:
-        """Validate the form, write config.json (and the autostart choice) and close on success."""
+    def _save(self, restart: bool = False) -> None:
+        """Validate the form, write config.json (and the autostart choice) and close on success.
+
+        With restart=True the GUI restarts afterwards, so the settings that are read at GUI start apply at once.
+        """
         result = gui_forms.build_settings_changes({key: var.get() for key, var in self.vars.items()})
         if not result.ok:
             self.message.configure(text="\n".join(result.errors))
@@ -2399,6 +2404,8 @@ class SettingsDialog(tk.Toplevel):
             text += " " + ("Start at login is now " + ("on." if self.autostart_var.get() else "off.") if change.ok else f"Start at login could not be changed: {change.message}")
         self.destroy()
         self._on_saved(text)
+        if restart and self._on_restart_gui is not None:
+            self._on_restart_gui()  # a failure to start the new GUI is reported in the status line; this one stays
 
 
 class WarningTypesDialog(tk.Toplevel):
@@ -3868,9 +3875,6 @@ class MainWindow(tk.Tk):
         self.control_bar.restart_button.configure(command=self._on_restart)
         self.control_bar.doctor_button.configure(command=self._open_doctor)
         self.control_bar.stats_button.configure(command=self._open_stats)
-        self.control_bar.restart_menu.add_command(label="Restart GUI", command=self._on_restart_gui)
-        self.control_bar.restart_menu.add_command(label="Restart daemon", command=self._on_restart_daemon)
-        self.control_bar.restart_menu.configure(postcommand=self._sync_restart_menu)
         for key, button in self.control_bar.folder_buttons.items():
             button.configure(command=lambda key=key: self._open_work_folder(key))
         self.control_bar.move_button.configure(command=self._on_move_complete)
@@ -4437,21 +4441,19 @@ class MainWindow(tk.Tk):
             self._restart_pending = True
             self._update_daemon_view()
 
-    def _sync_restart_menu(self) -> None:
-        """Grey out "Restart daemon" unless a daemon runs and no start/stop is in progress."""
-        usable = bool(self._snapshot.running) and not self._is_stopping(time.time())
-        self.control_bar.restart_menu.entryconfigure("Restart daemon", state="normal" if usable else "disabled")
-
     def _on_restart_daemon(self) -> None:
-        """Restart menu: restart the daemon (the same confirmation and path as the Restart button)."""
+        """Tray menu: restart the daemon (the same confirmation and path as the Restart button)."""
         if not self._snapshot.running:
             self.set_status("No daemon is running. Use Start.")
             return
         self._on_restart()
 
-    def _on_restart_gui(self) -> None:
-        """Restart menu: after a confirmation, start a new GUI that takes over once this window has closed."""
-        if not messagebox.askyesno(
+    def _on_restart_gui(self, confirm: bool = True) -> None:
+        """Start a new GUI that takes over once this window has closed (tray menu: after a confirmation).
+
+        Settings -> "Save and restart GUI" passes confirm=False: that button already says what it does.
+        """
+        if confirm and not messagebox.askyesno(
             "Restart GUI",
             "Restart the GUI window?\n\nThe window closes and opens again with the current settings. "
             "The daemon is not touched and keeps running.",
@@ -4541,7 +4543,13 @@ class MainWindow(tk.Tk):
 
     def _open_settings(self) -> None:
         """Open the Settings dialog."""
-        SettingsDialog(self, self._after_settings_saved, self._reload_silenced_warnings, self._after_credentials_saved)
+        SettingsDialog(
+            self,
+            self._after_settings_saved,
+            self._reload_silenced_warnings,
+            self._after_credentials_saved,
+            lambda: self._on_restart_gui(confirm=False),
+        )
 
     def _after_credentials_saved(self, message: str) -> None:
         """The Gmail & GitHub window saved: say so, and re-check the first-run hints (the Doctor button)."""
